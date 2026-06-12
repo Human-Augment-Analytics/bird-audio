@@ -42,3 +42,8 @@ ENV/
 # Models
 # Models are tracked in this repo for pipeline completeness
 
+# Data
+data/
+test_output/
+
+
