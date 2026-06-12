@@ -1,50 +1,56 @@
 # Bird Audio Analysis Pipeline
 
-This project provides an automated pipeline for the detection and classification of bird vocalizations, specifically optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
+A high-performance Python-native pipeline for automated detection and classification of bird vocalizations, specifically optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
 
-## Pipeline Overview
+## Technical Architecture
 
-The pipeline processes raw audio data through a multi-stage machine learning workflow to identify and label specific bird calls.
+The pipeline uses a **Quarter-Step YOLO Streaming** architecture to process large audio files (1GB+) with high temporal resolution and a constant memory footprint.
 
-### 1. Detection & Localization
-The system first scans audio streams to detect potential vocalizations.
-- **Model**: `buzz_localizer.onnx`
-- **Function**: Identifies time-frequency regions (bounding boxes) within a spectrogram that likely contain bird activity.
+### 1. Feature Extraction
+Audio is streamed in blocks using `librosa.stream`. For each block, a Short-Time Fourier Transform (STFT) generates spectrogram features.
 
-### 2. Classification
-Detected events are passed to a secondary classifier to determine the species or call type.
-- **Model**: `classifier.onnx`
-- **Function**: Distinguishes between Hume's Leaf Warbler calls and other environmental noise or species.
+### 2. Quarter-Step Sliding Window
+To ensure no calls are missed at window boundaries, the system uses a sliding window that advances by 25% (quarter-step) of the window width (approx. 30ms resolution).
+- **Frequency Band**: Analysis is focused on the [88:248] STFT bins, optimized for the high-frequency "buzz" of the Hume's Leaf Warbler.
 
-### 3. Consolidation & Post-Processing
-Overlapping or fragmented detections are merged and filtered to produce a clean set of annotated events.
-- **Logic**: Implemented in `src/lib/consolidation.ts`.
-- **Metrics**: Evaluation of pipeline performance is handled via `src/lib/evaluation.ts`.
+### 3. Native Inference
+The system uses `ultralytics.YOLO` to run native inference on PyTorch checkpoints (`.pt`).
+- **Detection**: `buzz_localizer.pt` identifies candidate vocalizations.
+- **Classification**: `classifier.pt` (future integration) refines species labels.
 
-## Validation & Evaluation
+## Getting Started
 
-The pipeline includes a fixture-based validation harness to ensure accuracy against ground-truth labels.
+We recommend using [**uv**](https://github.com/astral-sh/uv) for environment and dependency management. It is significantly faster than `venv` or `conda` and handles ML dependencies reliably.
 
-- **Ground Truth**: Hand-labeled bounding boxes stored in `test-data/labels/`.
-- **Evaluation**: Run the evaluation script to compare predictions against labels:
-  ```sh
-  npm run eval -- <labels.json> <predictions.json>
-  ```
+### 1. Installation
+Install `uv` if you haven't already:
+```bash
+curl -LsSf https://astral-sh/uv/install.sh | sh
+```
 
-## Technical Stack
+### 2. Environment Setup
+Initialize the environment and sync dependencies:
+```bash
+uv sync
+```
 
-- **Inference Engine**: ONNX Runtime (Web/Node.js)
-- **Audio Processing**: Web Audio API and custom DSP logic in `src/lib/audioProcessor.ts`
-- **Testing**: Node.js test runner for unit tests and pipeline validation.
+### 3. Model Verification
+Verify the integrity of your local model checkpoints:
+```bash
+uv run scripts/verify_models.py
+```
 
-## Large File Processing (Tauri)
+### 4. Running Inference
+Process an audio file through the pipeline:
+```bash
+uv run scripts/ml_engine.py --input path/to/recording.WAV --output results --conf 0.25
+```
 
-For large audio recordings (1GB+) that exceed browser memory limits, the project uses **Tauri** to run the pipeline natively.
+## Output Structure
 
-- **Native UI**: The `NativeProcessor.tsx` component provides a local file picker.
-- **Python Backend**: Tauri triggers `scripts/ml_engine.py` directly, leveraging PyTorch and the `.pt` models for high-performance inference.
-- **Workflow**:
-  1. Open the application via Tauri (`npm run tauri dev`).
-  2. Use the "Large File Native Processor" in the sidebar.
-  3. Select a local WAV file.
-  4. View real-time logs and progress as the native pipeline scans the file.
+The pipeline generates several artifacts in the `--output` directory:
+- `vis/`: Spectrogram visualizations with detection bounding boxes (JPEG).
+- `crops/`: Raw spectrogram image segments (PNG).
+- `wav/`: Extracted audio clips of each detection.
+- `labels/`: YOLO-format detection coordinates and confidence scores (TXT).
+- `results.json`: (Future) Consolidated detection manifest.
