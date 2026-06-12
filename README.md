@@ -1,42 +1,56 @@
-# Bird Audio Analysis Pipeline (Backend)
+# Bird Audio Analysis Pipeline
 
-This repository provides a high-performance Python-native pipeline for the automated detection and classification of bird vocalizations, specifically optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
+A high-performance Python-native pipeline for automated detection and classification of bird vocalizations, specifically optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
 
-## High-Performance Native Inference
+## Technical Architecture
 
-The pipeline is built on a **Python/PyTorch backend**, designed to handle extremely large audio recordings (1GB+ WAV files) that exceed the memory limits of standard web browsers.
+The pipeline uses a **Quarter-Step YOLO Streaming** architecture to process large audio files (1GB+) with high temporal resolution and a constant memory footprint.
 
-### Key Components
+### 1. Feature Extraction
+Audio is streamed in blocks using `librosa.stream`. For each block, a Short-Time Fourier Transform (STFT) generates spectrogram features.
 
-- **Detection & Localization**: A CNN-based model (`buzz_localizer.pt`) that identifies time-frequency regions (bounding boxes) within a spectrogram likely to contain bird activity.
-- **Classification**: A multi-class classifier (`classifier.pt`) that distinguishes between specific species calls and environmental noise.
-- **Consolidation**: Python-native logic to merge overlapping or adjacent detection events into single, continuous segments.
+### 2. Quarter-Step Sliding Window
+To ensure no calls are missed at window boundaries, the system uses a sliding window that advances by 25% (quarter-step) of the window width (approx. 30ms resolution).
+- **Frequency Band**: Analysis is focused on the [88:248] STFT bins, optimized for the high-frequency "buzz" of the Hume's Leaf Warbler.
 
-## Pipeline Architecture
+### 3. Native Inference
+The system uses `ultralytics.YOLO` to run native inference on PyTorch checkpoints (`.pt`).
+- **Detection**: `buzz_localizer.pt` identifies candidate vocalizations.
+- **Classification**: `classifier.pt` (future integration) refines species labels.
 
-1.  **Audio Loading**: High-speed decoding using `librosa` and `torchaudio`.
-2.  **Segmented Processing**: Audio is processed in sliding windows to ensure constant memory footprint regardless of file size.
-3.  **Localizer Pass**: Generates high-confidence candidates for bird activity.
-4.  **Classifier Pass**: Refines candidates to species-level labels.
-5.  **JSON Export**: Standardized detection results for integration with visualization tools or databases.
+## Getting Started
 
-## Getting Started (CLI)
+We recommend using [**uv**](https://github.com/astral-sh/uv) for environment and dependency management. It is significantly faster than `venv` or `conda` and handles ML dependencies reliably.
 
-### 1. Requirements
-- Python 3.9+
-- PyTorch
-- librosa
-- numpy
-
-### 2. Running Inference
-The main entry point is the `ml_engine.py` script:
-
+### 1. Installation
+Install `uv` if you haven't already:
 ```bash
-python scripts/ml_engine.py --input path/to/large_recording.wav
+curl -LsSf https://astral-sh/uv/install.sh | sh
+```
+
+### 2. Environment Setup
+Initialize the environment and sync dependencies:
+```bash
+uv sync
 ```
 
 ### 3. Model Verification
-Ensure the integrity of your model checkpoints:
+Verify the integrity of your local model checkpoints:
 ```bash
-python scripts/verify_models.py
+uv run scripts/verify_models.py
 ```
+
+### 4. Running Inference
+Process an audio file through the pipeline:
+```bash
+uv run scripts/ml_engine.py --input path/to/recording.WAV --output results --conf 0.25
+```
+
+## Output Structure
+
+The pipeline generates several artifacts in the `--output` directory:
+- `vis/`: Spectrogram visualizations with detection bounding boxes (JPEG).
+- `crops/`: Raw spectrogram image segments (PNG).
+- `wav/`: Extracted audio clips of each detection.
+- `labels/`: YOLO-format detection coordinates and confidence scores (TXT).
+- `results.json`: (Future) Consolidated detection manifest.

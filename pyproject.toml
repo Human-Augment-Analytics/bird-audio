@@ -1,0 +1,18 @@
+[project]
+name = "bird-audio-backend"
+version = "0.1.0"
+description = "High-performance bird audio analysis pipeline"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.0.0",
+    "torchaudio",
+    "ultralytics>=8.0.0",
+    "librosa>=0.10.0",
+    "soundfile>=0.12.1",
+    "numpy<2.0.0",
+    "opencv-python>=4.8.0",
+]
+
+[tool.uv]
+managed = true
