@@ -21,7 +21,15 @@ from ultralytics.data.augment import LetterBox
 
 class BirdAudioPipeline:
     def __init__(self, localizer_path, classifier_path=None, device=None, conf=0.25):
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if device:
+            self.device = torch.device(device)
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
+            
         print(f"Using device: {self.device}", file=sys.stderr)
         
         print(f"Loading Localizer: {localizer_path}...", file=sys.stderr)
@@ -122,16 +130,14 @@ class BirdAudioPipeline:
                 sf.write(str(dirs["wav"] / f"{output_stem}.wav"), samps, int(sr), format="wav")
 
                 # Optional Stage B: Classification
-                # Here we would run the classifier on the crops or raw audio
-                # For this refactor, we mark detections found by stage A
+                # TODO: Implement actual Stage B refinement logic here using self.classifier
                 for i in range(len(boxes.xyxy)):
                     box = boxes.xyxy[i].cpu().numpy()
                     conf = float(boxes.conf[i].cpu())
                     
+                    # Currently we only run Stage A localization.
+                    # Do not claim 'Classified' until inference is actually implemented.
                     label = "HLW Buzz (Detected)"
-                    if self.classifier:
-                        # Logic for Stage B refinement would go here
-                        label = "HLW Buzz (Classified)"
 
                     detections.append({
                         "window_index": count,
