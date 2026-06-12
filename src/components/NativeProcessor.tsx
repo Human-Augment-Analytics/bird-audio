@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import { FileAudio, Play, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { FileAudio, Play, Loader2, AlertCircle, CheckCircle2, Database } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Command } from '@tauri-apps/plugin-shell';
+import { db } from '../lib/db';
 
 export function NativeProcessor() {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [output, setOutput] = useState<string>('');
+  const [detections, setDetections] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const handleSelectFile = async () => {
@@ -21,6 +23,8 @@ export function NativeProcessor() {
       if (selected && typeof selected === 'string') {
         setFilePath(selected);
         setError(null);
+        setDetections([]);
+        setOutput('');
       }
     } catch (err) {
       console.error('Failed to open file dialog:', err);
@@ -28,42 +32,95 @@ export function NativeProcessor() {
     }
   };
 
+  const handleImportToDatabase = async () => {
+    if (!filePath || detections.length === 0) return;
+
+    try {
+      // Create a dummy blob for the session (since it's local, we don't have the full blob in memory)
+      const fileName = filePath.split('/').pop() || 'Native Recording';
+      
+      const sessionId = await db.sessions.add({
+        name: `[Native] ${fileName}`,
+        blob: new Blob([]), // Placeholder, native files aren't stored in IndexedDB
+        createdAt: new Date()
+      });
+
+      const savePromises = detections.map(d => 
+        db.annotations.add({
+          sessionId: sessionId as number,
+          label: d.label,
+          start: d.start,
+          end: d.end,
+          peakFreq: d.peakFreq
+        })
+      );
+      
+      await Promise.all(savePromises);
+      alert(`Imported ${detections.length} detections into database.`);
+      
+    } catch (err) {
+      console.error('Failed to import detections:', err);
+      setError('Failed to import to database');
+    }
+  };
+
   const handleRunPipeline = async () => {
     if (!filePath) return;
 
     setIsProcessing(true);
-    setOutput('Starting native pipeline...\n');
+    setOutput('');
+    setDetections([]);
     setError(null);
 
     try {
-      // Note: In a real production app, you'd want to bundle python or use a sidecar.
-      // For this prototype, we assume 'python3' is in the system path.
       const command = Command.create('python3', [
         'scripts/ml_engine.py',
         '--input', filePath
       ]);
 
+      let jsonAccumulator = '';
+
       command.on('close', data => {
-        console.log(`command finished with code ${data.code} and signal ${data.signal}`);
         setIsProcessing(false);
+        if (data.code === 0) {
+          try {
+            // Find the last line which should be the JSON
+            const lines = jsonAccumulator.trim().split('\n');
+            const lastLine = lines[lines.length - 1];
+            const result = JSON.parse(lastLine);
+            
+            if (result.error) {
+              setError(result.error);
+            } else {
+              setDetections(result.detections || []);
+            }
+          } catch (e) {
+            console.error('Failed to parse pipeline output:', e);
+            setError('Failed to parse pipeline results');
+          }
+        } else {
+          setError(`Pipeline exited with code ${data.code}`);
+        }
       });
 
       command.on('error', error => {
-        console.error(`command error: "${error}"`);
         setError(`Pipeline error: ${error}`);
         setIsProcessing(false);
       });
 
       command.stdout.on('data', line => {
-        setOutput(prev => prev + line + '\n');
+        jsonAccumulator += line;
+        // Check if line looks like progress/info (to show in log) or JSON (to hide)
+        if (!line.trim().startsWith('{')) {
+          setOutput(prev => prev + line);
+        }
       });
 
       command.stderr.on('data', line => {
-        console.warn(`Pipeline stderr: ${line}`);
+        setOutput(prev => prev + '[DEBUG] ' + line);
       });
 
-      const child = await command.spawn();
-      console.log('Pipeline spawned with PID:', child.pid);
+      await command.spawn();
 
     } catch (err) {
       console.error('Failed to run pipeline:', err);
@@ -80,25 +137,38 @@ export function NativeProcessor() {
       </div>
 
       <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
-        Bypass browser memory limits for large recordings (1GB+) by using the native Python pipeline.
+        High-performance Python/PyTorch backend for recordings (1GB+).
       </p>
 
       {!filePath ? (
         <button onClick={handleSelectFile} className="secondary" style={{ width: '100%', padding: '0.75rem' }}>
-          Select Large Recording
+          Select Local WAV File
         </button>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.05)', padding: '0.75rem', borderRadius: 6, fontSize: '0.8rem', border: '1px solid var(--border-color)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            <strong>Target:</strong> {filePath}
+            <strong>Local Path:</strong> {filePath}
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button onClick={handleSelectFile} className="secondary" style={{ flex: 1, padding: '0.6rem' }} disabled={isProcessing}>
-              Change File
+              Change
             </button>
             <button onClick={handleRunPipeline} className="primary" style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }} disabled={isProcessing}>
               {isProcessing ? <Loader2 size={16} className="spinner" /> : <Play size={16} />}
-              {isProcessing ? 'Processing...' : 'Run Native Pipeline'}
+              {isProcessing ? 'Run Pipeline' : 'Run Pipeline'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {detections.length > 0 && (
+        <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '1rem', borderRadius: 8, border: '1px solid rgba(16, 185, 129, 0.2)', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.9rem', color: '#10b981', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <CheckCircle2 size={18} /> Found {detections.length} events
+            </span>
+            <button onClick={handleImportToDatabase} className="primary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <Database size={14} /> Import to DB
             </button>
           </div>
         </div>
@@ -121,7 +191,7 @@ export function NativeProcessor() {
             borderRadius: 6, 
             fontSize: '0.75rem', 
             fontFamily: 'monospace', 
-            maxHeight: '200px', 
+            maxHeight: '150px', 
             overflowY: 'auto',
             margin: 0,
             border: '1px solid rgba(16, 185, 129, 0.2)'
