@@ -38,13 +38,5 @@ python scripts/ml_engine.py --input path/to/large_recording.wav
 ### 3. Model Verification
 Ensure the integrity of your model checkpoints:
 ```bash
-python scripts/verify-model-hashes.py
-```
-
-## Advanced Usage
-
-For users requiring a graphical interface, visualization, and manual annotation tools, refer to the **`leyang/prototype`** branch, which includes a Tauri-based desktop application integrated with this Python backend.
-
-```bash
-git checkout leyang/prototype
+python scripts/verify_models.py
 ```

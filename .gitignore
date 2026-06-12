@@ -40,6 +40,5 @@ venv/
 ENV/
 
 # Models
-models/*.pt
-models/*.onnx
-models/*.data
+# Models are tracked in this repo for pipeline completeness
+
