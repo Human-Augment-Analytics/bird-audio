@@ -1,50 +1,50 @@
-# Bird Audio Analysis Pipeline
+# Bird Audio Analysis Pipeline (Backend)
 
-This project provides an automated pipeline for the detection and classification of bird vocalizations, specifically optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
+This repository provides a high-performance Python-native pipeline for the automated detection and classification of bird vocalizations, specifically optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
 
-## Pipeline Overview
+## High-Performance Native Inference
 
-The pipeline processes raw audio data through a multi-stage machine learning workflow to identify and label specific bird calls.
+The pipeline is built on a **Python/PyTorch backend**, designed to handle extremely large audio recordings (1GB+ WAV files) that exceed the memory limits of standard web browsers.
 
-### 1. Detection & Localization
-The system first scans audio streams to detect potential vocalizations.
-- **Model**: `buzz_localizer.onnx`
-- **Function**: Identifies time-frequency regions (bounding boxes) within a spectrogram that likely contain bird activity.
+### Key Components
 
-### 2. Classification
-Detected events are passed to a secondary classifier to determine the species or call type.
-- **Model**: `classifier.onnx`
-- **Function**: Distinguishes between Hume's Leaf Warbler calls and other environmental noise or species.
+- **Detection & Localization**: A CNN-based model (`buzz_localizer.pt`) that identifies time-frequency regions (bounding boxes) within a spectrogram likely to contain bird activity.
+- **Classification**: A multi-class classifier (`classifier.pt`) that distinguishes between specific species calls and environmental noise.
+- **Consolidation**: Python-native logic to merge overlapping or adjacent detection events into single, continuous segments.
 
-### 3. Consolidation & Post-Processing
-Overlapping or fragmented detections are merged and filtered to produce a clean set of annotated events.
-- **Logic**: Implemented in `src/lib/consolidation.ts`.
-- **Metrics**: Evaluation of pipeline performance is handled via `src/lib/evaluation.ts`.
+## Pipeline Architecture
 
-## Validation & Evaluation
+1.  **Audio Loading**: High-speed decoding using `librosa` and `torchaudio`.
+2.  **Segmented Processing**: Audio is processed in sliding windows to ensure constant memory footprint regardless of file size.
+3.  **Localizer Pass**: Generates high-confidence candidates for bird activity.
+4.  **Classifier Pass**: Refines candidates to species-level labels.
+5.  **JSON Export**: Standardized detection results for integration with visualization tools or databases.
 
-The pipeline includes a fixture-based validation harness to ensure accuracy against ground-truth labels.
+## Getting Started (CLI)
 
-- **Ground Truth**: Hand-labeled bounding boxes stored in `test-data/labels/`.
-- **Evaluation**: Run the evaluation script to compare predictions against labels:
-  ```sh
-  npm run eval -- <labels.json> <predictions.json>
-  ```
+### 1. Requirements
+- Python 3.9+
+- PyTorch
+- librosa
+- numpy
 
-## Technical Stack
+### 2. Running Inference
+The main entry point is the `ml_engine.py` script:
 
-- **Inference Engine**: ONNX Runtime (Web/Node.js)
-- **Audio Processing**: Web Audio API and custom DSP logic in `src/lib/audioProcessor.ts`
-- **Testing**: Node.js test runner for unit tests and pipeline validation.
+```bash
+python scripts/ml_engine.py --input path/to/large_recording.wav
+```
 
-## Large File Processing (Tauri)
+### 3. Model Verification
+Ensure the integrity of your model checkpoints:
+```bash
+python scripts/verify-model-hashes.py
+```
 
-For large audio recordings (1GB+) that exceed browser memory limits, the project uses **Tauri** to run the pipeline natively.
+## Advanced Usage
 
-- **Native UI**: The `NativeProcessor.tsx` component provides a local file picker.
-- **Python Backend**: Tauri triggers `scripts/ml_engine.py` directly, leveraging PyTorch and the `.pt` models for high-performance inference.
-- **Workflow**:
-  1. Open the application via Tauri (`npm run tauri dev`).
-  2. Use the "Large File Native Processor" in the sidebar.
-  3. Select a local WAV file.
-  4. View real-time logs and progress as the native pipeline scans the file.
+For users requiring a graphical interface, visualization, and manual annotation tools, refer to the **`leyang/prototype`** branch, which includes a Tauri-based desktop application integrated with this Python backend.
+
+```bash
+git checkout leyang/prototype
+```
