@@ -15,8 +15,9 @@ To ensure no calls are missed at window boundaries, the system uses a sliding wi
 
 ### 3. Native Inference
 The system uses `ultralytics.YOLO` to run native inference on PyTorch checkpoints (`.pt`).
+- **Hardware Acceleration**: Supports **CUDA** (NVIDIA), **MPS** (Apple Silicon), and **CPU**.
 - **Detection**: `buzz_localizer.pt` identifies candidate vocalizations.
-- **Classification**: `classifier.pt` (future integration) refines species labels.
+- **Classification**: `classifier.pt` refines species labels.
 
 ## Getting Started
 
@@ -41,9 +42,16 @@ uv run scripts/verify_models.py
 ```
 
 ### 4. Running Inference
-Process an audio file through the pipeline:
+Process an audio file through the pipeline. You can explicitly specify the device for acceleration:
 ```bash
-uv run scripts/ml_engine.py --input path/to/recording.WAV --output results --conf 0.25
+# Auto-detect device (prefers CUDA/MPS)
+uv run scripts/ml_engine.py --input data/recording.WAV
+
+# Force CPU usage
+uv run scripts/ml_engine.py --input data/recording.WAV --device cpu
+
+# Use Apple Silicon (Metal)
+uv run scripts/ml_engine.py --input data/recording.WAV --device mps
 ```
 
 ## Output Structure
