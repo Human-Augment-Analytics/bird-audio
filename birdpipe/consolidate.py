@@ -87,3 +87,169 @@ def _envelope(members: List[int], dets: Sequence[RawDetection]) -> Box:
         f_low=min(dets[m].f_low for m in members),
         f_high=max(dets[m].f_high for m in members),
     )
+
+
+def link_kind(affinity_value: float, iou2d: float, min_conf: float, max_conf: float,
+              margin: float, gap: int, e_ij: float, p: ConsolidationParams) -> str:
+    """Classify a mutual-best candidate link as 'strong', 'support', or 'none'."""
+    if (affinity_value >= p.strong_affinity and iou2d >= p.strong_iou2d
+            and min_conf >= p.strong_min_conf and margin >= p.strong_margin):
+        return "strong"
+    if (affinity_value >= p.support_affinity and iou2d >= p.support_iou2d
+            and min_conf >= p.support_min_conf and margin >= p.support_margin
+            and gap <= p.support_gap_max
+            and (max_conf >= p.support_edge_conf or e_ij >= p.support_edge)):
+        return "support"
+    return "none"
+
+
+class _Track:
+    __slots__ = ("members", "windows", "has_strong")
+
+    def __init__(self) -> None:
+        self.members: List[int] = []
+        self.windows: set = set()
+        self.has_strong: bool = False
+
+    def add(self, idx: int, window: int, strong: bool) -> None:
+        self.members.append(idx)
+        self.windows.add(window)
+        if strong:
+            self.has_strong = True
+
+
+def consolidate(dets: Sequence[RawDetection], p: ConsolidationParams = ConsolidationParams()) -> List[Event]:
+    """Consolidate raw window-level detections into event-level tracks (§5.3.3)."""
+    dets = [d for d in dets if d.conf >= p.ingest_conf]
+    n = len(dets)
+    if n == 0:
+        return []
+
+    eprox = [g.edge_proximity(d.norm_left, d.norm_right, p.eta) for d in dets]
+
+    # candidate affinities (1 <= |w_i - w_j| <= G)
+    nbr: List[dict] = [dict() for _ in range(n)]
+    pairs: List[tuple] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            gap = abs(dets[i].window - dets[j].window)
+            if 1 <= gap <= p.window_gap_max:
+                a = affinity(dets[i], dets[j], p)
+                nbr[i][j] = a
+                nbr[j][i] = a
+                pairs.append((i, j, a))
+
+    def best_partner(i: int):
+        return max(nbr[i].items(), key=lambda kv: kv[1]) if nbr[i] else None
+
+    def second_best(i: int, excl: int) -> float:
+        vals = [a for k, a in nbr[i].items() if k != excl]
+        return max(vals) if vals else 0.0
+
+    bp = [best_partner(i) for i in range(n)]
+
+    strong, support = [], []
+    for i, j, a in pairs:
+        if bp[i] is None or bp[j] is None or bp[i][0] != j or bp[j][0] != i:
+            continue  # mutual-best only
+        margin = min(a - second_best(i, j), a - second_best(j, i))
+        ci, cj = dets[i].conf, dets[j].conf
+        kind = link_kind(a, g.box_iou_2d(dets[i], dets[j]), min(ci, cj), max(ci, cj),
+                         margin, abs(dets[i].window - dets[j].window),
+                         max(eprox[i], eprox[j]), p)
+        if kind == "strong":
+            strong.append((a, i, j))
+        elif kind == "support":
+            support.append((a, i, j, max(ci, cj)))
+
+    track_of: dict = {}
+    tracks: dict = {}
+    counter = [0]
+
+    def new_track() -> int:
+        tid = counter[0]
+        counter[0] += 1
+        tracks[tid] = _Track()
+        return tid
+
+    # Phase 1: strong links seed/merge tracks (descending affinity)
+    for a, i, j in sorted(strong, key=lambda x: -x[0]):
+        ti, tj = track_of.get(i), track_of.get(j)
+        if ti is None and tj is None:
+            tid = new_track()
+            tracks[tid].add(i, dets[i].window, True)
+            tracks[tid].add(j, dets[j].window, True)
+            track_of[i] = track_of[j] = tid
+        elif ti is not None and tj is None:
+            if dets[j].window not in tracks[ti].windows:
+                tracks[ti].add(j, dets[j].window, True)
+                track_of[j] = ti
+        elif ti is None and tj is not None:
+            if dets[i].window not in tracks[tj].windows:
+                tracks[tj].add(i, dets[i].window, True)
+                track_of[i] = tj
+        elif ti != tj and tracks[ti].windows.isdisjoint(tracks[tj].windows):
+            for m in tracks[tj].members:
+                tracks[ti].add(m, dets[m].window, True)
+                track_of[m] = ti
+            del tracks[tj]
+
+    # Phase 2: support links extend seeded tracks; never merge two established tracks
+    for a, i, j, maxc in sorted(support, key=lambda x: -x[0]):
+        ti, tj = track_of.get(i), track_of.get(j)
+        if ti is not None and tj is not None:
+            continue
+        if ti is None and tj is None:
+            tid = new_track()
+            tracks[tid].add(i, dets[i].window, False)
+            tracks[tid].add(j, dets[j].window, False)
+            track_of[i] = track_of[j] = tid
+        elif ti is not None:
+            if dets[j].window not in tracks[ti].windows and (maxc >= p.support_edge_conf or tracks[ti].has_strong):
+                tracks[ti].add(j, dets[j].window, False)
+                track_of[j] = ti
+        else:
+            if dets[i].window not in tracks[tj].windows and (maxc >= p.support_edge_conf or tracks[tj].has_strong):
+                tracks[tj].add(i, dets[i].window, False)
+                track_of[i] = tj
+
+    # Phase 3: edge-singleton absorption into established multi-window tracks
+    established = [tid for tid, t in tracks.items() if len(t.windows) >= 2]
+    for s in [i for i in range(n) if i not in track_of]:
+        if eprox[s] < p.absorb_edge:
+            continue
+        scored = []
+        for tid in established:
+            if dets[s].window in tracks[tid].windows:
+                continue
+            env = _envelope(tracks[tid].members, dets)
+            c_area, c_t, c_f = g.containment(dets[s], env)
+            if c_area < p.absorb_area or c_t < p.absorb_time or c_f < p.absorb_freq:
+                continue
+            aw = p.absorption
+            d_s, bw_s = dets[s].t_end - dets[s].t_start, dets[s].f_high - dets[s].f_low
+            dt = abs(g.center(dets[s].t_start, dets[s].t_end) - g.center(env.t_start, env.t_end)) / d_s if d_s > 0 else 0.0
+            df = abs(g.center(dets[s].f_low, dets[s].f_high) - g.center(env.f_low, env.f_high)) / bw_s if bw_s > 0 else 0.0
+            c_tk = max(dets[m].conf for m in tracks[tid].members)
+            score = (aw.area * c_area + aw.time * c_t + aw.freq * c_f + aw.edge * eprox[s]
+                     + aw.singleton_conf * dets[s].conf + aw.track_conf * c_tk
+                     - aw.center_t * min(dt, 2.0) - aw.center_f * min(df, 2.0))
+            scored.append((score, tid))
+        if not scored:
+            continue
+        scored.sort(key=lambda x: -x[0])
+        best_score, best_tid = scored[0]
+        second = scored[1][0] if len(scored) > 1 else 0.0
+        if best_score >= p.absorb_score and (best_score - second) >= p.absorb_margin:
+            tracks[best_tid].add(s, dets[s].window, False)
+            track_of[s] = best_tid
+
+    # Phase 4: build events from tracks + remaining untracked singletons
+    events: List[Event] = [_fuse(t.members, dets, p) for t in tracks.values()]
+    for i in range(n):
+        if i not in track_of:
+            d = dets[i]
+            events.append(Event(d.t_start, d.t_end, d.f_low, d.f_high, d.conf, [i]))
+
+    events.sort(key=lambda e: e.t_start)
+    return events

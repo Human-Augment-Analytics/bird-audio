@@ -48,3 +48,53 @@ def test_fuse_excludes_left_truncated_from_start_vote():
     b = make_det(1.3, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.3, norm_right=0.6)
     ev = cons._fuse([0, 1], [a, b], P)
     assert ev.t_start == 1.3                    # a excluded -> b's start wins
+
+
+def test_link_kind_strong():
+    assert cons.link_kind(0.80, 0.60, 0.30, 0.90, 0.10, 1, 0.0, P) == "strong"
+
+
+def test_link_kind_support():
+    # below strong gates, above support gates, high max-conf satisfies edge requirement
+    assert cons.link_kind(0.65, 0.40, 0.15, 0.80, 0.05, 1, 0.0, P) == "support"
+
+
+def test_link_kind_support_needs_conf_or_edge():
+    # support thresholds met but max-conf<0.70 and e_ij<0.50 -> none
+    assert cons.link_kind(0.65, 0.40, 0.15, 0.50, 0.05, 1, 0.0, P) == "none"
+
+
+def test_link_kind_none():
+    assert cons.link_kind(0.50, 0.20, 0.05, 0.20, 0.01, 1, 0.0, P) == "none"
+
+
+def test_consolidate_merges_strong_pair():
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.45, norm_right=0.55)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.45, norm_right=0.55)
+    events = cons.consolidate([a, b], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1]
+
+
+def test_consolidate_same_window_never_merges():
+    # two detections in the SAME window must stay separate (overlap preservation)
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0)
+    events = cons.consolidate([a, b], P)
+    assert len(events) == 2
+
+
+def test_consolidate_ingest_conf_filter():
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.0005, window=0)
+    assert cons.consolidate([a], P) == []
+
+
+def test_consolidate_absorbs_edge_singleton():
+    # strong pair in windows 0,1 forms a track; a small near-edge box in window 2,
+    # fully contained in the envelope, is absorbed (not linked: IoU too low).
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.4, norm_right=0.6)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
+    c = make_det(0.1, 0.4, 5400, 5600, conf=0.5, window=2, norm_left=0.0, norm_right=0.06)
+    events = cons.consolidate([a, b, c], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1, 2]
