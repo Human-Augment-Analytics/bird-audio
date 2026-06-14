@@ -11,6 +11,13 @@ import sys
 import time
 from pathlib import Path
 
+# Ensure the repo root is on sys.path so that `birdpipe` is importable when
+# this script is invoked directly (e.g. `python scripts/ml_engine.py`), where
+# Python sets sys.path[0] to the script directory rather than the repo root.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 import cv2
 import librosa
 import numpy as np
@@ -171,17 +178,32 @@ class BirdAudioPipeline:
 
 def main():
     parser = argparse.ArgumentParser(description="Bird Audio ML Engine (Native Python)")
-    parser.add_argument("--input", type=str, required=True, help="Path to input WAV file")
+    parser.add_argument("--input", type=str, help="Path to input WAV file")
     parser.add_argument("--output", type=str, default="output", help="Output directory")
-    parser.add_argument("--localizer", type=str, default="models/buzz_localizer.pt", help="Path to Localizer .pt")
-    parser.add_argument("--classifier", type=str, default="models/classifier.pt", help="Path to Classifier .pt")
+    parser.add_argument("--localizer", type=str, default="models/buzz_localizer.pt")
+    parser.add_argument("--classifier", type=str, default="models/classifier.pt")
     parser.add_argument("--device", type=str, help="Device (cpu, cuda, mps)")
-    parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
+    parser.add_argument("--conf", type=float, default=0.25, help="Stage A confidence threshold")
+    parser.add_argument("--theta-a", type=float, default=0.0, help="Export Stage A conf threshold")
+    parser.add_argument("--theta-b", type=float, default=0.530306, help="Stage B completeness threshold")
+    parser.add_argument("--write-artifacts", action="store_true", help="Write vis/crops/wav/labels")
+    parser.add_argument("--worker", action="store_true", help="Run as a stdin/stdout JSON worker")
     args = parser.parse_args()
 
     pipeline = BirdAudioPipeline(args.localizer, args.classifier, device=args.device, conf=args.conf)
-    result = pipeline.process_file(args.input, args.output)
-    
+
+    if args.worker:
+        from birdpipe.worker import run_worker
+        run_worker(pipeline)
+        return
+
+    if not args.input:
+        parser.error("--input is required unless --worker is set")
+
+    result = pipeline.process_file(
+        args.input, args.output, write_artifacts=args.write_artifacts,
+        theta_a=args.theta_a, theta_b=args.theta_b,
+    )
     print(json.dumps(result, indent=2))
 
 if __name__ == "__main__":
