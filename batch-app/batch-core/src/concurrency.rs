@@ -7,7 +7,7 @@ pub fn resolve_concurrency(device: &str, requested: Option<usize>) -> usize {
         return r.max(1);
     }
     match device {
-        "cuda" | "mps" => 1,
+        d if d.starts_with("cuda") || d.starts_with("mps") => 1,
         _ => {
             let cores = std::thread::available_parallelism()
                 .map(|n| n.get())
@@ -36,5 +36,11 @@ mod tests {
     #[test]
     fn cpu_pool_is_at_least_one() {
         assert!(resolve_concurrency("cpu", None) >= 1);
+    }
+
+    #[test]
+    fn cuda_with_index_still_single_worker() {
+        assert_eq!(resolve_concurrency("cuda:0", None), 1);
+        assert_eq!(resolve_concurrency("mps:0", None), 1);
     }
 }

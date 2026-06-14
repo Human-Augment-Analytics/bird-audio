@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS events(
 );
 CREATE INDEX IF NOT EXISTS idx_files_session_status ON files(session_id, status);
 CREATE INDEX IF NOT EXISTS idx_events_file ON events(file_id);
+CREATE INDEX IF NOT EXISTS idx_events_session_label ON events(session_id, completeness_label, retained);
 "#;
 
 impl Store {
