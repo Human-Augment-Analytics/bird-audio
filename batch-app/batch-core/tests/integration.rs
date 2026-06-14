@@ -49,3 +49,53 @@ fn runs_all_files_to_done() {
     assert_eq!(summary.n_events, 3);
     assert_eq!(summary.n_complete, 3);
 }
+
+#[test]
+fn worker_reported_bad_file_is_marked_failed() {
+    let (store, sid) = session_with(&["/jobs/ok.wav", "/jobs/BOOM.wav"]);
+    let summary = run_session(store, sid, cfg(1, 10_000, 2), None);
+    assert_eq!(summary.done, 1);
+    assert_eq!(summary.failed, 1);
+}
+
+#[test]
+fn hung_worker_times_out_and_file_is_poisoned_after_retries() {
+    // short timeout so the test is fast; HANG never replies -> timeout each attempt
+    let (store, sid) = session_with(&["/jobs/ok.wav", "/jobs/HANG.wav"]);
+    let summary = run_session(store, sid, cfg(1, 400, 2), None);
+    assert_eq!(summary.done, 1);
+    assert_eq!(summary.failed, 1); // HANG poisoned after max_attempts
+    assert_eq!(summary.pending, 0);
+    assert_eq!(summary.in_progress, 0);
+}
+
+#[test]
+fn crashing_worker_is_respawned_and_pool_keeps_working() {
+    let (store, sid) = session_with(&["/jobs/ok1.wav", "/jobs/CRASH.wav", "/jobs/ok2.wav"]);
+    let summary = run_session(store, sid, cfg(1, 10_000, 2), None);
+    assert_eq!(summary.done, 2); // both ok files complete despite the crash
+    assert_eq!(summary.failed, 1); // CRASH poisoned after retries
+}
+
+#[test]
+fn resume_does_not_reprocess_done_files() {
+    let (store, sid) = session_with(&["/jobs/a.wav", "/jobs/b.wav"]);
+    // Pre-mark one file done by claiming + recording a success manually.
+    {
+        let mut s = store.lock().unwrap();
+        let c = s.claim_next_pending(sid).unwrap().unwrap();
+        s.record_success(
+            sid,
+            c.file_id,
+            &batch_core::store::RecordedResult {
+                n_events: 0, n_complete: 0, n_retained: 0, elapsed_ms: 1, events: &[],
+            },
+        )
+        .unwrap();
+    }
+    // Now run: only the remaining pending file should be processed by the worker.
+    let summary = run_session(store, sid, cfg(1, 10_000, 2), None);
+    assert_eq!(summary.done, 2);
+    // The pre-done file had 0 events; the worker-processed one has 1 -> total events == 1.
+    assert_eq!(summary.n_events, 1);
+}
