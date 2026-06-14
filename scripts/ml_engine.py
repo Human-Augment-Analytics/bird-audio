@@ -19,6 +19,11 @@ import torch
 from ultralytics import YOLO
 from ultralytics.data.augment import LetterBox
 
+from birdpipe import consolidate, coords
+from birdpipe import records as rec
+from birdpipe import stageb
+from birdpipe.constants import ConsolidationParams, StageBParams
+
 class BirdAudioPipeline:
     def __init__(self, localizer_path, classifier_path=None, device=None, conf=0.25):
         if device:
@@ -63,99 +68,106 @@ class BirdAudioPipeline:
         im /= 255.0
         return im
 
-    def process_file(self, input_wav, output_root):
-        input_wav = Path(input_wav)
+    def _make_dirs(self, output_root):
         output_root = Path(output_root)
-        
-        # Setup output subdirs
-        dirs = {
-            "vis": output_root / "vis",
-            "crops": output_root / "crops",
-            "wav": output_root / "wav",
-            "labels": output_root / "labels"
-        }
+        dirs = {k: output_root / k for k in ("vis", "crops", "wav", "labels")}
         for d in dirs.values():
             d.mkdir(parents=True, exist_ok=True)
+        return dirs
 
-        print(f"Starting pipeline for: {input_wav}", file=sys.stderr)
-        
+    def _band_image(self, feats_quarters):
+        """Whole-file flipped dB band image (uint8) for Stage B crops."""
+        mag = np.concatenate(feats_quarters, axis=1)[88:248]
+        mag = mag[::-1].copy()
+        db = librosa.amplitude_to_db(mag, ref=np.max)
+        rng = db.max() - db.min()
+        return np.clip((db - db.min()) * 255 / (rng + 1e-6), 0, 255).astype(np.uint8)
+
+    def process_file(self, input_wav, output_root="output", write_artifacts=False,
+                     theta_a=0.0, theta_b=0.530306, emit_raw=False):
+        input_wav = Path(input_wav)
+        t0 = time.time()
+
         try:
             sr = librosa.get_samplerate(str(input_wav))
             stream = librosa.stream(
-                str(input_wav),
-                block_length=128,
-                frame_length=1024,
-                hop_length=256,
-                fill_value=0,
+                str(input_wav), block_length=128, frame_length=1024,
+                hop_length=256, fill_value=0,
             )
         except Exception as e:
-            return {"error": f"Failed to open audio: {e}"}
+            return {"status": "error", "input": str(input_wav),
+                    "message": f"Failed to open audio: {e}"}
 
-        feats_quarters = []
-        samps_quarters = []
-        
-        # 1. Feature Extraction
+        feats_quarters, samps_quarters = [], []
         for y_block in stream:
             feats = np.abs(librosa.stft(y_block, n_fft=1024, hop_length=256, center=False))
             feats_quarters.append(feats)
             samps_quarters.append(y_block)
 
         total_windows = max(0, len(feats_quarters) - 3)
-        detections = []
+        dirs = self._make_dirs(output_root) if write_artifacts else None
+        raw = []
 
-        # 2. Inference Loop
+        # Stage A: per-window object detection -> absolute detections
         for count in range(total_windows):
-            feats = np.concatenate(feats_quarters[count : count + 4], axis=1)[88:248]
+            feats = np.concatenate(feats_quarters[count:count + 4], axis=1)[88:248]
             feats = feats[::-1].copy()
-
             img = librosa.amplitude_to_db(feats, ref=np.max)
-            img_min, img_max = np.amin(img), np.amax(img)
-            img_png = np.clip((img - img_min) * 255 / (img_max - img_min + 1e-6), 0, 255).astype(np.uint8)
+            rng = np.amax(img) - np.amin(img)
+            img_png = np.clip((img - np.amin(img)) * 255 / (rng + 1e-6), 0, 255).astype(np.uint8)
             img_png = np.tile(np.expand_dims(img_png, -1), (1, 1, 3))
 
             input_ims = self.preprocess(img_png).to(self.device)
             result = self.localizer(input_ims, imgsz=(160, 512), verbose=False, conf=self.conf)[0]
             boxes = result.boxes
+            if len(boxes.xywhn) == 0:
+                continue
 
-            if len(boxes.xyxy) > 0:
-                output_stem = f"{input_wav.stem}_{count:04d}"
-                
-                # Visuals and data
-                result.save(filename=str(dirs["vis"] / f"{output_stem}.jpeg"))
-                result.save_txt(str(dirs["labels"] / f"{output_stem}.txt"), save_conf=True)
-                cv2.imwrite(str(dirs["crops"] / f"{output_stem}.png"), img_png)
+            if write_artifacts:
+                stem = f"{input_wav.stem}_{count:04d}"
+                result.save(filename=str(dirs["vis"] / f"{stem}.jpeg"))
+                result.save_txt(str(dirs["labels"] / f"{stem}.txt"), save_conf=True)
+                cv2.imwrite(str(dirs["crops"] / f"{stem}.png"), img_png)
+                samps = np.concatenate(samps_quarters[count:count + 4], axis=0)
+                sf.write(str(dirs["wav"] / f"{stem}.wav"), samps, int(sr), format="wav")
 
-                # Audio
-                samps = np.concatenate(samps_quarters[count : count + 4], axis=0)
-                sf.write(str(dirs["wav"] / f"{output_stem}.wav"), samps, int(sr), format="wav")
+            xywhn = boxes.xywhn.cpu().numpy()
+            confs = boxes.conf.cpu().numpy()
+            for k in range(len(xywhn)):
+                x, y, w, h = (float(v) for v in xywhn[k])
+                raw.append(coords.map_box(x, y, w, h, float(confs[k]), count))
 
-                # Optional Stage B: Classification
-                # TODO: Implement actual Stage B refinement logic here using self.classifier
-                for i in range(len(boxes.xyxy)):
-                    box = boxes.xyxy[i].cpu().numpy()
-                    conf = float(boxes.conf[i].cpu())
-                    
-                    # Currently we only run Stage A localization.
-                    # Do not claim 'Classified' until inference is actually implemented.
-                    label = "HLW Buzz (Detected)"
+        # Consolidation -> event tracks
+        events = consolidate.consolidate(raw, ConsolidationParams())
 
-                    detections.append({
-                        "window_index": count,
-                        "timestamp": (count * 256) / sr,
-                        "duration": (1024 + 3 * 256) / sr,
-                        "label": label,
-                        "confidence": conf,
-                        "box": box.tolist()
-                    })
+        # Stage B: completeness curation on consolidated events
+        sbp = StageBParams(theta_b=theta_b)
+        if events and self.classifier is not None:
+            band = self._band_image(feats_quarters)
+            for ev in events:
+                crop = stageb.build_crop(band, ev, params=sbp)
+                ev.completeness_score = stageb.classify_crop(
+                    self.classifier, crop, sbp.complete_class)
+        rec.finalize_events(events, theta_a=theta_a, theta_b=theta_b)
 
-        return {
+        out = {
             "status": "success",
+            "input": str(input_wav),
             "filename": input_wav.name,
-            "total_windows": total_windows,
-            "detections_found": len(detections),
-            "output_root": str(output_root),
-            "detections": detections
+            "n_windows": total_windows,
+            "n_raw": len(raw),
+            "n_events": len(events),
+            "n_complete": sum(1 for e in events if e.completeness_label == "complete"),
+            "n_retained": sum(1 for e in events if e.retained),
+            "elapsed_ms": int((time.time() - t0) * 1000),
+            "events": [rec.to_record(e) for e in events],
         }
+        if emit_raw:
+            out["raw_detections"] = [
+                {"window": d.window, "t_start": d.t_start, "t_end": d.t_end,
+                 "f_low": d.f_low, "f_high": d.f_high, "conf": d.conf} for d in raw
+            ]
+        return out
 
 def main():
     parser = argparse.ArgumentParser(description="Bird Audio ML Engine (Native Python)")
