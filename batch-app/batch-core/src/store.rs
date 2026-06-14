@@ -25,6 +25,28 @@ pub struct Claimed {
     pub attempts: i64,
 }
 
+/// Per-file success payload to persist (subset of a worker Result message).
+pub struct RecordedResult<'a> {
+    pub n_events: i64,
+    pub n_complete: i64,
+    pub n_retained: i64,
+    pub elapsed_ms: i64,
+    pub events: &'a [crate::protocol::EventRecord],
+}
+
+/// Aggregate counts for a session.
+#[derive(Debug, PartialEq)]
+pub struct Summary {
+    pub total: i64,
+    pub pending: i64,
+    pub in_progress: i64,
+    pub done: i64,
+    pub failed: i64,
+    pub n_events: i64,
+    pub n_complete: i64,
+    pub n_retained: i64,
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions(
   id INTEGER PRIMARY KEY,
@@ -160,6 +182,106 @@ impl Store {
             .query_row("SELECT status FROM files WHERE id=?1", params![file_id], |r| r.get(0))
             .optional()
     }
+
+    /// Persist a successful file: update the file row and insert its events.
+    pub fn record_success(
+        &mut self,
+        session_id: i64,
+        file_id: i64,
+        r: &RecordedResult,
+    ) -> rusqlite::Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE files SET status='done', n_events=?2, n_complete=?3, n_retained=?4,
+                 elapsed_ms=?5, error=NULL, updated_at=datetime('now') WHERE id=?1",
+            params![file_id, r.n_events, r.n_complete, r.n_retained, r.elapsed_ms],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO events(session_id, file_id, t_start, t_end, duration, f_low, f_high,
+                     center_freq, stage_a_conf, completeness_score, completeness_label, retained, n_members)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            )?;
+            for e in r.events {
+                stmt.execute(params![
+                    session_id,
+                    file_id,
+                    e.t_start,
+                    e.t_end,
+                    e.duration,
+                    e.f_low,
+                    e.f_high,
+                    e.center_freq,
+                    e.stage_a_conf,
+                    e.completeness_score,
+                    e.completeness_label,
+                    e.retained,
+                    e.n_members,
+                ])?;
+            }
+        }
+        tx.commit()
+    }
+
+    /// Aggregate counts for a session.
+    pub fn summary(&self, session_id: i64) -> rusqlite::Result<Summary> {
+        let count = |status: &str| -> rusqlite::Result<i64> {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE session_id=?1 AND status=?2",
+                params![session_id, status],
+                |r| r.get(0),
+            )
+        };
+        let total: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE session_id=?1",
+            params![session_id],
+            |r| r.get(0),
+        )?;
+        let n_events: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE session_id=?1",
+            params![session_id],
+            |r| r.get(0),
+        )?;
+        let n_complete: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE session_id=?1 AND completeness_label='complete'",
+            params![session_id],
+            |r| r.get(0),
+        )?;
+        let n_retained: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE session_id=?1 AND retained=1",
+            params![session_id],
+            |r| r.get(0),
+        )?;
+        Ok(Summary {
+            total,
+            pending: count("pending")?,
+            in_progress: count("in_progress")?,
+            done: count("done")?,
+            failed: count("failed")?,
+            n_events,
+            n_complete,
+            n_retained,
+        })
+    }
+
+    /// Most-recent session whose roots match and that isn't finished (for resume).
+    pub fn find_resumable(&self, input_roots: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT id FROM sessions WHERE input_roots=?1 AND status!='done' ORDER BY id DESC LIMIT 1",
+                params![input_roots],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
+    pub fn set_session_status(&self, session_id: i64, status: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET status=?2 WHERE id=?1",
+            params![session_id, status],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -229,5 +351,58 @@ mod tests {
         let c = s.claim_next_pending(sid).unwrap().unwrap();
         s.mark_failed(c.file_id, "boom").unwrap();
         assert_eq!(s.file_status(c.file_id).unwrap().as_deref(), Some("failed"));
+    }
+
+    #[test]
+    fn record_success_persists_file_and_events() {
+        use crate::protocol::EventRecord;
+        let mut s = mem();
+        let sid = new_session(&s);
+        s.add_files(sid, &[PathBuf::from("/data/a.wav")]).unwrap();
+        let c = s.claim_next_pending(sid).unwrap().unwrap();
+        let events = vec![
+            EventRecord {
+                t_start: 1.0, t_end: 2.5, duration: 1.5, f_low: 5000.0, f_high: 6000.0,
+                center_freq: 5500.0, stage_a_conf: 0.9, completeness_score: Some(0.8),
+                completeness_label: Some("complete".into()), retained: Some(true), n_members: 3,
+            },
+            EventRecord {
+                t_start: 3.0, t_end: 3.4, duration: 0.4, f_low: 5000.0, f_high: 6000.0,
+                center_freq: 5500.0, stage_a_conf: 0.5, completeness_score: Some(0.2),
+                completeness_label: Some("incomplete".into()), retained: Some(false), n_members: 1,
+            },
+        ];
+        s.record_success(
+            sid, c.file_id,
+            &RecordedResult { n_events: 2, n_complete: 1, n_retained: 1, elapsed_ms: 42, events: &events },
+        ).unwrap();
+        assert_eq!(s.file_status(c.file_id).unwrap().as_deref(), Some("done"));
+        let sum = s.summary(sid).unwrap();
+        assert_eq!(sum.done, 1);
+        assert_eq!(sum.n_events, 2);
+        assert_eq!(sum.n_complete, 1);
+        assert_eq!(sum.n_retained, 1);
+    }
+
+    #[test]
+    fn summary_counts_statuses() {
+        let s = mem();
+        let sid = new_session(&s);
+        s.add_files(sid, &[PathBuf::from("/data/a.wav"), PathBuf::from("/data/b.wav")]).unwrap();
+        let c = s.claim_next_pending(sid).unwrap().unwrap();
+        s.mark_failed(c.file_id, "x").unwrap();
+        let sum = s.summary(sid).unwrap();
+        assert_eq!(sum.total, 2);
+        assert_eq!(sum.failed, 1);
+        assert_eq!(sum.pending, 1);
+    }
+
+    #[test]
+    fn find_resumable_matches_unfinished_roots() {
+        let s = mem();
+        let sid = new_session(&s); // input_roots = "[\"/data\"]"
+        assert_eq!(s.find_resumable("[\"/data\"]").unwrap(), Some(sid));
+        s.set_session_status(sid, "done").unwrap();
+        assert_eq!(s.find_resumable("[\"/data\"]").unwrap(), None);
     }
 }
