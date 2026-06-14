@@ -4,3 +4,4 @@ pub mod protocol;
 pub mod enumerate;
 pub mod concurrency;
 pub mod store;
+pub mod worker;
