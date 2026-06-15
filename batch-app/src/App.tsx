@@ -17,15 +17,19 @@ export default function App() {
   const tRef = useRef<{ t: number; done: number } | null>(null);
 
   useEffect(() => {
+    let active = true;
     if (view === "run" && start && opts && !summary) {
       // Check if we missed the 'done' event due to a race
       getSummary(opts.outputDir, start.session_id).then((s) => {
-        if (s.pending === 0 && s.in_progress === 0) {
+        if (active && s.pending === 0 && s.in_progress === 0) {
           setSummary(s);
-          listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
+          listFiles(opts.outputDir, start.session_id).then((r) => {
+            if (active) setRows(r);
+          }).catch(() => {});
         }
       });
     }
+    return () => { active = false; };
   }, [view, start, opts, summary]);
 
   useEffect(() => {
