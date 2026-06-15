@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { checkHealth, pickFolder, prepareSystem, startSession, checkCache, clearCache } from "../api";
+import { checkHealth, pickFolder, prepareSystem, startSession, checkCache } from "../api";
 import type { StartOpts, StartResult, HealthStatus } from "../types";
 import ManageCache from "./ManageCache";
 
@@ -55,20 +55,6 @@ export default function SetupView({ onStarted }: Props) {
       setHasCache(false);
     }
   }, [input]);
-
-  const handleClearCache = async () => {
-    if (!input) return;
-    setBusy(true);
-    try {
-      await clearCache(input);
-      setHasCache(false);
-      setError("Previous results cleared. A fresh run will be performed.");
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const handlePrepare = async () => {
     setBusy(true);
@@ -134,7 +120,7 @@ export default function SetupView({ onStarted }: Props) {
         {hasCache && (
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, padding: "8px 12px", background: "rgba(59, 130, 246, 0.1)", borderRadius: 6, border: "1px solid rgba(59, 130, 246, 0.2)" }}>
             <span style={{ fontSize: 12, color: "#9aa0aa" }}>Previous results found in this folder.</span>
-            <button style={{ padding: "4px 8px", fontSize: 11 }} onClick={handleClearCache} disabled={busy}>Clear Previous Results</button>
+            <button style={{ padding: "4px 8px", fontSize: 11 }} onClick={() => setManagingCache(true)} disabled={busy}>Manage Cache</button>
           </div>
         )}
       </Field>
