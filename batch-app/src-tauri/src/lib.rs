@@ -14,6 +14,8 @@ pub fn run() {
             commands::export_session,
             commands::check_health,
             commands::prepare_system,
+            commands::check_cache,
+            commands::clear_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

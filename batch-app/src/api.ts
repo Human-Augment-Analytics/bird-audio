@@ -7,6 +7,10 @@ export const checkHealth = (cwd?: string) =>
   invoke<HealthStatus>("check_health", { cwd });
 export const prepareSystem = (cwd?: string) => 
   invoke<void>("prepare_system", { cwd });
+export const checkCache = (outputDir: string) =>
+  invoke<boolean>("check_cache", { outputDir });
+export const clearCache = (outputDir: string) =>
+  invoke<void>("clear_cache", { outputDir });
 
 export const pickFolder = async (): Promise<string | null> => {
   const result = await open({ directory: true, multiple: false });

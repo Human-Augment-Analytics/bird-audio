@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { checkHealth, pickFolder, prepareSystem, startSession } from "../api";
+import { checkHealth, pickFolder, prepareSystem, startSession, checkCache, clearCache } from "../api";
 import type { StartOpts, StartResult, HealthStatus } from "../types";
 
 interface Props {
@@ -20,6 +20,7 @@ function Field({ label, children, hint }: { label: string; children: ReactNode; 
 
 export default function SetupView({ onStarted }: Props) {
   const [input, setInput] = useState("");
+  const [hasCache, setHasCache] = useState(false);
   const [thetaA, setThetaA] = useState(0); // Sensitivity
   const [thetaB, setThetaB] = useState(0.530306); // Quality
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -44,6 +45,28 @@ export default function SetupView({ onStarted }: Props) {
       }
     });
   }, [cwd]);
+
+  useEffect(() => {
+    if (input) {
+      checkCache(input).then(setHasCache).catch(() => setHasCache(false));
+    } else {
+      setHasCache(false);
+    }
+  }, [input]);
+
+  const handleClearCache = async () => {
+    if (!input) return;
+    setBusy(true);
+    try {
+      await clearCache(input);
+      setHasCache(false);
+      setError("Previous results cleared. A fresh run will be performed.");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handlePrepare = async () => {
     setBusy(true);
@@ -106,6 +129,12 @@ export default function SetupView({ onStarted }: Props) {
           <input style={{ flex: 1 }} value={input} readOnly placeholder="Browse to select folder..." />
           <button onClick={async () => { const f = await pickFolder(); if(f) setInput(f); }}>Browse…</button>
         </div>
+        {hasCache && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, padding: "8px 12px", background: "rgba(59, 130, 246, 0.1)", borderRadius: 6, border: "1px solid rgba(59, 130, 246, 0.2)" }}>
+            <span style={{ fontSize: 12, color: "#9aa0aa" }}>Previous results found in this folder.</span>
+            <button style={{ padding: "4px 8px", fontSize: 11 }} onClick={handleClearCache} disabled={busy}>Clear Previous Results</button>
+          </div>
+        )}
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>

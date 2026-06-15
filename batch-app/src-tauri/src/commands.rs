@@ -263,3 +263,17 @@ pub async fn prepare_system(cwd: Option<String>) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[tauri::command]
+pub fn check_cache(output_dir: String) -> Result<bool, String> {
+    Ok(db_path(&output_dir).exists())
+}
+
+#[tauri::command]
+pub fn clear_cache(output_dir: String) -> Result<(), String> {
+    let path = db_path(&output_dir);
+    if path.exists() {
+        std::fs::remove_file(path).map_err(|e| format!("Failed to delete cache: {}", e))?;
+    }
+    Ok(())
+}
