@@ -39,7 +39,10 @@ def run_worker(pipeline, in_stream=None, out_stream=None) -> None:
                 theta_b=req.get("theta_b", 0.530306),
                 emit_raw=req.get("emit_raw", False),
             )
-            result["type"] = "result"
+            if result.get("status") == "error":
+                result["type"] = "error"
+            else:
+                result["type"] = "result"
             result["id"] = rid
             _emit(out_stream, result)
         except Exception as exc:  # noqa: BLE001 - per-file isolation
