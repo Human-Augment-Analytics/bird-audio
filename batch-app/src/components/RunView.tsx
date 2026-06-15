@@ -45,32 +45,48 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   );
 
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <h2>
-        {done ? "Session complete" : "Running…"} (session {start.session_id})
+    <div className="card" style={{ display: "grid", gap: 14 }}>
+      <h2 style={{ fontSize: 20, margin: "8px 0" }}>
+        {done ? "Analysis complete" : "Processing recordings…"} 
+        <span style={{ fontSize: 13, color: "#9aa0aa", fontWeight: 400, marginLeft: 12 }}>
+          ID: {start.session_id}
+        </span>
       </h2>
-      <div style={{ height: 14, background: "#1f2228", borderRadius: 7, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: done ? "#34d399" : "#3b82f6" }} />
+      <div style={{ height: 10, background: "#1f2228", borderRadius: 5, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: done ? "#10b981" : "#3b82f6", transition: "width 0.3s ease" }} />
       </div>
-      <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
-        <Tile label="Done" value={doneN} color="#34d399" />
+      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", padding: "8px 0" }}>
+        <Tile label="Processed" value={doneN} color="#10b981" />
         <Tile label="Failed" value={failedN} color="#f87171" />
-        <Tile label="Running" value={inProg} color="#fbbf24" />
-        <Tile label="Pending" value={pendingN} color="#9aa0aa" />
-        <Tile label="Total" value={total} />
-        <Tile label="Throughput" value={`${throughput.toFixed(2)}/s`} />
-        <Tile label="Est. Completion" value={etaTime || "—"} />
+        <Tile label="Active" value={inProg} color="#fbbf24" />
+        <Tile label="Remaining" value={pendingN} color="#9aa0aa" />
+        <Tile label="Total Files" value={total} />
+        <Tile label="Processing Speed" value={`${throughput.toFixed(2)} files/s`} />
+        <Tile label="Completion ETA" value={etaTime || "—"} />
       </div>
       {!done && progress?.last_file && (
-        <div style={{ fontSize: 12, color: "#9aa0aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          Processing: {progress.last_file}
+        <div style={{ fontSize: 12, color: "#9aa0aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontStyle: "italic" }}>
+          Current: {progress.last_file}
         </div>
       )}
       {done && summary && (
-        <div style={{ display: "flex", gap: 24, fontSize: 14, color: "#9aa0aa", padding: "12px 0" }}>
-          <div><strong>{summary.n_events}</strong> Buzzes Found</div>
-          <div><strong>{summary.n_complete}</strong> High-Quality (Complete)</div>
-          <div><strong>{summary.n_retained}</strong> Retained for Analysis</div>
+        <div style={{ 
+          display: "flex", gap: 32, padding: 20, borderRadius: 12, 
+          background: "rgba(52, 211, 153, 0.05)", border: "1px solid rgba(52, 211, 153, 0.1)",
+          margin: "8px 0"
+        }}>
+          <div>
+            <div style={{ fontSize: 11, color: "#9aa0aa", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Detections Found</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "#10b981" }}>{summary.n_events}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "#9aa0aa", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>High-Quality Buzzes</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "#e6e7ea" }}>{summary.n_complete}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "#9aa0aa", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Retained Records</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "#9aa0aa" }}>{summary.n_retained}</div>
+          </div>
         </div>
       )}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

@@ -1,9 +1,33 @@
-:root { color-scheme: dark; font-family: system-ui, sans-serif; }
+:root { color-scheme: dark; font-family: 'Inter', system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
 * { box-sizing: border-box; }
-body { margin: 0; background: #15171c; color: #e6e7ea; }
-button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid #2c2f36;
-  background: #23262d; color: #e6e7ea; padding: 0.5rem 0.9rem; }
+body { margin: 0; background: #0f1115; color: #e6e7ea; }
+h1, h2, h3 { color: #ffffff; }
+
+button { 
+  font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid #2c2f36;
+  background: #1c1f25; color: #e6e7ea; padding: 0.5rem 1rem; 
+  transition: all 0.2s ease;
+  font-size: 14px;
+  font-weight: 500;
+}
+button:hover { background: #262a33; border-color: #3b82f6; }
 button.primary { background: #3b82f6; border-color: #3b82f6; color: white; }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
-input, select { font: inherit; background: #1c1f25; color: #e6e7ea; border: 1px solid #2c2f36;
-  border-radius: 6px; padding: 0.4rem 0.5rem; }
+button.primary:hover { background: #2563eb; transform: translateY(-1px); }
+button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
+
+input, select { 
+  font: inherit; background: #15181e; color: #e6e7ea; border: 1px solid #2c2f36;
+  border-radius: 8px; padding: 0.5rem 0.7rem; 
+  transition: border-color 0.2s ease;
+  font-size: 14px;
+}
+input:focus, select:focus { outline: none; border-color: #3b82f6; background: #1c1f25; }
+
+/* Dashboard Cards */
+.card {
+  padding: 20px;
+  background: #15181e;
+  border: 1px solid #1f2228;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}

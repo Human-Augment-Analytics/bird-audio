@@ -72,7 +72,7 @@ export default function SetupView({ onStarted }: Props) {
   const ready = health?.env_ok && health?.models_ok;
 
   return (
-    <div style={{ display: "grid", gap: 20, maxWidth: 640 }}>
+    <div className="card" style={{ display: "grid", gap: 20, maxWidth: 640 }}>
       {/* Health Panel */}
       <div style={{ 
         padding: 16, borderRadius: 8, border: "1px solid #2c2f36",
@@ -101,37 +101,37 @@ export default function SetupView({ onStarted }: Props) {
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Field label="2. Detection Sensitivity" hint="0.0 = Default">
+        <Field label="2. Detection Sensitivity" hint="Lower = more buzzes (thetaA)">
           <input type="number" step="0.01" value={thetaA} onChange={e => setThetaA(Number(e.target.value))} />
         </Field>
-        <Field label="3. Quality Filter" hint="0.53 = Default">
+        <Field label="3. Quality Threshold" hint="Higher = stricter (thetaB)">
           <input type="number" step="0.01" value={thetaB} onChange={e => setThetaB(Number(e.target.value))} />
         </Field>
       </div>
 
-      <div style={{ borderTop: "1px solid #1f2228", paddingTop: 12 }}>
+      <div style={{ borderTop: "1px solid #1f2228", paddingTop: 16, marginTop: 4 }}>
         <button 
-          style={{ fontSize: 12, color: "#9aa0aa", padding: 0, background: "none" }}
+          style={{ fontSize: 12, color: "#9aa0aa", padding: 0, background: "none", border: "none", display: "flex", alignItems: "center", gap: 4 }}
           onClick={() => setShowAdvanced(!showAdvanced)}
         >
-          {showAdvanced ? "▼ Hide Internals" : "▶ Show System Internals"}
+          {showAdvanced ? "▼ Hide System Internals" : "▶ Show System Internals"}
         </button>
         
         {showAdvanced && (
-          <div style={{ display: "grid", gap: 12, marginTop: 12, padding: 12, background: "#15181e", borderRadius: 6 }}>
-             <Field label="Worker Command"><input value={workerCmd} onChange={e => setWorkerCmd(e.target.value)} /></Field>
-             <Field label="Device">
+          <div style={{ display: "grid", gap: 12, marginTop: 12, padding: 16, background: "rgba(255,255,255,0.02)", borderRadius: 8, border: "1px solid #1f2228" }}>
+             <Field label="Worker Process Command"><input value={workerCmd} onChange={e => setWorkerCmd(e.target.value)} /></Field>
+             <Field label="Processing Device">
                 <select value={device} onChange={e => setDevice(e.target.value)}>
-                  <option value="cpu">Processor (CPU)</option>
-                  <option value="cuda">NVIDIA GPU (CUDA)</option>
-                  <option value="mps">Apple GPU (MPS)</option>
+                  <option value="cpu">System Processor (CPU)</option>
+                  <option value="cuda">NVIDIA Graphics Card (CUDA)</option>
+                  <option value="mps">Apple Silicon (MPS)</option>
                 </select>
              </Field>
-             <Field label="Working Directory"><input value={cwd} placeholder="(Default)" onChange={e => setCwd(e.target.value)} /></Field>
+             <Field label="Execution Directory"><input value={cwd} placeholder="(Default)" onChange={e => setCwd(e.target.value)} /></Field>
              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-               <Field label="Concurrency"><input type="number" value={concurrency} onChange={e => setConcurrency(Number(e.target.value))} /></Field>
+               <Field label="Parallel Tasks"><input type="number" value={concurrency} onChange={e => setConcurrency(Number(e.target.value))} /></Field>
                <Field label="Timeout (s)"><input type="number" value={timeoutSecs} onChange={e => setTimeoutSecs(Number(e.target.value))} /></Field>
-               <Field label="Max Attempts"><input type="number" value={maxAttempts} onChange={e => setMaxAttempts(Number(e.target.value))} /></Field>
+               <Field label="Retry Limit"><input type="number" value={maxAttempts} onChange={e => setMaxAttempts(Number(e.target.value))} /></Field>
              </div>
           </div>
         )}
