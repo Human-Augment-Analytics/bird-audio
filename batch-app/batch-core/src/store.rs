@@ -311,6 +311,39 @@ impl Store {
         )?;
         Ok(())
     }
+
+    pub fn get_latest_session_id(&self) -> rusqlite::Result<Option<i64>> {
+        self.conn.query_row(
+            "SELECT id FROM sessions ORDER BY created_at DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        ).optional()
+    }
+
+    pub fn delete_cached_files(&self, session_id: i64, paths: &[String]) -> rusqlite::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for path in paths {
+            // Get file_id to delete events
+            let file_id: Option<i64> = tx.query_row(
+                "SELECT id FROM files WHERE session_id=?1 AND path=?2",
+                params![session_id, path],
+                |r| r.get(0)
+            ).optional()?;
+
+            if let Some(id) = file_id {
+                tx.execute("DELETE FROM events WHERE file_id=?1", params![id])?;
+                tx.execute("DELETE FROM files WHERE id=?1", params![id])?;
+            }
+        }
+        
+        // Update session total
+        tx.execute(
+            "UPDATE sessions SET total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1) WHERE id=?1",
+            params![session_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -449,5 +482,35 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.status == "failed" && r.error.as_deref() == Some("boom")));
         assert!(rows.iter().any(|r| r.status == "pending"));
+    }
+
+    #[test]
+    fn test_granular_cache_deletion() {
+        let store = Store::open_memory().unwrap();
+        let sid = store.create_session(&NewSession {
+            input_roots: "[]", output_dir: "out", device: "cpu", concurrency: 1, theta_a: 0.1, theta_b: 0.5
+        }).unwrap();
+        store.add_files(sid, &[PathBuf::from("a.wav"), PathBuf::from("b.wav")]).unwrap();
+        
+        // Mock some events
+        store.conn.execute(
+            "INSERT INTO events(session_id, file_id, completeness_label) VALUES(?1, 1, 'full'), (?1, 2, 'full')",
+            params![sid],
+        ).unwrap();
+
+        // Get latest session (should be sid)
+        let latest_sid = store.get_latest_session_id().unwrap().unwrap();
+        assert_eq!(latest_sid, sid);
+
+        // Delete only file 1
+        store.delete_cached_files(sid, &["a.wav".to_string()]).unwrap();
+
+        // Verify file 1 and its events are gone, but file 2 remains
+        let files = store.list_files(sid).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "b.wav");
+
+        let event_count: i64 = store.conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap();
+        assert_eq!(event_count, 1);
     }
 }
