@@ -4,3 +4,4 @@ target/
 *.db-shm
 node_modules/
 dist/
+src-tauri/gen/
