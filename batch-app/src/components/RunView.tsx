@@ -32,6 +32,13 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   const pct = total > 0 ? Math.round(((doneN + failedN) / total) * 100) : 0;
   const eta = throughput > 0 ? Math.round(pendingN / throughput) : null;
 
+  const etaTime = useMemo(() => {
+    if (!eta || eta <= 0) return null;
+    const d = new Date();
+    d.setSeconds(d.getSeconds() + eta);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }, [eta]);
+
   const filtered = useMemo(
     () => (filter === "all" ? rows : rows.filter((r) => r.status === filter)),
     [rows, filter]
@@ -52,7 +59,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         <Tile label="Pending" value={pendingN} color="#9aa0aa" />
         <Tile label="Total" value={total} />
         <Tile label="Throughput" value={`${throughput.toFixed(2)}/s`} />
-        <Tile label="ETA" value={eta === null ? "—" : `${eta}s`} />
+        <Tile label="Est. Completion" value={etaTime || "—"} />
       </div>
       {!done && progress?.last_file && (
         <div style={{ fontSize: 12, color: "#9aa0aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -60,8 +67,10 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         </div>
       )}
       {done && summary && (
-        <div style={{ fontSize: 13, color: "#9aa0aa" }}>
-          {summary.n_events} events · {summary.n_complete} complete · {summary.n_retained} retained
+        <div style={{ display: "flex", gap: 24, fontSize: 14, color: "#9aa0aa", padding: "12px 0" }}>
+          <div><strong>{summary.n_events}</strong> Buzzes Found</div>
+          <div><strong>{summary.n_complete}</strong> High-Quality (Complete)</div>
+          <div><strong>{summary.n_retained}</strong> Retained for Analysis</div>
         </div>
       )}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
