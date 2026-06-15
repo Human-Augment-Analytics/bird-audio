@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import SetupView from "./components/SetupView";
 import RunView from "./components/RunView";
-import { cancelSession, exportSession, listFiles, onDone, onProgress, pickSavePath } from "./api";
+import { cancelSession, exportSession, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
 export default function App() {
@@ -15,6 +15,18 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [cancelled, setCancelled] = useState(false);
   const tRef = useRef<{ t: number; done: number } | null>(null);
+
+  useEffect(() => {
+    if (view === "run" && start && opts && !summary) {
+      // Check if we missed the 'done' event due to a race
+      getSummary(opts.outputDir, start.session_id).then((s) => {
+        if (s.pending === 0 && s.in_progress === 0) {
+          setSummary(s);
+          listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
+        }
+      });
+    }
+  }, [view, start, opts, summary]);
 
   useEffect(() => {
     if (view !== "run" || !start || !opts) return;
