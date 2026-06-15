@@ -7,8 +7,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default())
         .invoke_handler(tauri::generate_handler![
-            commands::pick_folder,
-            commands::pick_save_path,
             commands::start_session,
             commands::cancel_session,
             commands::get_summary,

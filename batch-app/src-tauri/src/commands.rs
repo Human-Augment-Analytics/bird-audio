@@ -44,25 +44,6 @@ pub struct StartResult {
     pub total_files: usize,
 }
 
-#[tauri::command]
-pub fn pick_folder(app: AppHandle) -> Option<String> {
-    app.dialog()
-        .file()
-        .blocking_pick_folder()
-        .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub fn pick_save_path(app: AppHandle, default_name: String) -> Option<String> {
-    app.dialog()
-        .file()
-        .set_file_name(&default_name)
-        .blocking_save_file()
-        .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().to_string())
-}
-
 fn resolve_cwd(cwd: Option<String>) -> PathBuf {
     let dir = cwd
         .map(PathBuf::from)
