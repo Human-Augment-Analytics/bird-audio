@@ -78,6 +78,18 @@ class BirdAudioPipeline:
             d.mkdir(parents=True, exist_ok=True)
 
         print(f"Starting pipeline for: {input_wav}", file=sys.stderr)
+
+        # Simple run-cache to allow resuming interrupted runs.
+        cache_path = output_root / f"{input_wav.stem}.cache.json"
+        cache = {"processed_until": 0, "detections": []}
+        if cache_path.exists():
+            try:
+                with open(cache_path, 'r') as fh:
+                    cache = json.load(fh)
+                detections = cache.get("detections", [])
+                print(f"Resuming from cache: processed_until={cache.get('processed_until')}", file=sys.stderr)
+            except Exception:
+                cache = {"processed_until": 0, "detections": []}
         
         try:
             sr = librosa.get_samplerate(str(input_wav))
@@ -95,16 +107,30 @@ class BirdAudioPipeline:
         samps_quarters = []
         
         # 1. Feature Extraction
-        for y_block in stream:
+        for idx, y_block in enumerate(stream):
             feats = np.abs(librosa.stft(y_block, n_fft=1024, hop_length=256, center=False))
             feats_quarters.append(feats)
             samps_quarters.append(y_block)
+            # Emit occasional progress to stderr for frontend monitoring
+            if (idx + 1) % 50 == 0:
+                try:
+                    total_blocks = 'unknown'
+                    msg = {"type": "extract_progress", "blocks_extracted": idx + 1}
+                    print(f"PROGRESS: {json.dumps(msg)}", file=sys.stderr)
+                except Exception:
+                    pass
 
         total_windows = max(0, len(feats_quarters) - 3)
         detections = []
 
         # 2. Inference Loop
-        for count in range(total_windows):
+        start_time = time.time()
+        processed_from = int(cache.get("processed_until", 0))
+        # ensure processed_from in valid range
+        if processed_from < 0:
+            processed_from = 0
+
+        for count in range(processed_from, total_windows):
             feats = np.concatenate(feats_quarters[count : count + 4], axis=1)[88:248]
             feats = feats[::-1].copy()
 
@@ -147,6 +173,35 @@ class BirdAudioPipeline:
                         "confidence": conf,
                         "box": box.tolist()
                     })
+
+            # Update cache after each window so we can resume
+            try:
+                cache = {"processed_until": count + 1, "detections": detections}
+                tmp = cache_path.with_suffix('.tmp')
+                with open(tmp, 'w') as fh:
+                    json.dump(cache, fh)
+                os.replace(str(tmp), str(cache_path))
+            except Exception:
+                pass
+
+            # Emit progress message with ETA
+            try:
+                elapsed = time.time() - start_time
+                processed = count - processed_from + 1
+                per_item = elapsed / max(1, processed)
+                remaining = total_windows - (count + 1)
+                eta = remaining * per_item
+                prog = {"type": "inference_progress", "processed": count + 1, "total": total_windows, "eta_seconds": int(eta)}
+                print(f"PROGRESS: {json.dumps(prog)}", file=sys.stderr)
+            except Exception:
+                pass
+
+        # Remove cache on successful completion
+        try:
+            if cache_path.exists():
+                os.remove(cache_path)
+        except Exception:
+            pass
 
         return {
             "status": "success",
