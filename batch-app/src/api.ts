@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { StartOpts, StartResult, Summary, FileRow, Progress } from "./types";
+import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus } from "./types";
+
+export const checkHealth = (cwd?: string) => 
+  invoke<HealthStatus>("check_health", { cwd });
+export const prepareSystem = (cwd?: string) => 
+  invoke<void>("prepare_system", { cwd });
 
 export const pickFolder = () => invoke<string | null>("pick_folder");
 export const pickSavePath = (defaultName: string) =>

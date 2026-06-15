@@ -43,3 +43,10 @@ export interface FileRow {
   n_complete: number;
   error: string | null;
 }
+
+export interface HealthStatus {
+  env_ok: boolean;
+  models_ok: boolean;
+  device: string;
+  details: string;
+}
