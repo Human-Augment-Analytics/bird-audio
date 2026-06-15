@@ -1,0 +1,9 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #15171c; color: #e6e7ea; }
+button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid #2c2f36;
+  background: #23262d; color: #e6e7ea; padding: 0.5rem 0.9rem; }
+button.primary { background: #3b82f6; border-color: #3b82f6; color: white; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+input, select { font: inherit; background: #1c1f25; color: #e6e7ea; border: 1px solid #2c2f36;
+  border-radius: 6px; padding: 0.4rem 0.5rem; }
