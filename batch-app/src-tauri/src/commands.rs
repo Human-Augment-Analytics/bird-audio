@@ -186,3 +186,79 @@ pub fn export_session(
     .map_err(|e| e.to_string())?;
     Ok(n)
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HealthStatus {
+    pub env_ok: bool,
+    pub models_ok: bool,
+    pub device: String,
+    pub details: String,
+}
+
+#[tauri::command]
+pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
+    use std::path::PathBuf;
+    use std::process::Command;
+    let dir = cwd
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+    // Check models
+    let m1 = dir.join("models/buzz_localizer.pt").exists();
+    let m2 = dir.join("models/classifier.pt").exists();
+
+    // Check Python env
+    let output = Command::new("uv")
+        .args([
+            "run",
+            "python",
+            "-c",
+            "import torch, ultralytics, librosa; print(torch.cuda.is_available() if torch.cuda.is_available() else torch.backends.mps.is_available())",
+        ])
+        .current_dir(&dir)
+        .output();
+
+    let (env_ok, device_info) = match output {
+        Ok(o) if o.status.success() => {
+            let gpu = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
+            let d = if gpu == "true" {
+                "Graphics Card (Accelerated)"
+            } else {
+                "Processor (CPU)"
+            };
+            (true, d.to_string())
+        }
+        _ => (false, "Not Found".to_string()),
+    };
+
+    Ok(HealthStatus {
+        env_ok,
+        models_ok: m1 && m2,
+        device: device_info,
+        details: if !m1 || !m2 {
+            "Missing model files in models/ folder.".into()
+        } else {
+            "".into()
+        },
+    })
+}
+
+#[tauri::command]
+pub async fn prepare_system(cwd: Option<String>) -> Result<(), String> {
+    use std::path::PathBuf;
+    use std::process::Command;
+    let dir = cwd
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+    let status = Command::new("uv")
+        .args(["sync"])
+        .current_dir(&dir)
+        .status()
+        .map_err(|e| format!("Failed to run uv sync: {}", e))?;
+
+    if !status.success() {
+        return Err("uv sync failed. Check internet connection.".into());
+    }
+    Ok(())
+}
