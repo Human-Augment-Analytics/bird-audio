@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import SetupView from "./components/SetupView";
 import RunView from "./components/RunView";
-import { exportSession, listFiles, onDone, onProgress, pickSavePath } from "./api";
+import { cancelSession, exportSession, listFiles, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
 export default function App() {
@@ -13,30 +13,39 @@ export default function App() {
   const [rows, setRows] = useState<FileRow[]>([]);
   const [throughput, setThroughput] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const [cancelled, setCancelled] = useState(false);
   const tRef = useRef<{ t: number; done: number } | null>(null);
 
   useEffect(() => {
     if (view !== "run" || !start || !opts) return;
+    let active = true;
     let unP: (() => void) | undefined;
     let unD: (() => void) | undefined;
-    onProgress((p) => {
-      setProgress(p);
-      const now = Date.now();
-      const prev = tRef.current;
-      if (prev && now > prev.t) {
-        const rate = ((p.done - prev.done) * 1000) / (now - prev.t);
-        setThroughput((cur) => (cur === 0 ? Math.max(rate, 0) : cur * 0.7 + Math.max(rate, 0) * 0.3));
+    (async () => {
+      unP = await onProgress((p) => {
+        setProgress(p);
+        const now = Date.now();
+        const prev = tRef.current;
+        if (prev && now > prev.t) {
+          const rate = ((p.done - prev.done) * 1000) / (now - prev.t);
+          setThroughput((cur) => (cur === 0 ? Math.max(rate, 0) : cur * 0.7 + Math.max(rate, 0) * 0.3));
+        }
+        tRef.current = { t: now, done: p.done };
+      });
+      unD = await onDone((s) => {
+        setSummary(s);
+        listFiles(opts.output_dir, start.session_id).then(setRows).catch(() => {});
+      });
+      if (!active) {
+        unP?.();
+        unD?.();
       }
-      tRef.current = { t: now, done: p.done };
-    }).then((u) => (unP = u));
-    onDone((s) => {
-      setSummary(s);
-      listFiles(opts.output_dir, start.session_id).then(setRows).catch(() => {});
-    }).then((u) => (unD = u));
+    })();
     const iv = setInterval(() => {
       listFiles(opts.output_dir, start.session_id).then(setRows).catch(() => {});
     }, 2000);
     return () => {
+      active = false;
       unP?.();
       unD?.();
       clearInterval(iv);
@@ -51,8 +60,14 @@ export default function App() {
     setRows([]);
     setThroughput(0);
     setNotice(null);
+    setCancelled(false);
     tRef.current = null;
     setView("run");
+  };
+
+  const handleCancel = () => {
+    setCancelled(true);
+    cancelSession();
   };
 
   const doExport = async (fmt: string, completeOnly: boolean) => {
@@ -73,7 +88,7 @@ export default function App() {
       {view === "setup" && <SetupView onStarted={onStarted} />}
       {view === "run" && start && (
         <>
-          <button style={{ marginBottom: 12 }} disabled={summary === null} onClick={() => setView("setup")}>
+          <button style={{ marginBottom: 12 }} disabled={summary === null && !cancelled} onClick={() => setView("setup")}>
             ← New session
           </button>
           {notice && <div style={{ marginBottom: 12, color: "#34d399", fontSize: 13 }}>{notice}</div>}
@@ -84,6 +99,7 @@ export default function App() {
             rows={rows}
             throughput={throughput}
             onExport={doExport}
+            onCancel={handleCancel}
           />
         </>
       )}

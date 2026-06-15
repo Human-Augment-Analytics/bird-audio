@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { cancelSession } from "../api";
 import type { FileRow, Progress, StartResult, Summary } from "../types";
 import FileTable from "./FileTable";
 
@@ -10,6 +9,7 @@ interface Props {
   rows: FileRow[];
   throughput: number; // files/sec
   onExport: (fmt: string, completeOnly: boolean) => void;
+  onCancel: () => void;
 }
 
 function Tile({ label, value, color }: { label: string; value: number | string; color?: string }) {
@@ -21,7 +21,7 @@ function Tile({ label, value, color }: { label: string; value: number | string; 
   );
 }
 
-export default function RunView({ start, progress, summary, rows, throughput, onExport }: Props) {
+export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel }: Props) {
   const [filter, setFilter] = useState<"all" | "done" | "failed">("all");
   const done = summary !== null;
   const total = progress?.total ?? summary?.total ?? start.total_files;
@@ -54,6 +54,11 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         <Tile label="Throughput" value={`${throughput.toFixed(2)}/s`} />
         <Tile label="ETA" value={eta === null ? "—" : `${eta}s`} />
       </div>
+      {!done && progress?.last_file && (
+        <div style={{ fontSize: 12, color: "#9aa0aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          Processing: {progress.last_file}
+        </div>
+      )}
       {done && summary && (
         <div style={{ fontSize: 13, color: "#9aa0aa" }}>
           {summary.n_events} events · {summary.n_complete} complete · {summary.n_retained} retained
@@ -67,7 +72,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
           </button>
         ))}
         <span style={{ flex: 1 }} />
-        {!done && <button onClick={() => cancelSession()}>Cancel</button>}
+        {!done && <button onClick={onCancel}>Cancel</button>}
         {done && (
           <>
             <button onClick={() => onExport("csv", false)}>Export CSV</button>
