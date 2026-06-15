@@ -275,11 +275,11 @@ impl Store {
         })
     }
 
-    /// Most-recent session whose roots match and that isn't finished (for resume).
+    /// Most-recent session for these roots (resume target; done files are skipped on run).
     pub fn find_resumable(&self, input_roots: &str) -> rusqlite::Result<Option<i64>> {
         self.conn
             .query_row(
-                "SELECT id FROM sessions WHERE input_roots=?1 AND status!='done' ORDER BY id DESC LIMIT 1",
+                "SELECT id FROM sessions WHERE input_roots=?1 ORDER BY id DESC LIMIT 1",
                 params![input_roots],
                 |r| r.get(0),
             )
@@ -427,12 +427,15 @@ mod tests {
     }
 
     #[test]
-    fn find_resumable_matches_unfinished_roots() {
+    fn find_resumable_matches_latest_session_for_roots() {
         let s = mem();
         let sid = new_session(&s); // input_roots = "[\"/data\"]"
         assert_eq!(s.find_resumable("[\"/data\"]").unwrap(), Some(sid));
+        // still resumable even after being marked done (run skips already-done files)
         s.set_session_status(sid, "done").unwrap();
-        assert_eq!(s.find_resumable("[\"/data\"]").unwrap(), None);
+        assert_eq!(s.find_resumable("[\"/data\"]").unwrap(), Some(sid));
+        // a different root has no session
+        assert_eq!(s.find_resumable("[\"/other\"]").unwrap(), None);
     }
 
     #[test]
