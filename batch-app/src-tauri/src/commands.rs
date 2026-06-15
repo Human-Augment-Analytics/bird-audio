@@ -63,6 +63,26 @@ pub fn pick_save_path(app: AppHandle, default_name: String) -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+fn resolve_cwd(cwd: Option<String>) -> PathBuf {
+    let dir = cwd
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().expect("get current_dir"));
+
+    // Dev mode: walk up until we find models/ and pyproject.toml
+    let mut current = dir.clone();
+    for _ in 0..3 {
+        if current.join("models").exists() && current.join("pyproject.toml").exists() {
+            return current;
+        }
+        if let Some(parent) = current.parent() {
+            current = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+    dir
+}
+
 #[tauri::command]
 pub fn start_session(
     app: AppHandle,
@@ -113,7 +133,7 @@ pub fn start_session(
     let cfg = EngineConfig {
         python: program,
         worker_args,
-        cwd: opts.cwd.map(PathBuf::from),
+        cwd: Some(resolve_cwd(opts.cwd)),
         concurrency: conc,
         theta_a: opts.theta_a,
         theta_b: opts.theta_b,
@@ -197,11 +217,8 @@ pub struct HealthStatus {
 
 #[tauri::command]
 pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
-    use std::path::PathBuf;
     use std::process::Command;
-    let dir = cwd
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let dir = resolve_cwd(cwd);
 
     // Check models
     let m1 = dir.join("models/buzz_localizer.pt").exists();
@@ -231,25 +248,26 @@ pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
         _ => (false, "Not Found".to_string()),
     };
 
+    let details = if !m1 || !m2 {
+        "Missing model files in models/ folder.".into()
+    } else if !env_ok {
+        "Python environment or dependencies missing. Click 'Prepare System'.".into()
+    } else {
+        "".into()
+    };
+
     Ok(HealthStatus {
         env_ok,
         models_ok: m1 && m2,
         device: device_info,
-        details: if !m1 || !m2 {
-            "Missing model files in models/ folder.".into()
-        } else {
-            "".into()
-        },
+        details,
     })
 }
 
 #[tauri::command]
 pub async fn prepare_system(cwd: Option<String>) -> Result<(), String> {
-    use std::path::PathBuf;
     use std::process::Command;
-    let dir = cwd
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let dir = resolve_cwd(cwd);
 
     let status = Command::new("uv")
         .args(["sync"])
