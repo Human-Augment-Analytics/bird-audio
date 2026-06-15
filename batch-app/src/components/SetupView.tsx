@@ -42,15 +42,15 @@ export default function SetupView({ onStarted }: Props) {
     setError(null);
     const opts: StartOpts = {
       input,
-      output_dir: input,
+      outputDir: input,
       device,
       concurrency,
-      worker_cmd: workerCmd,
+      workerCmd: workerCmd,
       cwd: cwd.trim() === "" ? null : cwd,
-      theta_a: thetaA,
-      theta_b: thetaB,
-      timeout_secs: timeoutSecs,
-      max_attempts: maxAttempts,
+      thetaA: thetaA,
+      thetaB: thetaB,
+      timeoutSecs: timeoutSecs,
+      maxAttempts: maxAttempts,
     };
     try {
       const result = await startSession(opts);

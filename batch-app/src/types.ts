@@ -1,14 +1,14 @@
 export interface StartOpts {
   input: string;
-  output_dir: string;
+  outputDir: string;
   device: string;
   concurrency: number;
-  worker_cmd: string;
+  workerCmd: string;
   cwd: string | null;
-  theta_a: number;
-  theta_b: number;
-  timeout_secs: number;
-  max_attempts: number;
+  thetaA: number;
+  thetaB: number;
+  timeoutSecs: number;
+  maxAttempts: number;
 }
 
 export interface StartResult {

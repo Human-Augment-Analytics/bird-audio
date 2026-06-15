@@ -34,7 +34,7 @@ export default function App() {
       });
       unD = await onDone((s) => {
         setSummary(s);
-        listFiles(opts.output_dir, start.session_id).then(setRows).catch(() => {});
+        listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
       });
       if (!active) {
         unP?.();
@@ -42,7 +42,7 @@ export default function App() {
       }
     })();
     const iv = setInterval(() => {
-      listFiles(opts.output_dir, start.session_id).then(setRows).catch(() => {});
+      listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
     }, 2000);
     return () => {
       active = false;
@@ -75,7 +75,7 @@ export default function App() {
     const path = await pickSavePath(`events.${fmt}`);
     if (!path) return;
     try {
-      const n = await exportSession(opts.output_dir, start.session_id, path, fmt, completeOnly);
+      const n = await exportSession(opts.outputDir, start.session_id, path, fmt, completeOnly);
       setNotice(`Exported ${n} rows to ${path}`);
     } catch (e) {
       setNotice(`Export failed: ${String(e)}`);

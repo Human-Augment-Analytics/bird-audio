@@ -24,6 +24,7 @@ fn db_path(output_dir: &str) -> PathBuf {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StartOpts {
     pub input: String,
     pub output_dir: String,
