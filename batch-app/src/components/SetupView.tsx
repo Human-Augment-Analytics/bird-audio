@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { checkHealth, pickFolder, prepareSystem, startSession, checkCache, clearCache } from "../api";
 import type { StartOpts, StartResult, HealthStatus } from "../types";
+import ManageCache from "./ManageCache";
 
 interface Props {
   onStarted: (result: StartResult, opts: StartOpts) => void;
@@ -21,6 +22,7 @@ function Field({ label, children, hint }: { label: string; children: ReactNode; 
 export default function SetupView({ onStarted }: Props) {
   const [input, setInput] = useState("");
   const [hasCache, setHasCache] = useState(false);
+  const [managingCache, setManagingCache] = useState(false);
   const [thetaA, setThetaA] = useState(0); // Sensitivity
   const [thetaB, setThetaB] = useState(0.530306); // Quality
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -179,6 +181,18 @@ export default function SetupView({ onStarted }: Props) {
       <button className="primary" style={{ height: 48, fontSize: 16 }} disabled={busy || !ready} onClick={start}>
         {busy ? "Initializing..." : "Start Batch Processing"}
       </button>
+
+      {managingCache && (
+        <ManageCache 
+          outputDir={input} 
+          onClose={() => setManagingCache(false)} 
+          onCleared={() => {
+            setManagingCache(false);
+            checkCache(input).then(setHasCache).catch(() => setHasCache(false));
+            setError("Selected results cleared from cache.");
+          }} 
+        />
+      )}
     </div>
   );
 }

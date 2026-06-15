@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus } from "./types";
+import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile } from "./types";
 
 export const checkHealth = (cwd?: string) => 
   invoke<HealthStatus>("check_health", { cwd });
@@ -11,6 +11,10 @@ export const checkCache = (outputDir: string) =>
   invoke<boolean>("check_cache", { outputDir });
 export const clearCache = (outputDir: string) =>
   invoke<void>("clear_cache", { outputDir });
+export const getCachedFiles = (outputDir: string) =>
+  invoke<CachedFile[]>("get_cached_files", { outputDir });
+export const deleteCachedFiles = (outputDir: string, paths: string[]) =>
+  invoke<void>("delete_cached_files", { outputDir, paths });
 
 export const pickFolder = async (): Promise<string | null> => {
   const result = await open({ directory: true, multiple: false });

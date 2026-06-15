@@ -44,6 +44,11 @@ export interface FileRow {
   error: string | null;
 }
 
+export interface CachedFile {
+  path: string;
+  status: string;
+}
+
 export interface HealthStatus {
   env_ok: boolean;
   models_ok: boolean;
