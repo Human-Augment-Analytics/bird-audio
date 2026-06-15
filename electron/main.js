@@ -101,7 +101,7 @@ ipcMain.handle('run-files', async (event, files) => {
     const venvPython = path.join(repoRoot, '.venv', 'bin', 'python')
     const py = process.env.PYTHON_EXECUTABLE || (fs.existsSync(venvPython) ? venvPython : (process.platform === 'win32' ? 'python' : 'python3'))
     const script = path.join(__dirname, '..', 'scripts', 'ml_engine.py')
-    const args = ['--input', f, '--output', outdir]
+    const args = ['--input', f, '--output', outdir, '--localizer', '../models/buzz_localizer.pt']
 
     const child = spawn(py, [script, ...args])
 
