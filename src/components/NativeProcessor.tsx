@@ -84,15 +84,22 @@ export function NativeProcessor() {
         setIsProcessing(false);
         if (data.code === 0) {
           try {
-            // Find the last line which should be the JSON
-            const lines = jsonAccumulator.trim().split('\n');
-            const lastLine = lines[lines.length - 1];
-            const result = JSON.parse(lastLine);
+            // Parse the full accumulator; ml_engine prints pretty-formatted JSON
+            const result = JSON.parse(jsonAccumulator.trim());
             
-            if (result.error) {
-              setError(result.error);
+            if (result.status === 'error' || result.error) {
+              setError(result.error || result.message || 'Unknown error');
             } else {
-              setDetections(result.detections || []);
+              // Map 'events' (new schema) to 'detections' (frontend state)
+              // Rename fields to match what the import logic expects: 
+              // t_start -> start, t_end -> end, completeness_label -> label, center_freq -> peakFreq
+              const mapped = (result.events || []).map((e: any) => ({
+                label: e.completeness_label || 'event',
+                start: e.t_start,
+                end: e.t_end,
+                peakFreq: e.center_freq
+              }));
+              setDetections(mapped);
             }
           } catch (e) {
             console.error('Failed to parse pipeline output:', e);
