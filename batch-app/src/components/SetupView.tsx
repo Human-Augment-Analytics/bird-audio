@@ -22,7 +22,6 @@ function Field({ label, children, hint }: { label: string; children: ReactNode; 
 export default function SetupView({ onStarted }: Props) {
   const [input, setInput] = useState("");
   const [hasCache, setHasCache] = useState(false);
-  const [managingCache, setManagingCache] = useState(false);
   const [thetaA, setThetaA] = useState(0); // Sensitivity
   const [thetaB, setThetaB] = useState(0.530306); // Quality
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -118,10 +117,13 @@ export default function SetupView({ onStarted }: Props) {
           <button onClick={async () => { const f = await pickFolder(); if(f) setInput(f); }}>Browse…</button>
         </div>
         {hasCache && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, padding: "8px 12px", background: "rgba(59, 130, 246, 0.1)", borderRadius: 6, border: "1px solid rgba(59, 130, 246, 0.2)" }}>
-            <span style={{ fontSize: 12, color: "#9aa0aa" }}>Previous results found in this folder.</span>
-            <button style={{ padding: "4px 8px", fontSize: 11 }} onClick={() => setManagingCache(true)} disabled={busy}>Manage Cache</button>
-          </div>
+          <ManageCache 
+            outputDir={input} 
+            onCleared={() => {
+              checkCache(input).then(setHasCache).catch(() => setHasCache(false));
+              setError("Selected results cleared from cache.");
+            }} 
+          />
         )}
       </Field>
 
@@ -167,18 +169,6 @@ export default function SetupView({ onStarted }: Props) {
       <button className="primary" style={{ height: 48, fontSize: 16 }} disabled={busy || !ready} onClick={start}>
         {busy ? "Initializing..." : "Start Batch Processing"}
       </button>
-
-      {managingCache && (
-        <ManageCache 
-          outputDir={input} 
-          onClose={() => setManagingCache(false)} 
-          onCleared={() => {
-            setManagingCache(false);
-            checkCache(input).then(setHasCache).catch(() => setHasCache(false));
-            setError("Selected results cleared from cache.");
-          }} 
-        />
-      )}
     </div>
   );
 }
