@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::protocol::{parse_msg, Request, WorkerMsg};
 
@@ -62,10 +62,36 @@ impl Worker {
             rx,
             device: String::new(),
         };
-        match w.recv_timeout(Duration::from_secs(180))? {
-            WorkerMsg::Ready { device } => w.device = device,
-            other => return Err(WorkerError::Protocol(format!("expected ready, got {:?}", other))),
+
+        let start = Instant::now();
+        loop {
+            if start.elapsed() > Duration::from_secs(180) {
+                return Err(WorkerError::Timeout);
+            }
+            match w.rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(line) => {
+                    if !line.trim().starts_with('{') {
+                        continue; // Skip library logs
+                    }
+                    match parse_msg(&line) {
+                        Ok(WorkerMsg::Ready { device }) => {
+                            w.device = device;
+                            break;
+                        }
+                        Ok(other) => {
+                            return Err(WorkerError::Protocol(format!(
+                                "expected ready, got {:?}",
+                                other
+                            )))
+                        }
+                        Err(_) => continue, // Might be a partial JSON log, skip it
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => return Err(WorkerError::Closed),
+            }
         }
+
         Ok(w)
     }
 
