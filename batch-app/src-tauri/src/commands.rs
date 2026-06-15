@@ -277,3 +277,41 @@ pub fn clear_cache(output_dir: String) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[derive(Debug, Serialize)]
+pub struct CachedFile {
+    pub path: String,
+    pub status: String,
+}
+
+#[tauri::command]
+pub fn get_cached_files(output_dir: String) -> Result<Vec<CachedFile>, String> {
+    let path = db_path(&output_dir);
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let store = Store::open(&path).map_err(|e| e.to_string())?;
+    let sid = match store.get_latest_session_id().map_err(|e| e.to_string())? {
+        Some(id) => id,
+        None => return Ok(vec![]),
+    };
+    
+    let rows = store.list_files(sid).map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(|r| CachedFile { path: r.path, status: r.status }).collect())
+}
+
+#[tauri::command]
+pub fn delete_cached_files(output_dir: String, paths: Vec<String>) -> Result<(), String> {
+    let path = db_path(&output_dir);
+    if !path.exists() {
+        return Ok(());
+    }
+    let store = Store::open(&path).map_err(|e| e.to_string())?;
+    let sid = match store.get_latest_session_id().map_err(|e| e.to_string())? {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+    
+    store.delete_cached_files(sid, &paths).map_err(|e| e.to_string())?;
+    Ok(())
+}
