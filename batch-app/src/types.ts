@@ -48,5 +48,6 @@ export interface HealthStatus {
   env_ok: boolean;
   models_ok: boolean;
   device: string;
+  internal_device: string;
   details: string;
 }

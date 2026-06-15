@@ -37,7 +37,12 @@ export default function SetupView({ onStarted }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    checkHealth(cwd || undefined).then(setHealth);
+    checkHealth(cwd || undefined).then(h => {
+      setHealth(h);
+      if (h?.internal_device) {
+        setDevice(h.internal_device);
+      }
+    });
   }, [cwd]);
 
   const handlePrepare = async () => {
@@ -46,6 +51,9 @@ export default function SetupView({ onStarted }: Props) {
       await prepareSystem(cwd || undefined);
       const h = await checkHealth(cwd || undefined);
       setHealth(h);
+      if (h?.internal_device) {
+        setDevice(h.internal_device);
+      }
     } catch (e) {
       setError(String(e));
     } finally {

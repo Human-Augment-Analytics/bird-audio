@@ -193,6 +193,7 @@ pub struct HealthStatus {
     pub env_ok: bool,
     pub models_ok: bool,
     pub device: String,
+    pub internal_device: String,
     pub details: String,
 }
 
@@ -211,22 +212,22 @@ pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
             "run",
             "python",
             "-c",
-            "import torch, ultralytics, librosa; print(torch.cuda.is_available() if torch.cuda.is_available() else torch.backends.mps.is_available())",
+            "import torch, ultralytics, librosa; print('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')",
         ])
         .current_dir(&dir)
         .output();
 
-    let (env_ok, device_info) = match output {
+    let (env_ok, device_info, internal_device) = match output {
         Ok(o) if o.status.success() => {
-            let gpu = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
-            let d = if gpu == "true" {
+            let internal = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
+            let d = if internal == "cuda" || internal == "mps" {
                 "Graphics Card (Accelerated)"
             } else {
                 "Processor (CPU)"
             };
-            (true, d.to_string())
+            (true, d.to_string(), internal)
         }
-        _ => (false, "Not Found".to_string()),
+        _ => (false, "Not Found".to_string(), "cpu".to_string()),
     };
 
     let details = if !m1 || !m2 {
@@ -241,6 +242,7 @@ pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
         env_ok,
         models_ok: m1 && m2,
         device: device_info,
+        internal_device,
         details,
     })
 }
