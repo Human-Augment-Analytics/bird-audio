@@ -35,7 +35,7 @@ pub struct RecordedResult<'a> {
 }
 
 /// Aggregate counts for a session.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, serde::Serialize)]
 pub struct Summary {
     pub total: i64,
     pub pending: i64,
@@ -45,6 +45,16 @@ pub struct Summary {
     pub n_events: i64,
     pub n_complete: i64,
     pub n_retained: i64,
+}
+
+/// A per-file status row for the GUI table.
+#[derive(Debug, serde::Serialize)]
+pub struct FileRow {
+    pub path: String,
+    pub status: String,
+    pub n_events: i64,
+    pub n_complete: i64,
+    pub error: Option<String>,
 }
 
 const SCHEMA: &str = r#"
@@ -276,6 +286,24 @@ impl Store {
             .optional()
     }
 
+    /// All files for a session as status rows (ordered by id).
+    pub fn list_files(&self, session_id: i64) -> rusqlite::Result<Vec<FileRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, status, n_events, n_complete, error FROM files
+             WHERE session_id=?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![session_id], |r| {
+            Ok(FileRow {
+                path: r.get(0)?,
+                status: r.get(1)?,
+                n_events: r.get(2)?,
+                n_complete: r.get(3)?,
+                error: r.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     pub fn set_session_status(&self, session_id: i64, status: &str) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE sessions SET status=?2 WHERE id=?1",
@@ -405,5 +433,18 @@ mod tests {
         assert_eq!(s.find_resumable("[\"/data\"]").unwrap(), Some(sid));
         s.set_session_status(sid, "done").unwrap();
         assert_eq!(s.find_resumable("[\"/data\"]").unwrap(), None);
+    }
+
+    #[test]
+    fn list_files_returns_status_rows() {
+        let s = mem();
+        let sid = new_session(&s);
+        s.add_files(sid, &[PathBuf::from("/data/a.wav"), PathBuf::from("/data/b.wav")]).unwrap();
+        let c = s.claim_next_pending(sid).unwrap().unwrap();
+        s.mark_failed(c.file_id, "boom").unwrap();
+        let rows = s.list_files(sid).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|r| r.status == "failed" && r.error.as_deref() == Some("boom")));
+        assert!(rows.iter().any(|r| r.status == "pending"));
     }
 }

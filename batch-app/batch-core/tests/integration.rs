@@ -20,6 +20,7 @@ fn cfg(concurrency: usize, timeout_ms: u64, max_attempts: i64) -> EngineConfig {
         manifest_only: true,
         timeout: Duration::from_millis(timeout_ms),
         max_attempts,
+        cancel: None,
     }
 }
 
@@ -98,4 +99,16 @@ fn resume_does_not_reprocess_done_files() {
     assert_eq!(summary.done, 2);
     // The pre-done file had 0 events; the worker-processed one has 1 -> total events == 1.
     assert_eq!(summary.n_events, 1);
+}
+
+#[test]
+fn cancel_flag_stops_processing_before_any_file() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    let (store, sid) = session_with(&["/jobs/a.wav", "/jobs/b.wav", "/jobs/c.wav"]);
+    let mut c = cfg(1, 10_000, 2);
+    c.cancel = Some(Arc::new(AtomicBool::new(true))); // pre-cancelled
+    let summary = run_session(store, sid, c, None);
+    assert_eq!(summary.done, 0); // nothing processed
+    assert_eq!(summary.pending, 3);
 }

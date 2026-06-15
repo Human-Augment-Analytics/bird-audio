@@ -132,6 +132,7 @@ fn main() {
         manifest_only: true,
         timeout: Duration::from_secs(args.timeout_secs),
         max_attempts: args.max_attempts,
+        cancel: None,
     };
     println!("Running {} worker(s) (device={})...", conc, args.device);
 

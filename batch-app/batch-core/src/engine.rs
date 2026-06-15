@@ -22,9 +22,10 @@ pub struct EngineConfig {
     pub manifest_only: bool,
     pub timeout: Duration,
     pub max_attempts: i64,
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Progress {
     pub total: i64,
     pub done: i64,
@@ -51,6 +52,11 @@ fn worker_loop(
 ) {
     let mut worker: Option<Worker> = None;
     loop {
+        if let Some(flag) = &cfg.cancel {
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+        }
         let claimed = {
             let s = store.lock().unwrap();
             s.claim_next_pending(session_id).expect("claim")
