@@ -99,15 +99,31 @@ export default function App() {
   };
 
   return (
-    <main style={{ padding: 24, maxWidth: 1040, margin: "0 auto" }}>
-      <h1 style={{ marginTop: 0, fontWeight: 700, letterSpacing: "-0.02em" }}>Acoustic Analysis Dashboard</h1>
+    <main style={{ padding: "44px 24px 64px", maxWidth: 1040, margin: "0 auto" }}>
+      <header className="masthead reveal">
+        <div className="equalizer" aria-hidden="true">
+          <span /><span /><span /><span /><span /><span /><span />
+        </div>
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 8 }}>Bioacoustic Analysis Pipeline</div>
+          <h1>Bird Audio Analyzer</h1>
+          <div className="sub">
+            Detecting <b>buzzes</b> in bird field recordings
+          </div>
+        </div>
+      </header>
+
       {view === "setup" && <SetupView onStarted={onStarted} />}
       {view === "run" && start && (
         <>
-          <button style={{ marginBottom: 12, fontSize: 13, background: "none", border: "none", padding: 0, color: "#9aa0aa" }} disabled={summary === null && !cancelled} onClick={() => setView("setup")}>
-            ← Start New Session
+          <button className="backlink reveal" style={{ marginBottom: 14 }} disabled={summary === null && !cancelled} onClick={() => setView("setup")}>
+            ← Start a new session
           </button>
-          {notice && <div style={{ marginBottom: 12, color: "#34d399", fontSize: 13 }}>{notice}</div>}
+          {notice && (
+            <div className="notice reveal">
+              <span className="dot dot--ok" /> {notice}
+            </div>
+          )}
           <RunView
             start={start}
             progress={progress}

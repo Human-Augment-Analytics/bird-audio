@@ -43,40 +43,40 @@ export default function ManageCache({ outputDir, onCleared }: Props) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12, padding: 16, background: "rgba(59, 130, 246, 0.05)", borderRadius: 8, border: "1px solid rgba(59, 130, 246, 0.2)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h4 style={{ margin: 0, fontSize: 14, color: "#9aa0aa" }}>Previous Results Cache</h4>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button style={{ fontSize: 11, padding: "2px 8px" }} onClick={selectAll}>Select All</button>
-          <button style={{ fontSize: 11, padding: "2px 8px" }} onClick={selectNone}>Select None</button>
-          <button style={{ fontSize: 11, padding: "2px 8px" }} onClick={selectFailed}>Select Failed</button>
+    <div className="cache">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <h4 className="eyebrow" style={{ color: "var(--violet)" }}>Previous results cached</h4>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button className="chip" onClick={selectAll}>All</button>
+          <button className="chip" onClick={selectNone}>None</button>
+          <button className="chip" onClick={selectFailed}>Failed</button>
         </div>
       </div>
-      
-      <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #1f2228", borderRadius: 6, padding: 4, background: "#15181e" }}>
+
+      <div className="cache__list">
         {files.map(f => (
-          <label key={f.path} style={{ display: "flex", gap: 12, padding: "4px 8px", cursor: "pointer", borderBottom: "1px solid #1f2228" }}>
-            <input 
-              type="checkbox" 
-              checked={selected.has(f.path)} 
-              onChange={() => toggle(f.path)} 
+          <label key={f.path} className="cache__row">
+            <input
+              type="checkbox"
+              checked={selected.has(f.path)}
+              onChange={() => toggle(f.path)}
             />
-            <span style={{ flex: 1, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", fontSize: 13 }}>
+            <span style={{ flex: 1, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
               {f.path.split('/').pop()}
             </span>
-            <span style={{ fontSize: 13, color: f.status === 'done' ? '#10b981' : f.status === 'failed' ? '#f87171' : '#9aa0aa' }}>
+            <span className="status-pill" style={{ color: f.status === 'done' ? 'var(--jade)' : f.status === 'failed' ? 'var(--coral)' : 'var(--text-faint)' }}>
               {f.status}
             </span>
           </label>
         ))}
         {files.length === 0 && (
-          <div style={{ padding: 12, textAlign: "center", fontSize: 13, color: "#9aa0aa" }}>No files found in cache.</div>
+          <div className="empty">No files found in cache.</div>
         )}
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
-        <button className="primary" style={{ fontSize: 12, padding: "6px 12px" }} onClick={handleClear} disabled={busy || selected.size === 0}>
-          {busy ? "Clearing..." : `Clear ${selected.size} Selected`}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button className="primary" style={{ fontSize: 12, padding: "7px 14px" }} onClick={handleClear} disabled={busy || selected.size === 0}>
+          {busy ? "Clearing…" : `Clear ${selected.size} selected`}
         </button>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FileRow, Progress, StartResult, Summary } from "../types";
 import FileTable from "./FileTable";
 
@@ -12,14 +12,39 @@ interface Props {
   onCancel: () => void;
 }
 
-function Tile({ label, value, color }: { label: string; value: number | string; color?: string }) {
+/* Eased count-up for the completion stats — adds a beat of delight on finish. */
+function useCountUp(target: number, run: boolean, duration = 1000) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    if (!run) { setVal(0); return; }
+    let raf = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setVal(Math.round(target * eased));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, run, duration]);
+  return val;
+}
+
+function Stat({ label, value, color }: { label: string; value: number | string; color?: string }) {
   return (
-    <div style={{ display: "grid", gap: 2 }}>
-      <span style={{ color: "#9aa0aa", fontSize: 11 }}>{label}</span>
-      <span style={{ fontSize: 18, color: color ?? "#e6e7ea" }}>{value}</span>
+    <div className="stat">
+      <span className="stat__label">{label}</span>
+      <span className="stat__value" style={{ color: color ?? "var(--text)" }}>{value}</span>
     </div>
   );
 }
+
+const FILTERS: { key: "all" | "done" | "failed"; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "done", label: "Complete" },
+  { key: "failed", label: "Failed" },
+];
 
 export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel }: Props) {
   const [filter, setFilter] = useState<"all" | "done" | "failed">("all");
@@ -31,6 +56,10 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   const inProg = progress?.in_progress ?? summary?.in_progress ?? 0;
   const pct = total > 0 ? Math.round(((doneN + failedN) / total) * 100) : 0;
   const eta = throughput > 0 ? Math.round(pendingN / throughput) : null;
+
+  const nEvents = useCountUp(summary?.n_events ?? 0, done);
+  const nComplete = useCountUp(summary?.n_complete ?? 0, done);
+  const nRetained = useCountUp(summary?.n_retained ?? 0, done);
 
   const etaTime = useMemo(() => {
     if (!eta || eta <= 0) return null;
@@ -45,67 +74,70 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   );
 
   return (
-    <div className="card" style={{ display: "grid", gap: 14 }}>
-      <h2 style={{ fontSize: 20, margin: "8px 0" }}>
-        {done ? "Analysis complete" : "Processing recordings…"} 
-        <span style={{ fontSize: 13, color: "#9aa0aa", fontWeight: 400, marginLeft: 12 }}>
-          ID: {start.session_id}
-        </span>
-      </h2>
-      <div style={{ height: 10, background: "#1f2228", borderRadius: 5, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: done ? "#10b981" : "#3b82f6", transition: "width 0.3s ease" }} />
+    <div className="card reveal" style={{ display: "grid", gap: 18 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 24, display: "flex", alignItems: "center", gap: 12 }}>
+          {!done && <span className="dot dot--ok" />}
+          {done ? "Analysis complete" : "Listening to recordings…"}
+        </h2>
+        <span className="eyebrow">session {start.session_id} · {pct}%</span>
       </div>
-      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", padding: "8px 0" }}>
-        <Tile label="Processed" value={doneN} color="#10b981" />
-        <Tile label="Failed" value={failedN} color="#f87171" />
-        <Tile label="Active" value={inProg} color="#fbbf24" />
-        <Tile label="Remaining" value={pendingN} color="#9aa0aa" />
-        <Tile label="Total Files" value={total} />
-        <Tile label="Processing Speed" value={`${throughput.toFixed(2)} files/s`} />
-        <Tile label="Completion ETA" value={etaTime || "—"} />
+
+      <div className={`progress ${done ? "progress--done" : ""}`}>
+        <div className="progress__fill" style={{ width: `${pct}%` }} />
       </div>
+
+      <div className="stats">
+        <Stat label="Processed" value={doneN} color="var(--jade)" />
+        <Stat label="Failed" value={failedN} color="var(--coral)" />
+        <Stat label="Active" value={inProg} color="var(--amber)" />
+        <Stat label="Remaining" value={pendingN} color="var(--text-dim)" />
+        <Stat label="Total" value={total} />
+        <Stat label="Speed" value={`${throughput.toFixed(1)}/s`} />
+        <Stat label="ETA" value={etaTime || "—"} />
+      </div>
+
       {!done && progress?.last_file && (
-        <div style={{ fontSize: 12, color: "#9aa0aa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontStyle: "italic" }}>
-          Current: {progress.last_file}
+        <div className="mono" style={{ fontSize: 11.5, color: "var(--text-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          ▸ {progress.last_file}
         </div>
       )}
+
       {done && summary && (
-        <div style={{ 
-          display: "flex", gap: 32, padding: 20, borderRadius: 12, 
-          background: "rgba(52, 211, 153, 0.05)", border: "1px solid rgba(52, 211, 153, 0.1)",
-          margin: "8px 0"
-        }}>
-          <div>
-            <div style={{ fontSize: 11, color: "#9aa0aa", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Detections Found</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#10b981" }}>{summary.n_events}</div>
+        <div className="summary">
+          <div className="summary__cell">
+            <div className="eyebrow">Detections found</div>
+            <div className="summary__big" style={{ color: "var(--jade)" }}>{nEvents.toLocaleString()}</div>
           </div>
-          <div>
-            <div style={{ fontSize: 11, color: "#9aa0aa", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>High-Quality Buzzes</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#e6e7ea" }}>{summary.n_complete}</div>
+          <div className="summary__cell">
+            <div className="eyebrow">High-quality buzzes</div>
+            <div className="summary__big">{nComplete.toLocaleString()}</div>
           </div>
-          <div>
-            <div style={{ fontSize: 11, color: "#9aa0aa", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Retained Records</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#9aa0aa" }}>{summary.n_retained}</div>
+          <div className="summary__cell">
+            <div className="eyebrow">Retained records</div>
+            <div className="summary__big" style={{ color: "var(--text-dim)" }}>{nRetained.toLocaleString()}</div>
           </div>
         </div>
       )}
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <span style={{ fontSize: 13, color: "#9aa0aa" }}>Filter:</span>
-        {(["all", "done", "failed"] as const).map((f) => (
-          <button key={f} className={filter === f ? "primary" : ""} onClick={() => setFilter(f)}>
-            {f}
+
+      <div className="filter-bar">
+        <span className="eyebrow" style={{ marginRight: 4 }}>Filter</span>
+        {FILTERS.map((f) => (
+          <button key={f.key} className={`chip ${filter === f.key ? "primary" : ""}`} onClick={() => setFilter(f.key)}>
+            {f.label}
           </button>
         ))}
         <span style={{ flex: 1 }} />
-        {!done && <button onClick={onCancel}>Cancel</button>}
+        {!done && <button onClick={onCancel}>Cancel run</button>}
         {done && (
           <>
             <button onClick={() => onExport("csv", false)}>Export CSV</button>
-            <button onClick={() => onExport("csv", true)}>CSV (complete only)</button>
+            <button onClick={() => onExport("csv", true)}>CSV · complete only</button>
             <button onClick={() => onExport("json", false)}>Export JSON</button>
           </>
         )}
       </div>
+
       <FileTable rows={filtered} />
     </div>
   );
