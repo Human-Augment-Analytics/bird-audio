@@ -1,0 +1,13 @@
+{
+  "name": "bird-audio-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.4.0",
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "scripts": {
+    "start": "tauri dev",
+    "build": "tauri build"
+  }
+}

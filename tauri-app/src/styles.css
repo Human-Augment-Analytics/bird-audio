@@ -1,0 +1,5 @@
+body { font-family: system-ui, -apple-system, sans-serif; margin: 20px }
+.controls { margin-bottom: 12px }
+button { margin-right: 8px }
+.run { border: 1px solid #ddd; padding: 8px; margin-bottom: 8px }
+pre { background: #111; color: #eee; padding: 8px; border-radius: 4px; max-height: 200px; overflow: auto }

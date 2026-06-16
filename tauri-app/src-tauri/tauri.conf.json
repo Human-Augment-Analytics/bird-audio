@@ -1,0 +1,18 @@
+{
+  "package": {
+    "productName": "Bird Audio",
+    "version": "0.1.0"
+  },
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "devPath": "../src/index.html",
+    "distDir": "../src"
+  },
+  "tauri": {
+    "bundle": {
+      "identifier": "com.example.bird-audio"
+    },
+    "windows": []
+  }
+}
