@@ -137,8 +137,28 @@ ipcMain.handle('run-files', async (event, files) => {
           const result = JSON.parse(stdoutBuf)
           win.webContents.send('result', { file: f, outdir, result, code })
         } catch (e) {
-          // include stderr for diagnostics when parse fails
-          win.webContents.send('result', { file: f, outdir, result: { error: 'Failed to parse result', stderr: stderrBuf }, code })
+          // Try to extract a JSON object from stdout or stderr buffers as a fallback.
+          const extractJSON = (text) => {
+            if (!text) return null
+            const re = /({[\s\S]*})/g
+            let match = null
+            let m
+            while ((m = re.exec(text)) !== null) {
+              match = m[1]
+            }
+            if (!match) return null
+            try { return JSON.parse(match) } catch (err) { return null }
+          }
+
+          let parsed = extractJSON(stdoutBuf)
+          if (!parsed) parsed = extractJSON(stderrBuf)
+
+          if (parsed) {
+            win.webContents.send('result', { file: f, outdir, result: parsed, code, warn: 'Parsed fallback JSON from buffers' })
+          } else {
+            // include stderr for diagnostics when parse fails
+            win.webContents.send('result', { file: f, outdir, result: { error: 'Failed to parse result', stderr: stderrBuf, stdout: stdoutBuf }, code })
+          }
         }
         resolve()
       })
