@@ -16,8 +16,8 @@ To ensure no calls are missed at window boundaries, the system uses a sliding wi
 ### 3. Native Inference
 The system uses `ultralytics.YOLO` to run native inference on PyTorch checkpoints (`.pt`).
 - **Hardware Acceleration**: Supports **CUDA** (NVIDIA), **MPS** (Apple Silicon), and **CPU**.
-- **Detection**: `buzz_localizer.pt` identifies candidate vocalizations.
-- **Classification**: `classifier.pt` refines species labels.
+- **Stage A — Detection**: `buzz_localizer.pt` identifies candidate buzz vocalizations per analysis window. Overlapping per-window detections are then consolidated into event-level tracks.
+- **Stage B — Completeness Curation**: `classifier.pt` scores each consolidated event for *completeness* — `p("full")`, i.e. how clean/fully-formed the buzz is — **not** species identity. This score drives the Quality Filter (`θ_B`). See [`docs/architecture.md`](docs/architecture.md) for the full pipeline and the `θ_A` / `θ_B` thresholds.
 
 ## Getting Started
 
