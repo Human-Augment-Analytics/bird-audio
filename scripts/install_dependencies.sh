@@ -17,7 +17,7 @@ TORCH_MODE="cpu"
 
 print_help() {
   cat <<'EOF'
-Usage: ./scripts/install_inference_dependencies.sh [options]
+Usage: ./scripts/install_dependencies.sh [options]
 
 Options:
   --python <bin>   Python executable to use (default: python3)
@@ -27,9 +27,9 @@ Options:
   -h, --help       Show this help
 
 Examples:
-  ./scripts/install_inference_dependencies.sh
-  ./scripts/install_inference_dependencies.sh --python python3.11 --venv .venv
-  ./scripts/install_inference_dependencies.sh --cuda
+  ./scripts/install_dependencies.sh
+  ./scripts/install_dependencies.sh --python python3.11 --venv .venv
+  ./scripts/install_dependencies.sh --cuda
 EOF
 }
 
