@@ -97,19 +97,16 @@ are reset to `pending` (`engine.rs` `reset_in_progress`, `store.rs`
 
 ## 4. Worker protocol
 
-Newline-delimited JSON over the worker's stdin/stdout
-(`batch-core/src/protocol.rs`, `birdpipe/worker.py`):
+The engine talks to each Python worker over **newline-delimited JSON on
+stdin/stdout** (`batch-core/src/protocol.rs`, `birdpipe/worker.py`): after a
+one-time `ready` handshake, the engine sends one `Request` per file and the worker
+replies with one `result` or `error`. Workers are **warm** — the model loads once
+at startup and the process loops over many files, so one bad file never stops the
+run. This is the cleanest seam in the system: anything that speaks the protocol can
+be a worker.
 
-| Direction | Message | Shape (key fields) |
-|---|---|---|
-| engine → worker | `Request` | `{ id, input, manifest_only, theta_a, theta_b, emit_raw }` |
-| worker → engine | `ready` | `{ type:"ready", device }` (once, on startup) |
-| worker → engine | `result` | `{ type:"result", id, n_windows, n_raw, n_events, n_complete, n_retained, elapsed_ms, events[] }` |
-| worker → engine | `error` | `{ type:"error", id?, input?, message, traceback? }` |
-
-Workers are **warm**: the model is loaded once at startup, then the process loops
-over many `Request` lines — one bad file never stops the loop
-(`birdpipe/worker.py:23-51`).
+> Full message schemas, JSON examples, process management, and retry/poison
+> semantics live in the reference: **[batch-app.md](batch-app.md) §4**.
 
 ## 5. The ML pipeline (one file)
 
@@ -187,35 +184,40 @@ Each event has two independent scores and two gates:
 Intuitively: **θ_A = "how much is it a buzz?"**, **θ_B = "how good/complete a
 buzz is it?"**, and `retained` is the intersection.
 
-## 7. Persistence schema (SQLite)
+## 7. Persistence (SQLite)
 
-`<output_dir>/batch.db`, WAL mode (`batch-core/src/store.rs`):
+All durable state is one WAL-mode database, `<output_dir>/batch.db`
+(`batch-core/src/store.rs`), with three tables — **sessions** (one row per run),
+**files** (one row per recording; `UNIQUE(session_id, path)` makes re-runs
+idempotent), and **events** (one row per consolidated event). The **files table
+doubles as the work queue**: workers claim the next `pending` row with a single
+atomic `UPDATE … RETURNING`, which is why there is no separate in-memory queue and
+why runs survive crashes.
 
-- **sessions** — one row per run: `input_roots`, `output_dir`, `device`,
-  `concurrency`, `theta_a`, `theta_b`, `total_files`, `status`.
-- **files** — one row per recording: `path`, `status`
-  (`pending`/`in_progress`/`done`/`failed`), per-file counts, `error`,
-  `attempts`. `UNIQUE(session_id, path)` enables idempotent re-runs.
-- **events** — one row per consolidated event: time/frequency bounds,
-  `stage_a_conf`, `completeness_score`, `completeness_label`, `retained`,
-  `n_members`.
+> Full DDL — every column and index — is in the reference:
+> **[batch-app.md](batch-app.md) §3.1**.
 
 ## 8. Concurrency, retries, cancellation
 
 - **Pool size** — `1` worker on GPU (cuda/mps), `cores − 1` on CPU; an explicit
   `concurrency` overrides (`batch-core/src/concurrency.rs`).
-- **Work distribution** — each worker atomically claims the next `pending` file
-  (`UPDATE … RETURNING`), so no two workers grab the same file.
-- **Retries / timeouts** — per-file timeout; on timeout/disconnect the worker is
-  killed and the file is requeued until `max_attempts`, then marked `failed`.
+- **Work distribution** — workers race to atomically claim the next `pending` file
+  (the SQLite `files` table *is* the queue), so no two grab the same file.
+- **Retries** — on timeout or worker crash the file is requeued until
+  `max_attempts`, then marked `failed`; a worker-reported `error` fails it
+  immediately (no retry).
 - **Cancellation** — a shared `AtomicBool`; workers stop after the current file
   (in-flight work is not preempted).
+
+> Threading model, claim SQL, and the per-file lifecycle are in the reference:
+> **[batch-app.md](batch-app.md) §3.2–3.3**.
 
 ## 9. Export
 
 `events` joined to `files`, ordered by path then time, written as **CSV** or
-**JSON** (`batch-core/src/export.rs`). `complete_only` restricts output to
-`completeness_label = 'complete'`.
+**JSON** (`batch-core/src/export.rs`); `complete_only` restricts output to
+`completeness_label = 'complete'`. Query and format detail:
+**[batch-app.md](batch-app.md) §3.5**.
 
 ## 10. Pipeline parameter reference (paper constants)
 

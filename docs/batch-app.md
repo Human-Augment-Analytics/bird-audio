@@ -627,7 +627,8 @@ while the others are camelCase, reflecting serde defaults vs. renames.)
 
 ## 7. End-to-end data flow
 
-One full journey (GUI), naming the `api.ts` call → Rust command at each step:
+One full journey (GUI), naming the `api.ts` call → Rust command at each step. For
+the visual sequence diagram, see [`architecture.md`](architecture.md) §3.
 
 1. **Load** — `SetupView` mounts → `checkHealth` → `check_health` returns models/device status.
 2. **Pick folder** — `pickFolder` (dialog) → `checkCache` → if cached, `getCachedFiles` populates `ManageCache`.
