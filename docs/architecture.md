@@ -2,6 +2,10 @@
 
 > Status: prototype (`leyang/prototype`). This document describes the system as
 > built today, grounded in the source. File references are clickable in most editors.
+>
+> This is the **conceptual overview**. For the developer reference — full IPC
+> surface, worker-protocol schemas, data model, CLI, and build/packaging — see
+> [`batch-app.md`](batch-app.md).
 
 ## 1. What it is
 
@@ -110,7 +114,8 @@ over many `Request` lines — one bad file never stops the loop
 ## 5. The ML pipeline (one file)
 
 All in `scripts/ml_engine.py:process_file`, constants from the paper in
-`birdpipe/constants.py`.
+`birdpipe/constants.py`. The full numeric parameter set is tabulated in
+[§10](#10-pipeline-parameter-reference-paper-constants).
 
 ```mermaid
 flowchart LR
@@ -211,3 +216,80 @@ buzz is it?"**, and `retained` is the intersection.
 `events` joined to `files`, ordered by path then time, written as **CSV** or
 **JSON** (`batch-core/src/export.rs`). `complete_only` restricts output to
 `completeness_label = 'complete'`.
+
+## 10. Pipeline parameter reference (paper constants)
+
+Every value below is fixed in `birdpipe/constants.py` (paper §5.2, Table A.6,
+Table A.8) unless noted; the YOLO inference-call params live in
+`scripts/ml_engine.py` and `birdpipe/stageb.py`. These are the actual numbers the
+two models run with — distinct from the user-facing **θ_A / θ_B** gates in §6,
+which are applied *after* inference.
+
+### 10.1 Audio & windowing (§5.2)
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `SAMPLE_RATE` | `48000` Hz | audio resample rate |
+| `N_FFT` | `1024` | STFT window size |
+| `HOP_LENGTH` | `256` | STFT hop |
+| `BLOCK_FRAMES` | `128` | frames per `librosa.stream` block = **one quarter step** |
+| `WINDOW_FRAMES` | `512` | analysis window = **4 blocks** |
+| `FREQ_BIN_LOW`..`FREQ_BIN_HIGH` | `88`..`248` | kept STFT band → 160 rows |
+| `F_MIN_HZ`..`F_MAX_HZ` | `4125.0`..`11625.0` Hz | the buzz frequency band |
+| `DELTA_T` | ≈ `0.6827` s | window stride (`BLOCK_FRAMES·HOP/SR`) |
+| `T_W` | ≈ `2.7467` s | window duration (`((WINDOW−1)·HOP + N_FFT)/SR`) |
+| `SEC_PER_FRAME` | ≈ `0.005333` s | time resolution (`HOP/SR`) |
+
+### 10.2 Stage A — buzz localization (`buzz_localizer.pt`, YOLO)
+
+| Param | Value | Where | Meaning |
+|---|---|---|---|
+| `conf` floor | `0.25` | `ml_engine.py` (`BirdAudioPipeline(conf=0.25)`, CLI `--conf`) | YOLO detection-confidence floor at inference |
+| `imgsz` | `(160, 512)` | `ml_engine.py` (`self.localizer(..., imgsz=(160,512))`) | inference image size (band-rows × window-cols) |
+| input image | flipped, dB-normalized grayscale window, tiled to 3-channel uint8 | `ml_engine.py` | per-window spectrogram fed to the detector |
+| `ingest_conf` | `0.001` | `constants.py` `ConsolidationParams` | floor below which raw detections are dropped before consolidation |
+
+Output: per-window boxes mapped to absolute time/frequency via `coords.map_box` →
+`RawDetection { t_start, t_end, f_low, f_high, conf, window, norm_left, norm_right }`.
+
+### 10.3 Consolidation (Table A.6)
+
+Merges overlapping per-window detections of the same buzz into one `Event`.
+
+**Affinity weights** (Eq A.1; the last three — `center_t`, `center_f`,
+`window_gap` — are *subtracted* penalties, the rest are added):
+
+| `iou2d` | `iou_t` | `iou_f` | `dur_ratio` | `bw_ratio` | `min_conf` | `edge` | `center_t` | `center_f` | `window_gap` |
+|---|---|---|---|---|---|---|---|---|---|
+| +0.45 | +0.14 | +0.14 | +0.10 | +0.08 | +0.05 | +0.06 | −0.05 | −0.04 | −0.03 |
+
+**Global:** `window_gap_max` (G) = `3`, `eta` (edge-proximity scale) = `0.08`.
+
+| Gate | Thresholds |
+|---|---|
+| **Strong link** | affinity ≥ `0.72`, iou2d ≥ `0.55`, min_conf ≥ `0.25`, margin ≥ `0.04` |
+| **Support link** | affinity ≥ `0.62`, iou2d ≥ `0.35`, min_conf ≥ `0.10`, margin ≥ `0.03`, gap ≤ `2`, edge_conf `0.70` / edge `0.50` |
+| **Edge-singleton absorption** | score ≥ `0.72`, edge ≥ `0.80`, area ≥ `0.70`, time ≥ `0.55`, freq ≥ `0.55`, margin ≥ `0.08` |
+
+Absorption-score weights: `area 0.55, time 0.15, freq 0.15, edge 0.08,
+singleton_conf 0.04, track_conf 0.03, center_t −0.04, center_f −0.03`.
+Each fused `Event` takes `conf = c̃ = max member confidence`.
+
+### 10.4 Stage B — completeness curation (`classifier.pt`, YOLOv11-cls; Table A.8)
+
+| Param | Value | Meaning |
+|---|---|---|
+| `crop_frames` | `288` | right-aligned temporal window (columns) ending at the event's `t_end` |
+| `out_size` | `288` | final crop is `288×288`, aspect-preserving resize + **mean-gray padding** |
+| `complete_class` | `"full"` | the class whose probability is read; score `q = p("full")` |
+| `theta_b` | `0.530306` | default Quality-Filter operating point (see §6) |
+
+Inference: `model(crop_rgb, verbose=False)[0]`, reading `res.probs.data[idx]` for
+the `"full"` class (`stageb.py`). This is **completeness**, not species ID.
+
+### 10.5 Retention thresholds (§5.5 — applied post-inference, see §6)
+
+| Param | Default | Notes |
+|---|---|---|
+| `theta_a` | `0.0` | Detection Sensitivity; validation-derived, paper gives no number → configurable |
+| `theta_b` | `0.530306` | Quality Filter; paper operating point |
