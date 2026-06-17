@@ -4,7 +4,7 @@ use serde_json::json;
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use std::thread;
-use tauri::{Manager, Window, AppHandle};
+use tauri::{AppHandle, Manager};
 
 #[tauri::command]
 fn read_output(outdir: String) -> Result<serde_json::Value, String> {
@@ -36,7 +36,8 @@ fn read_output(outdir: String) -> Result<serde_json::Value, String> {
 fn run_files(app: AppHandle, files: Vec<String>) -> Result<String, String> {
   let app_clone = app.clone();
   thread::spawn(move || {
-    let runs_dir = app_clone.path_resolver().app_dir().unwrap_or_else(|| std::path::PathBuf::from("./runs"));
+    // use the app config dir (replaces deprecated `app_dir()`)
+    let runs_dir = app_clone.path_resolver().app_config_dir().unwrap_or_else(|| std::path::PathBuf::from("./runs"));
     if !runs_dir.exists() { let _ = std::fs::create_dir_all(&runs_dir); }
 
     let repo_root = std::path::Path::new(&std::env::current_exe().unwrap()).parent().unwrap().parent().unwrap().to_path_buf();
@@ -62,7 +63,6 @@ fn run_files(app: AppHandle, files: Vec<String>) -> Result<String, String> {
       let stderr = cmd.stderr.take().unwrap();
       let app_for_stdout = app_clone.clone();
       let f_clone = f.clone();
-      let out_clone = outdir_s.clone();
       thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines().flatten() {
@@ -74,7 +74,6 @@ fn run_files(app: AppHandle, files: Vec<String>) -> Result<String, String> {
       let app_for_stderr = app_clone.clone();
       let f_clone2 = f.clone();
       let out_clone2 = outdir_s.clone();
-      let mut stdout_buf = String::new();
       let mut stderr_buf = String::new();
       let reader_err = BufReader::new(stderr);
       for line in reader_err.lines().flatten() {

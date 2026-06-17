@@ -6,10 +6,11 @@ const logEl = document.getElementById('log')
 
 let selected = []
 
-filesInput.addEventListener('change', (e) => {
-  selected = Array.from(e.target.files).map(f => f.path)
-  renderFiles()
-})
+function appendLog(s) {
+  logEl.textContent += s + '\n'
+  logEl.scrollTop = logEl.scrollHeight
+  console.log(s)
+}
 
 function renderFiles() {
   filesList.innerHTML = ''
@@ -20,18 +21,24 @@ function renderFiles() {
   })
 }
 
+filesInput.addEventListener('change', (e) => {
+  // In Tauri, File objects include a `path` property. Fallback to name in browser.
+  selected = Array.from(e.target.files).map(f => f.path || f.name || '')
+  renderFiles()
+})
+
 startBtn.addEventListener('click', async () => {
   if (!selected.length) return alert('No files selected')
   appendLog('Starting processing...')
-  try {
-    await window.__TAURI__.invoke('run_files', { files: selected })
-  } catch (e) { appendLog('Invoke error: ' + e) }
-})
 
-function appendLog(s) {
-  logEl.textContent += s + '\n'
-  logEl.scrollTop = logEl.scrollHeight
-}
+  if (window.__TAURI__ && window.__TAURI__.invoke) {
+    try {
+      await window.__TAURI__.invoke('run_files', { files: selected })
+    } catch (e) { appendLog('Invoke error: ' + e) }
+  } else {
+    appendLog('Tauri API not available. Are you running inside the Tauri app?')
+  }
+})
 
 // events from backend
 if (window.__TAURI__ && window.__TAURI__.event) {
@@ -56,4 +63,13 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     card.appendChild(pre)
     runsDiv.appendChild(card)
   })
+} else {
+  // If Tauri API not available, show a prominent notice in the UI
+  const note = document.createElement('div')
+  note.style.padding = '8px'
+  note.style.border = '1px solid #f00'
+  note.style.background = '#fee'
+  note.textContent = 'Warning: Tauri API not available in this context. The app must be run via the Tauri binary (npm run start). Open developer tools to inspect errors.'
+  document.getElementById('app').insertBefore(note, document.getElementById('app').firstChild)
+  appendLog('Tauri API not detected in renderer.')
 }

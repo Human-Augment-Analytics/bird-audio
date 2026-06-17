@@ -1,3 +1,59 @@
+### Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.mypy_cache/
+.pytest_cache/
+.python-version
+
+### Node / frontend
+node_modules/
+dist/
+build/
+.parcel-cache/
+.next/
+.vite/
+.cache/
+
+### Rust / Tauri
+**/target/
+**/target-*/
+src-tauri/target/
+**/*.rlib
+
+### Common files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+*~
+
+### IDEs / Editors
+.vscode/
+.idea/
+*.iml
+/.history/
+
+### Packaging / distribution
+/dist/
+/build/
+/pkg/
+
+### Env / secrets
+.env
+.env.*
+
+### Jupyter
+.ipynb_checkpoints/
+
+### Other
+/.venv
+/.pytest_cache
 # Logs
 logs
 *.log

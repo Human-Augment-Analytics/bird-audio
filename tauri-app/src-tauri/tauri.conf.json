@@ -11,8 +11,18 @@
   },
   "tauri": {
     "bundle": {
-      "identifier": "com.example.bird-audio"
+      "identifier": "com.example.bird-audio",
+      "icon": []
     },
-    "windows": []
+    "windows": [
+      {
+        "label": "main",
+        "title": "Bird Audio",
+        "width": 1000,
+        "height": 700,
+        "resizable": true,
+        "visible": true
+      }
+    ]
   }
 }
