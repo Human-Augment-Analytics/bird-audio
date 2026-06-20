@@ -8,7 +8,7 @@ interface Props {
   summary: Summary | null; // non-null once done
   rows: FileRow[];
   throughput: number; // files/sec
-  onExport: (fmt: string, completeOnly: boolean) => void;
+  onExport: (fmt: string, completeOnly: boolean, confirmedOnly: boolean) => void;
   onCancel: () => void;
 }
 
@@ -48,6 +48,8 @@ const FILTERS: { key: "all" | "done" | "failed"; label: string }[] = [
 
 export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel }: Props) {
   const [filter, setFilter] = useState<"all" | "done" | "failed">("all");
+  const [completeOnly, setCompleteOnly] = useState(false);
+  const [confirmedOnly, setConfirmedOnly] = useState(false);
   const done = summary !== null;
   const total = progress?.total ?? summary?.total ?? start.total_files;
   const doneN = progress?.done ?? summary?.done ?? 0;
@@ -131,9 +133,16 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         {!done && <button onClick={onCancel}>Cancel run</button>}
         {done && (
           <>
-            <button onClick={() => onExport("csv", false)}>Export CSV</button>
-            <button onClick={() => onExport("csv", true)}>CSV · complete only</button>
-            <button onClick={() => onExport("json", false)}>Export JSON</button>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-dim)" }}>
+              <input type="checkbox" checked={completeOnly} onChange={(e) => setCompleteOnly(e.target.checked)} />
+              Complete only
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-dim)" }}>
+              <input type="checkbox" checked={confirmedOnly} onChange={(e) => setConfirmedOnly(e.target.checked)} />
+              Confirmed only
+            </label>
+            <button onClick={() => onExport("csv", completeOnly, confirmedOnly)}>Export CSV</button>
+            <button onClick={() => onExport("json", completeOnly, confirmedOnly)}>Export JSON</button>
           </>
         )}
       </div>

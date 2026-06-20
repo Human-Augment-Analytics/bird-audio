@@ -517,3 +517,12 @@ input[type="checkbox"]:checked::after {
   }
   .reveal { opacity: 1; }
 }
+
+/* ── Review interactions ──────────────────────────────────────────────── */
+.ba-evtable tbody tr { transition: box-shadow 0.15s ease; }
+.ba-evtable tbody tr:hover { box-shadow: inset 0 0 0 100vw rgba(255, 238, 212, 0.025); }
+.ba-evtable td:last-child button { transition: filter 0.15s ease, border-color 0.15s ease, transform 0.1s ease; }
+.ba-evtable td:last-child button:hover { filter: brightness(1.3); border-color: var(--line-2); }
+.ba-evtable td:last-child button:active { transform: translateY(1px); }
+.ba-file { transition: box-shadow 0.14s ease; }
+.ba-file:not(:disabled):hover { box-shadow: inset 0 0 0 100vw rgba(255, 238, 212, 0.035); }

@@ -10,9 +10,12 @@ use rusqlite::params;
 use crate::store::Store;
 
 const SELECT: &str = "SELECT f.path, e.t_start, e.t_end, e.duration, e.f_low, e.f_high, \
-     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label, e.retained, e.n_members \
+     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label, e.retained, \
+     e.n_members, e.review_status \
      FROM events e JOIN files f ON f.id=e.file_id \
-     WHERE e.session_id=?1 AND (?2=0 OR e.completeness_label='complete') \
+     WHERE e.session_id=?1 \
+       AND (?2=0 OR e.completeness_label='complete') \
+       AND (?3=0 OR e.review_status='confirmed') \
      ORDER BY f.path, e.t_start";
 
 #[derive(serde::Serialize)]
@@ -29,11 +32,12 @@ struct Row {
     completeness_label: Option<String>,
     retained: Option<bool>,
     n_members: i64,
+    review_status: String,
 }
 
-fn collect(store: &Store, session_id: i64, complete_only: bool) -> rusqlite::Result<Vec<Row>> {
+fn collect(store: &Store, session_id: i64, complete_only: bool, confirmed_only: bool) -> rusqlite::Result<Vec<Row>> {
     let mut stmt = store.conn.prepare(SELECT)?;
-    let rows = stmt.query_map(params![session_id, complete_only as i64], |r| {
+    let rows = stmt.query_map(params![session_id, complete_only as i64, confirmed_only as i64], |r| {
         Ok(Row {
             path: r.get(0)?,
             t_start: r.get(1)?,
@@ -47,6 +51,7 @@ fn collect(store: &Store, session_id: i64, complete_only: bool) -> rusqlite::Res
             completeness_label: r.get(9)?,
             retained: r.get::<_, Option<i64>>(10)?.map(|v| v != 0),
             n_members: r.get(11)?,
+            review_status: r.get(12)?,
         })
     })?;
     rows.collect()
@@ -65,17 +70,18 @@ pub fn export_csv(
     session_id: i64,
     path: &Path,
     complete_only: bool,
+    confirmed_only: bool,
 ) -> Result<usize, Box<dyn Error>> {
-    let rows = collect(store, session_id, complete_only)?;
+    let rows = collect(store, session_id, complete_only, confirmed_only)?;
     let mut f = File::create(path)?;
     writeln!(
         f,
-        "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members"
+        "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members,review_status"
     )?;
     for r in &rows {
         writeln!(
             f,
-            "{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}",
             csv_escape(&r.path),
             r.t_start,
             r.t_end,
@@ -87,7 +93,8 @@ pub fn export_csv(
             r.completeness_score.map(|v| v.to_string()).unwrap_or_default(),
             r.completeness_label.clone().unwrap_or_default(),
             r.retained.map(|v| v.to_string()).unwrap_or_default(),
-            r.n_members
+            r.n_members,
+            r.review_status
         )?;
     }
     Ok(rows.len())
@@ -98,8 +105,9 @@ pub fn export_json(
     session_id: i64,
     path: &Path,
     complete_only: bool,
+    confirmed_only: bool,
 ) -> Result<usize, Box<dyn Error>> {
-    let rows = collect(store, session_id, complete_only)?;
+    let rows = collect(store, session_id, complete_only, confirmed_only)?;
     let f = File::create(path)?;
     serde_json::to_writer_pretty(f, &rows)?;
     Ok(rows.len())
@@ -150,7 +158,7 @@ mod tests {
     fn csv_export_writes_header_and_rows() {
         let (s, sid) = store_with_events();
         let p = std::env::temp_dir().join(format!("bc_csv_{}.csv", std::process::id()));
-        let n = export_csv(&s, sid, &p, false).unwrap();
+        let n = export_csv(&s, sid, &p, false, false).unwrap();
         assert_eq!(n, 2);
         let body = std::fs::read_to_string(&p).unwrap();
         assert!(body.starts_with("path,t_start"));
@@ -162,7 +170,7 @@ mod tests {
     fn csv_complete_only_filters() {
         let (s, sid) = store_with_events();
         let p = std::env::temp_dir().join(format!("bc_csv_co_{}.csv", std::process::id()));
-        let n = export_csv(&s, sid, &p, true).unwrap();
+        let n = export_csv(&s, sid, &p, true, false).unwrap();
         assert_eq!(n, 1);
         std::fs::remove_file(&p).ok();
     }
@@ -171,11 +179,24 @@ mod tests {
     fn json_export_array_len() {
         let (s, sid) = store_with_events();
         let p = std::env::temp_dir().join(format!("bc_json_{}.json", std::process::id()));
-        let n = export_json(&s, sid, &p, false).unwrap();
+        let n = export_json(&s, sid, &p, false, false).unwrap();
         assert_eq!(n, 2);
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
         assert_eq!(v.as_array().unwrap().len(), 2);
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn confirmed_only_filters_to_confirmed() {
+        let (s, sid) = store_with_events();
+        let eid: i64 = s.conn.query_row(
+            "SELECT id FROM events WHERE session_id=?1 ORDER BY t_start LIMIT 1",
+            rusqlite::params![sid], |r| r.get(0)).unwrap();
+        s.set_event_review(eid, "confirmed", None, None).unwrap();
+        let p = std::env::temp_dir().join(format!("bc_conf_{}.json", std::process::id()));
+        let n = export_json(&s, sid, &p, false, true).unwrap();
+        assert_eq!(n, 1);
         std::fs::remove_file(&p).ok();
     }
 }

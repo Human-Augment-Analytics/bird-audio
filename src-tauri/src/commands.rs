@@ -8,14 +8,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
-use tauri_plugin_dialog::DialogExt;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use batch_core::concurrency::resolve_concurrency;
 use batch_core::engine::{run_session, EngineConfig};
 use batch_core::enumerate::enumerate_audio;
 use batch_core::export::{export_csv, export_json};
-use batch_core::store::{FileRow, NewSession, Store, Summary};
+use batch_core::store::{EventRow, FileRow, NewSession, Store, Summary};
 
 use crate::state::AppState;
 
@@ -176,13 +175,14 @@ pub fn export_session(
     path: String,
     fmt: String,
     complete_only: bool,
+    confirmed_only: bool,
 ) -> Result<usize, String> {
     let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
     let p = PathBuf::from(&path);
     let n = if fmt == "json" {
-        export_json(&store, session_id, &p, complete_only)
+        export_json(&store, session_id, &p, complete_only, confirmed_only)
     } else {
-        export_csv(&store, session_id, &p, complete_only)
+        export_csv(&store, session_id, &p, complete_only, confirmed_only)
     }
     .map_err(|e| e.to_string())?;
     Ok(n)
@@ -295,7 +295,7 @@ pub fn get_cached_files(output_dir: String) -> Result<Vec<CachedFile>, String> {
         Some(id) => id,
         None => return Ok(vec![]),
     };
-    
+
     let rows = store.list_files(sid).map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(|r| CachedFile { path: r.path, status: r.status }).collect())
 }
@@ -311,7 +311,51 @@ pub fn delete_cached_files(output_dir: String, paths: Vec<String>) -> Result<(),
         Some(id) => id,
         None => return Ok(()),
     };
-    
+
     store.delete_cached_files(sid, &paths).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_events(output_dir: String, session_id: i64, path: String) -> Result<Vec<EventRow>, String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    store.list_events(session_id, &path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_event_review(output_dir: String, event_id: i64, status: String, label: Option<String>, note: Option<String>) -> Result<(), String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    store.set_event_review(event_id, &status, label.as_deref(), note.as_deref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_event_bounds(output_dir: String, event_id: i64, t_start: f64, t_end: f64, f_low: f64, f_high: f64) -> Result<(), String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    store.update_event_bounds(event_id, t_start, t_end, f_low, f_high).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_manual_event(output_dir: String, session_id: i64, path: String, t_start: f64, t_end: f64, f_low: f64, f_high: f64) -> Result<i64, String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    store.add_manual_event(session_id, &path, t_start, t_end, f_low, f_high).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_event(output_dir: String, event_id: i64) -> Result<(), String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    store.delete_event(event_id).map_err(|e| e.to_string())
+}
+
+/// Grant the asset-protocol scope for a session's input roots so the review UI
+/// can load local audio via convertFileSrc().
+#[tauri::command]
+pub fn prepare_review(app: AppHandle, output_dir: String, session_id: i64) -> Result<(), String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    let roots_json = store.session_input_roots(session_id).map_err(|e| e.to_string())?;
+    let roots: Vec<String> = serde_json::from_str(&roots_json).map_err(|e| e.to_string())?;
+    let scope = app.asset_protocol_scope();
+    for dir in &roots {
+        scope.allow_directory(dir, true).ok();
+    }
     Ok(())
 }

@@ -18,6 +18,12 @@ pub fn run() {
             commands::clear_cache,
             commands::get_cached_files,
             commands::delete_cached_files,
+            commands::list_events,
+            commands::set_event_review,
+            commands::update_event_bounds,
+            commands::add_manual_event,
+            commands::delete_event,
+            commands::prepare_review,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile } from "./types";
+import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile, EventRow } from "./types";
 
 export const checkHealth = (cwd?: string) => 
   invoke<HealthStatus>("check_health", { cwd });
@@ -35,10 +35,30 @@ export const exportSession = (
   sessionId: number,
   path: string,
   fmt: string,
-  completeOnly: boolean
-) => invoke<number>("export_session", { outputDir, sessionId, path, fmt, completeOnly });
+  completeOnly: boolean,
+  confirmedOnly: boolean
+) => invoke<number>("export_session", { outputDir, sessionId, path, fmt, completeOnly, confirmedOnly });
 
 export const onProgress = (cb: (p: Progress) => void): Promise<UnlistenFn> =>
   listen<Progress>("batch://progress", (e) => cb(e.payload));
 export const onDone = (cb: (s: Summary) => void): Promise<UnlistenFn> =>
   listen<Summary>("batch://done", (e) => cb(e.payload));
+
+export const listEvents = (outputDir: string, sessionId: number, path: string) =>
+  invoke<EventRow[]>("list_events", { outputDir, sessionId, path });
+export const setEventReview = (
+  outputDir: string, eventId: number, status: string,
+  label?: string | null, note?: string | null
+) => invoke<void>("set_event_review", { outputDir, eventId, status, label, note });
+export const updateEventBounds = (
+  outputDir: string, eventId: number, tStart: number, tEnd: number, fLow: number, fHigh: number
+) => invoke<void>("update_event_bounds", { outputDir, eventId, tStart, tEnd, fLow, fHigh });
+export const addManualEvent = (
+  outputDir: string, sessionId: number, path: string,
+  b: { tStart: number; tEnd: number; fLow: number; fHigh: number }
+) => invoke<number>("add_manual_event", { outputDir, sessionId, path, tStart: b.tStart, tEnd: b.tEnd, fLow: b.fLow, fHigh: b.fHigh });
+export const deleteEvent = (outputDir: string, eventId: number) =>
+  invoke<void>("delete_event", { outputDir, eventId });
+export const prepareReview = (outputDir: string, sessionId: number) =>
+  invoke<void>("prepare_review", { outputDir, sessionId });
+export const audioSrc = (path: string): string => convertFileSrc(path);

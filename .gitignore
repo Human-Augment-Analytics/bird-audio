@@ -24,19 +24,16 @@ dev-dist
 *.sln
 *.sw?
 
-# Rust / Cargo workspace
+# Rust / Cargo (root workspace)
 /target
+
+# Tauri
 src-tauri/target
 src-tauri/binaries
-src-tauri/gen/
+src-tauri/gen/schemas
 
-# Build artifacts
-*.tsbuildinfo
-
-# Local databases (batch.db + SQLite sidecars)
-*.db
-*.db-wal
-*.db-shm
+# Workflow scratch
+.planning/
 
 # Python
 __pycache__/
@@ -54,9 +51,5 @@ ENV/
 # Data
 data/
 test_output/
-
-# Export artifacts
-output/*.csv
-output/*.json
 
 

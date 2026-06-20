@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Bird Batch Runner",
+  "productName": "Bird Audio Analyzer",
   "version": "0.1.0",
-  "identifier": "com.bird.batchrunner",
+  "identifier": "com.bird.audioanalyzer",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -11,15 +11,12 @@
   },
   "app": {
     "windows": [
-      {
-        "title": "Bird Batch Runner",
-        "width": 1100,
-        "height": 760,
-        "resizable": true,
-        "fullscreen": false
-      }
+      { "title": "Bird Audio Analyzer", "width": 1100, "height": 760, "resizable": true, "fullscreen": false }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null,
+      "assetProtocol": { "enable": true, "scope": [] }
+    }
   },
   "bundle": {
     "active": true,
@@ -30,6 +27,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
   }
 }

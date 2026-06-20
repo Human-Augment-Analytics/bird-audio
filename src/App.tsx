@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import SetupView from "./components/SetupView";
 import RunView from "./components/RunView";
+import ReviewView from "./components/ReviewView";
 import { cancelSession, exportSession, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
 export default function App() {
   const [view, setView] = useState<"setup" | "run">("setup");
+  const [section, setSection] = useState<"batch" | "review">("batch");
   const [start, setStart] = useState<StartResult | null>(null);
   const [opts, setOpts] = useState<StartOpts | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -86,12 +88,12 @@ export default function App() {
     cancelSession();
   };
 
-  const doExport = async (fmt: string, completeOnly: boolean) => {
+  const doExport = async (fmt: string, completeOnly: boolean, confirmedOnly: boolean) => {
     if (!start || !opts) return;
     const path = await pickSavePath(`events.${fmt}`);
     if (!path) return;
     try {
-      const n = await exportSession(opts.outputDir, start.session_id, path, fmt, completeOnly);
+      const n = await exportSession(opts.outputDir, start.session_id, path, fmt, completeOnly, confirmedOnly);
       setNotice(`Exported ${n} rows to ${path}`);
     } catch (e) {
       setNotice(`Export failed: ${String(e)}`);
@@ -113,8 +115,15 @@ export default function App() {
         </div>
       </header>
 
-      {view === "setup" && <SetupView onStarted={onStarted} />}
-      {view === "run" && start && (
+      <nav className="reveal" style={{ display: "flex", gap: 8, margin: "0 0 16px" }}>
+        <button className={section === "batch" ? "primary" : "backlink"} onClick={() => setSection("batch")}>Batch</button>
+        <button className={section === "review" ? "primary" : "backlink"} onClick={() => setSection("review")} disabled={!start || !opts}>
+          Review
+        </button>
+      </nav>
+
+      {section === "batch" && view === "setup" && <SetupView onStarted={onStarted} />}
+      {section === "batch" && view === "run" && start && (
         <>
           <button className="backlink reveal" style={{ marginBottom: 14 }} disabled={summary === null && !cancelled} onClick={() => setView("setup")}>
             ← Start a new session
@@ -134,6 +143,9 @@ export default function App() {
             onCancel={handleCancel}
           />
         </>
+      )}
+      {section === "review" && start && opts && (
+        <ReviewView start={start} opts={opts} rows={rows} />
       )}
     </main>
   );
