@@ -23,12 +23,12 @@ long-lived Python subprocess.
 
 ```mermaid
 flowchart TB
-    subgraph UI["React Webview UI — batch-app/src"]
+    subgraph UI["React Webview UI — src"]
         direction LR
         SV[SetupView] --- RV[RunView] --- FT[FileTable] --- MC[ManageCache]
     end
 
-    subgraph TAURI["Tauri shell (Rust) — batch-app/src-tauri"]
+    subgraph TAURI["Tauri shell (Rust) — src-tauri"]
         CMD["commands.rs<br/>start_session · cancel_session · get_summary<br/>list_files · export_session · check_health<br/>prepare_system · *_cache"]
     end
 

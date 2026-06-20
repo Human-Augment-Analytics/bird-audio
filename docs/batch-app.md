@@ -1,7 +1,7 @@
 # Bird Audio Analyzer — Batch App Reference
 
 > Status: prototype (`leyang/prototype`). This is the **developer reference** for
-> the desktop batch app under `batch-app/`. For the conceptual overview and
+> the desktop batch app at the repo root. For the conceptual overview and
 > Mermaid diagrams, see [`architecture.md`](architecture.md). For the ML pipeline
 > internals, see the source under `birdpipe/` and `scripts/ml_engine.py`.
 
@@ -42,7 +42,7 @@ Two front doors share one engine: the **GUI** (`src-tauri` + `src`) and a headle
 ## 1. Repository layout
 
 ```
-batch-app/
+bird-audio/
 ├── Cargo.toml                 # Rust workspace: members = batch-core, src-tauri
 ├── package.json               # Frontend + Tauri CLI (npm), package name "bird-batch-gui"
 ├── vite.config.ts             # Vite dev server on :1420 (strictPort)
@@ -110,7 +110,6 @@ is the engine inside it.
 ### Run the GUI (development)
 
 ```bash
-cd batch-app
 npm install
 npm run tauri dev      # launches Vite on :1420, then the Tauri window
 ```
@@ -123,7 +122,6 @@ runs `uv sync` if the Python env or models are missing.
 ### Build distributable bundles
 
 ```bash
-cd batch-app
 npm run tauri build    # runs `npm run build` then bundles for the current OS
 ```
 
@@ -140,7 +138,7 @@ default worker command (`scripts/ml_engine.py`) and `models/` resolve:
 
 ```bash
 # from repo root
-cargo run --manifest-path batch-app/Cargo.toml -p batch-core --bin batch -- \
+cargo run -p batch-core --bin batch -- \
   --input data/ --device cpu --db output/batch.db
 ```
 
@@ -694,7 +692,7 @@ labeled/retained, not what the models detect. See
 
 ## 10. Testing
 
-- **Rust engine** — `cd batch-app && cargo test`. `batch-core/tests/integration.rs`
+- **Rust engine** — `cargo test`. `batch-core/tests/integration.rs`
   drives the full `run_session` path against `tests/fake_worker.py` (a protocol
   double with no ML), covering: all-files-done, worker-reported error → failed,
   hung worker → timeout → poison after retries, crashing worker → respawn + pool

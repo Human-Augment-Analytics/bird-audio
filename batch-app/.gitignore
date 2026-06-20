@@ -1,7 +1,0 @@
-target/
-*.db
-*.db-wal
-*.db-shm
-node_modules/
-dist/
-src-tauri/gen/

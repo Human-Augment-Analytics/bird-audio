@@ -10,9 +10,9 @@ The project has two parts:
 
 - **The ML pipeline** (`birdpipe/`, `scripts/ml_engine.py`, `models/`) — a
   Python-native, paper-faithful detection pipeline.
-- **The batch app** (`batch-app/`) — a Tauri + Rust + React desktop product that
-  orchestrates the pipeline across thousands of files with resume, retries, live
-  progress, and CSV/JSON export.
+- **The batch app** (`src/`, `src-tauri/`, `batch-core/` at the repo root) — a
+  Tauri + Rust + React desktop product that orchestrates the pipeline across
+  thousands of files with resume, retries, live progress, and CSV/JSON export.
 
 ## Documentation
 
@@ -76,8 +76,9 @@ This checks `models/buzz_localizer.pt` (Stage A) and `models/classifier.pt`
 
 ### Desktop app (recommended)
 
+Run from the repo root:
+
 ```bash
-cd batch-app
 npm install
 npm run tauri dev
 ```
@@ -97,7 +98,7 @@ The same engine without the GUI — useful for servers and scripting. Run from t
 repo root so the worker command and `models/` resolve:
 
 ```bash
-cargo run --manifest-path batch-app/Cargo.toml -p batch-core --bin batch -- \
+cargo run -p batch-core --bin batch -- \
   --input data/ --device cpu --db output/batch.db --export-csv events.csv
 ```
 
