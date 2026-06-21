@@ -44,7 +44,7 @@ export default function SetupView({ onStarted }: Props) {
       if (h?.internal_device) {
         setDevice(h.internal_device);
       }
-    });
+    }).catch(() => setHealth(null));
   }, [cwd]);
 
   useEffect(() => {
