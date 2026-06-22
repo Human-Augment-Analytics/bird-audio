@@ -250,25 +250,25 @@ export default function SanityCheckViews({ events }: Props) {
   return (
     <div className="sanity-checks">
       <div className="sanity-header">
-        <h3 className="sanity-title">🔍 Diagnostic Sanity Checks</h3>
+        <h3 className="sanity-title">Diagnostic Sanity Checks</h3>
         <div className="sanity-tabs">
           <button
             className={`sanity-tab-btn ${activeTab === "elevation" ? "active" : ""}`}
             onClick={() => setActiveTab("elevation")}
           >
-            📊 Elevation vs. Duration
+            Elevation vs. Duration
           </button>
           <button
             className={`sanity-tab-btn ${activeTab === "timeline" ? "active" : ""}`}
             onClick={() => setActiveTab("timeline")}
           >
-            📈 Bout Activity Timeline
+            Bout Activity Timeline
           </button>
           <button
             className={`sanity-tab-btn ${activeTab === "sites" ? "active" : ""}`}
             onClick={() => setActiveTab("sites")}
           >
-            📋 Site Summaries
+            Site Summaries
           </button>
         </div>
       </div>

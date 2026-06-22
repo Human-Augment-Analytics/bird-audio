@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import SetupView from "./components/SetupView";
 import RunView from "./components/RunView";
 import ReviewView from "./components/ReviewView";
+import appIcon from "./assets/app-icon.png";
 import { cancelSession, exportSession, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
@@ -112,9 +113,7 @@ export default function App() {
   return (
     <main style={{ padding: "44px 24px 64px", maxWidth: 1040, margin: "0 auto" }}>
       <header className="masthead reveal">
-        <div className="equalizer" aria-hidden="true">
-          <span /><span /><span /><span /><span /><span /><span />
-        </div>
+        <img className="masthead-icon" src={appIcon} alt="Bird Audio Analyzer Icon" aria-hidden="true" />
         <div>
           <div className="eyebrow" style={{ marginBottom: 8 }}>Bioacoustic Analysis Pipeline</div>
           <h1>Bird Audio Analyzer</h1>

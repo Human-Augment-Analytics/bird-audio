@@ -251,8 +251,9 @@ export default function RunView({ start, progress, summary, rows, throughput, on
       )}
 
       {done && loadingEvents && (
-        <div className="card" style={{ padding: 20, textAlign: "center", color: "var(--text-dim)" }}>
-          Loading diagnostic events...
+        <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 32, textAlign: "center", color: "var(--text-dim)", background: "var(--surface)", borderRadius: "var(--radius)", border: "1px solid var(--line)", boxShadow: "var(--shadow)" }}>
+          <div className="loading-spinner" />
+          <div style={{ fontSize: "11px", fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>LOADING DIAGNOSTIC EVENTS…</div>
         </div>
       )}
 

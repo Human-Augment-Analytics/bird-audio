@@ -170,7 +170,10 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
             Select a completed recording to review its events.
           </div>
         ) : loadingEvents ? (
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)" }}>Loading events…</div>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, minHeight: 320, background: "var(--surface)", borderRadius: "var(--radius)", border: "1px solid var(--line)", boxShadow: "var(--shadow)" }}>
+            <div className="loading-spinner" />
+            <div style={{ color: "var(--text-dim)", fontSize: "11px", fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>LOADING EVENTS…</div>
+          </div>
         ) : (
           <>
             <div className="reveal" style={{ animationDelay: "40ms" }}>

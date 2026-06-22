@@ -104,7 +104,12 @@ export default function SetupView({ onStarted }: Props) {
         </div>
         {!ready && (
           <button className="primary" onClick={handlePrepare} disabled={busy}>
-            {busy ? "Preparing…" : "Prepare System"}
+            {busy ? (
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className="loading-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                Preparing…
+              </span>
+            ) : "Prepare System"}
           </button>
         )}
       </div>
@@ -166,7 +171,12 @@ export default function SetupView({ onStarted }: Props) {
       {error && <div className="error-text">{error}</div>}
 
       <button className="primary" style={{ height: 52, fontSize: 15, letterSpacing: "0.01em" }} disabled={busy || !ready} onClick={start}>
-        {busy ? "Initializing…" : "Begin Listening →"}
+        {busy ? (
+          <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            <span className="loading-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+            Initializing…
+          </span>
+        ) : "Begin Listening →"}
       </button>
     </div>
   );

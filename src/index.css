@@ -244,39 +244,18 @@ input[type="checkbox"]:checked::after {
 }
 .masthead .sub b { color: var(--amber); font-weight: 600; }
 
-/* the animated "call" — a live spectrogram mark */
-.equalizer {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 46px;
-  padding: 9px 11px;
-  border-radius: 12px;
-  background: var(--bg-deep);
+/* the bird vector icon in the header */
+.masthead-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
   border: 1px solid var(--line-2);
-  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: transform 0.2s ease, border-color 0.2s ease;
 }
-.equalizer span {
-  display: block;
-  width: 4px;
-  height: 100%;
-  border-radius: 2px;
-  background: var(--spectrogram);
-  background-size: 1px 100%;
-  transform-origin: bottom;
-  animation: eq 1.5s ease-in-out infinite;
-}
-.equalizer span:nth-child(1) { background: var(--spec-1); animation-delay: -0.1s; animation-duration: 1.3s; }
-.equalizer span:nth-child(2) { background: var(--spec-2); animation-delay: -0.5s; animation-duration: 1.7s; }
-.equalizer span:nth-child(3) { background: var(--spec-3); animation-delay: -0.2s; animation-duration: 1.1s; }
-.equalizer span:nth-child(4) { background: var(--spec-4); animation-delay: -0.7s; animation-duration: 1.9s; }
-.equalizer span:nth-child(5) { background: var(--spec-5); animation-delay: -0.35s; animation-duration: 1.4s; }
-.equalizer span:nth-child(6) { background: var(--spec-3); animation-delay: -0.6s; animation-duration: 1.6s; }
-.equalizer span:nth-child(7) { background: var(--spec-2); animation-delay: -0.15s; animation-duration: 1.2s; }
-
-@keyframes eq {
-  0%, 100% { transform: scaleY(0.22); opacity: 0.55; }
-  50% { transform: scaleY(1); opacity: 1; }
+.masthead-icon:hover {
+  transform: scale(1.05);
+  border-color: var(--amber);
 }
 
 /* ── Field (label group) ────────────────────────────────────────────────── */
@@ -752,5 +731,20 @@ input[type="checkbox"]:checked::after {
   height: 180px;
   color: var(--text-faint);
   font-size: 14px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--amber);
+  border-radius: 50%;
+  animation: spin 0.85s linear infinite;
+  display: inline-block;
 }
 
