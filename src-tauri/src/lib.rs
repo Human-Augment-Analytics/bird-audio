@@ -18,6 +18,7 @@ pub fn run() {
             commands::clear_cache,
             commands::get_cached_files,
             commands::delete_cached_files,
+            commands::get_session_events,
             commands::list_events,
             commands::set_event_review,
             commands::update_event_bounds,

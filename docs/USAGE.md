@@ -4,7 +4,7 @@ A step-by-step guide to a full session: **install → run a batch → review det
 
 The app is a [Tauri](https://tauri.app/) desktop application (React frontend, Rust + Python backend) for detecting and curating bird vocalizations from field recordings, optimized for the **Hume's Leaf Warbler** (*Phylloscopus humei*). It has two modes — **Batch** (run the ML pipeline over a folder) and **Review** (curate the detections on a spectrogram).
 
-> ⏳ _Walkthrough video — to be added._
+> _Walkthrough video — to be added._
 
 ---
 
@@ -46,7 +46,7 @@ On first launch the app runs a **health check** of the Python environment and th
 
 ### Setup
 
-<!-- 📸 screenshot: Setup view -->
+<!-- screenshot: Setup view -->
 
 - **Input folder** — the folder of recordings (subfolders included).
 - **Output directory** — where results are written. All state lives in `<output_dir>/batch.db`.
@@ -57,7 +57,7 @@ On first launch the app runs a **health check** of the Python environment and th
 
 ### Run
 
-<!-- 📸 screenshot: Run view with per-file progress -->
+<!-- screenshot: Run view with per-file progress -->
 
 The pipeline processes every audio file in the folder, showing **per-file progress**, a **clock-time ETA**, and running **buzz counts**. Results are aggregated into `batch.db` as it goes.
 
@@ -69,7 +69,7 @@ The database is the durable checkpoint: runs are **resumable and idempotent**. S
 
 After a batch run, switch to **Review** to turn raw ML output into a verified dataset.
 
-<!-- 📸 screenshot: Review view — file list + spectrogram with event boxes -->
+<!-- screenshot: Review view — file list + spectrogram with event boxes -->
 
 1. **Pick a file.** The file list shows every processed recording; click one to load its events.
 2. **Inspect on the spectrogram.** Each detected event is drawn as a bounding box over the audio. Use the playback controls to listen — **zoom**, **seek**, change **playback rate** (down to 0.25×), and **mute**.
@@ -85,13 +85,23 @@ Decisions are saved to `batch.db` and accumulate across Review sessions — stop
 
 ---
 
-## 4. Export
+## 4. In-App Sanity Check Views
 
-<!-- 📸 screenshot: Export options with confirmed-only toggle -->
+Once a batch run is complete, the app automatically pulls the session results to render three interactive diagnostic visualizations on the complete card:
+*   **Elevation vs. Duration Plot:** Displays the distribution of event durations across Low (PSL), Medium (PSM), and High (PSH/H) altitude bands. The app categorizes events by parsing the recorder ID prefix (e.g. `PSL2`, `PSM5`) from the audio filenames.
+*   **Bout Activity Timeline:** A density histogram displaying event frequencies in 5-minute bins across the session duration, highlighting burst behaviors.
+*   **Sortable Site Summaries:** A detailed table summarizing event count, mean duration, and median frequency for each unique site/recorder. You can sort columns to quickly identify outliers.
 
-Export detected events as **CSV** or **JSON**. Each row joins the event to its source file path, ordered by path then time.
+---
 
-- **Confirmed only** — toggle on to export **only the events you confirmed in Review**, giving you a clean, human-verified dataset.
+## 5. Export
+
+The application supports exporting analysis-ready datasets directly from the complete panel:
+*   **Formats:** Export to standard **CSV**, **JSON**, **warbleR-compatible CSV** (with columns like `sound.files`, `selec`, `start`, `end`), or **Raven Selection Table** (tab-separated `.txt`).
+*   **Confirmed only:** Toggle this on to limit exports to events that were reviewed and marked as `confirmed` (including manually added ones).
+*   **Deployment Metadata Join:** Optionally browse and select a metadata CSV file containing recorder deployment parameters (`device_id`, `site_id`, `elevation_m`, `lat`, `lon`, `deploy_date`). When chosen:
+    1.  The exported file will automatically join the `site_id`, `elevation_m`, `lat`, and `lon` fields to each event row by identifying the `device_id` from the filename.
+    2.  A secondary site-level summary CSV (`<export_filename>_summary.csv`) will be generated, containing session-level aggregations (`site_id`, `session_datetime`, `elevation_m`, `n_events`, `duration_mean`, `duration_median`, `center_freq_mean`, `effort_hours` assuming 15 mins/file).
 
 ### Headless CLI (batch only)
 

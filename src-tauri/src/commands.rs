@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use batch_core::concurrency::resolve_concurrency;
 use batch_core::engine::{run_session, EngineConfig};
 use batch_core::enumerate::enumerate_audio;
-use batch_core::export::{export_csv, export_json};
+use batch_core::export::{export_csv, export_json, export_warbler, export_raven};
 use batch_core::store::{EventRow, FileRow, NewSession, Store, Summary};
 
 use crate::state::AppState;
@@ -44,24 +44,47 @@ pub struct StartResult {
 }
 
 fn resolve_cwd(cwd: Option<String>) -> PathBuf {
-    let dir = cwd
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().expect("get current_dir"));
+    if let Some(c) = cwd.filter(|s| !s.trim().is_empty()).map(PathBuf::from) {
+        return c;
+    }
 
-    // Dev mode: walk up until we find models/ and pyproject.toml
-    let mut current = dir.clone();
-    for _ in 0..3 {
-        if current.join("models").exists() && current.join("pyproject.toml").exists() {
-            return current;
-        }
-        if let Some(parent) = current.parent() {
-            current = parent.to_path_buf();
-        } else {
-            break;
+    // 1. Try the compile-time project root (parent of CARGO_MANIFEST_DIR)
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(project_root) = manifest_dir.parent() {
+        if project_root.join("models").exists() && project_root.join("pyproject.toml").exists() {
+            return project_root.to_path_buf();
         }
     }
-    dir
+
+    // 2. Try walking up from current executable path (useful for macOS bundle launched from Finder/Dock)
+    if let Ok(exe) = std::env::current_exe() {
+        let mut current = exe.clone();
+        while let Some(parent) = current.parent() {
+            if parent.join("models").exists() && parent.join("pyproject.toml").exists() {
+                return parent.to_path_buf();
+            }
+            current = parent.to_path_buf();
+        }
+    }
+
+    // 3. Try walking up from standard current_dir (useful in dev mode)
+    if let Ok(dir) = std::env::current_dir() {
+        let mut current = dir.clone();
+        while let Some(parent) = current.parent() {
+            if parent.join("models").exists() && parent.join("pyproject.toml").exists() {
+                return parent.to_path_buf();
+            }
+            current = parent.to_path_buf();
+        }
+        if dir.join("models").exists() && dir.join("pyproject.toml").exists() {
+            return dir;
+        }
+    }
+
+    // 4. Fallback to current directory
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
+
 
 #[tauri::command]
 pub fn start_session(
@@ -176,13 +199,17 @@ pub fn export_session(
     fmt: String,
     complete_only: bool,
     confirmed_only: bool,
+    metadata_path: Option<String>,
 ) -> Result<usize, String> {
     let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
     let p = PathBuf::from(&path);
-    let n = if fmt == "json" {
-        export_json(&store, session_id, &p, complete_only, confirmed_only)
-    } else {
-        export_csv(&store, session_id, &p, complete_only, confirmed_only)
+    let meta_p = metadata_path.map(PathBuf::from);
+    let meta_ref = meta_p.as_deref();
+    let n = match fmt.as_str() {
+        "json" => export_json(&store, session_id, &p, complete_only, confirmed_only, meta_ref),
+        "warbler" => export_warbler(&store, session_id, &p, complete_only, confirmed_only),
+        "raven" => export_raven(&store, session_id, &p, complete_only, confirmed_only),
+        _ => export_csv(&store, session_id, &p, complete_only, confirmed_only, meta_ref),
     }
     .map_err(|e| e.to_string())?;
     Ok(n)
@@ -197,6 +224,24 @@ pub struct HealthStatus {
     pub details: String,
 }
 
+fn find_uv() -> std::path::PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        let path = std::path::Path::new(&home).join(".local/bin/uv");
+        if path.exists() {
+            return path;
+        }
+    }
+    let hb = std::path::Path::new("/opt/homebrew/bin/uv");
+    if hb.exists() {
+        return hb.to_path_buf();
+    }
+    let ul = std::path::Path::new("/usr/local/bin/uv");
+    if ul.exists() {
+        return ul.to_path_buf();
+    }
+    std::path::PathBuf::from("uv")
+}
+
 #[tauri::command]
 pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
     use std::process::Command;
@@ -207,7 +252,7 @@ pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
     let m2 = dir.join("models/classifier.pt").exists();
 
     // Check Python env
-    let output = Command::new("uv")
+    let output = Command::new(find_uv())
         .args([
             "run",
             "python",
@@ -252,14 +297,20 @@ pub async fn prepare_system(cwd: Option<String>) -> Result<(), String> {
     use std::process::Command;
     let dir = resolve_cwd(cwd);
 
-    let status = Command::new("uv")
+    let output = Command::new(find_uv())
         .args(["sync"])
         .current_dir(&dir)
-        .status()
-        .map_err(|e| format!("Failed to run uv sync: {}", e))?;
+        .output()
+        .map_err(|e| format!("Failed to execute uv sync: {}", e))?;
 
-    if !status.success() {
-        return Err("uv sync failed. Check internet connection.".into());
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "uv sync failed.\nStdout: {}\nStderr: {}",
+            stdout.trim(),
+            stderr.trim()
+        ));
     }
     Ok(())
 }
@@ -295,7 +346,7 @@ pub fn get_cached_files(output_dir: String) -> Result<Vec<CachedFile>, String> {
         Some(id) => id,
         None => return Ok(vec![]),
     };
-
+    
     let rows = store.list_files(sid).map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(|r| CachedFile { path: r.path, status: r.status }).collect())
 }
@@ -311,9 +362,76 @@ pub fn delete_cached_files(output_dir: String, paths: Vec<String>) -> Result<(),
         Some(id) => id,
         None => return Ok(()),
     };
-
+    
     store.delete_cached_files(sid, &paths).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExportedEvent {
+    pub path: String,
+    pub t_start: f64,
+    pub t_end: f64,
+    pub duration: f64,
+    pub f_low: f64,
+    pub f_high: f64,
+    pub center_freq: f64,
+    pub stage_a_conf: f64,
+    pub completeness_score: Option<f64>,
+    pub completeness_label: Option<String>,
+    pub retained: Option<bool>,
+}
+
+#[tauri::command]
+pub fn get_session_events(
+    output_dir: String,
+    session_id: i64,
+) -> Result<Vec<ExportedEvent>, String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    let mut stmt = store
+        .conn
+        .prepare(
+            "SELECT 
+                f.path, 
+                e.t_start, 
+                e.t_end, 
+                e.duration, 
+                e.f_low, 
+                e.f_high, 
+                e.center_freq, 
+                e.stage_a_conf, 
+                e.completeness_score, 
+                e.completeness_label, 
+                e.retained 
+             FROM events e 
+             JOIN files f ON e.file_id = f.id 
+             WHERE e.session_id = ?1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let event_iter = stmt
+        .query_map(rusqlite::params![session_id], |row| {
+            Ok(ExportedEvent {
+                path: row.get(0)?,
+                t_start: row.get(1)?,
+                t_end: row.get(2)?,
+                duration: row.get(3)?,
+                f_low: row.get(4)?,
+                f_high: row.get(5)?,
+                center_freq: row.get(6)?,
+                stage_a_conf: row.get(7)?,
+                completeness_score: row.get(8)?,
+                completeness_label: row.get(9)?,
+                retained: row.get(10)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut events = Vec::new();
+    for event in event_iter {
+        events.push(event.map_err(|e| e.to_string())?);
+    }
+    Ok(events)
 }
 
 #[tauri::command]
@@ -358,4 +476,16 @@ pub fn prepare_review(app: AppHandle, output_dir: String, session_id: i64) -> Re
         scope.allow_directory(dir, true).ok();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_cwd_finds_project_root() {
+        let resolved = resolve_cwd(None);
+        assert!(resolved.join("pyproject.toml").exists(), "Resolved path {:?} does not contain pyproject.toml", resolved);
+        assert!(resolved.join("models").exists(), "Resolved path {:?} does not contain models/", resolved);
+    }
 }

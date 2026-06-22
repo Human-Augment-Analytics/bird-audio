@@ -59,16 +59,20 @@ export default function App() {
         unD?.();
       }
     })();
-    const iv = setInterval(() => {
-      listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
-    }, 2000);
+    // Only poll listFiles if the run is active and not complete/cancelled
+    let iv: any;
+    if (!summary && !cancelled) {
+      iv = setInterval(() => {
+        listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
+      }, 2000);
+    }
     return () => {
       active = false;
       unP?.();
       unD?.();
-      clearInterval(iv);
+      if (iv) clearInterval(iv);
     };
-  }, [view, start, opts]);
+  }, [view, start, opts, summary, cancelled]);
 
   const onStarted = (result: StartResult, o: StartOpts) => {
     setStart(result);
@@ -88,13 +92,18 @@ export default function App() {
     cancelSession();
   };
 
-  const doExport = async (fmt: string, completeOnly: boolean, confirmedOnly: boolean) => {
+  const doExport = async (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => {
     if (!start || !opts) return;
-    const path = await pickSavePath(`events.${fmt}`);
+    const ext = fmt === "json" ? "json" : fmt === "raven" ? "txt" : "csv";
+    const path = await pickSavePath(`events.${ext}`);
     if (!path) return;
     try {
-      const n = await exportSession(opts.outputDir, start.session_id, path, fmt, completeOnly, confirmedOnly);
-      setNotice(`Exported ${n} rows to ${path}`);
+      const n = await exportSession(opts.outputDir, start.session_id, path, fmt, completeOnly, confirmedOnly, metadataPath);
+      let msg = `Exported ${n} rows to ${path}`;
+      if (metadataPath) {
+        msg += ` (and summary to ${path.replace(/\.[^/.]+$/, "")}_summary.csv)`;
+      }
+      setNotice(msg);
     } catch (e) {
       setNotice(`Export failed: ${String(e)}`);
     }
@@ -141,6 +150,7 @@ export default function App() {
             throughput={throughput}
             onExport={doExport}
             onCancel={handleCancel}
+            outputDir={opts?.outputDir || ""}
           />
         </>
       )}

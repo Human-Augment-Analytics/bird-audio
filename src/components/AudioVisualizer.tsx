@@ -83,7 +83,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       plugins: [
         wsRegions, wsTimeline,
         Spectrogram.create({ container: specRef.current, labels: true, height: 180,
-          splitChannels: false, frequencyMin: FREQ_MIN, frequencyMax: FREQ_MAX }),
+          splitChannels: false, frequencyMin: FREQ_MIN }),
       ],
     });
     wavesurfer.current = ws;
@@ -120,7 +120,11 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       if (eventId !== undefined) onSelectEventRef.current?.(eventId);
     });
 
-    ws.load(src);
+    ws.load(src).catch((err) => {
+      if (err.name !== 'AbortError') {
+        console.error("WaveSurfer load error:", err);
+      }
+    });
     return () => {
       ws.destroy();
       wavesurfer.current = null; regionsPlugin.current = null; regionToEventId.current.clear();
@@ -132,28 +136,75 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   useEffect(() => {
     const wsRegions = regionsPlugin.current;
     if (!wsRegions || !wsReady) return;
+
     suppressNewRegion.current = true;
-    wsRegions.clearRegions();
-    regionToEventId.current.clear();
-    events.forEach((ev) => {
+
+    // Get current regions in wavesurfer
+    const currentRegions = wsRegions.getRegions();
+    const newEventIds = new Set(events.map(ev => String(ev.id)));
+
+    // 1. Remove regions that are no longer in events
+    currentRegions.forEach(region => {
+      if (!newEventIds.has(region.id)) {
+        region.remove();
+        regionToEventId.current.delete(region.id);
+      }
+    });
+
+    // 2. Add or update regions
+    events.forEach(ev => {
       const regionId = String(ev.id);
       const isSelected = ev.id === selectedId;
       const border = borderColorForStatus(ev.review_status);
-      wsRegions.addRegion({
-        id: regionId, start: ev.t_start, end: ev.t_end,
-        color: regionColorForStatus(ev.review_status, isSelected),
-        drag: true, resize: true, content: ev.label ?? undefined,
-        // @ts-ignore — region style supported in wavesurfer v7
-        style: {
-          borderLeft: `2px solid ${border}`, borderRight: `2px solid ${border}`,
-          transition: 'background-color .18s ease, box-shadow .18s ease',
-          ...(isSelected
-            ? { outline: `2px solid ${border}`, outlineOffset: '-1px', boxShadow: `0 0 16px -3px ${border}, inset 0 0 24px -10px ${border}` }
-            : {}),
-        },
-      });
-      regionToEventId.current.set(regionId, ev.id);
+      const color = regionColorForStatus(ev.review_status, isSelected);
+      const style = {
+        borderLeft: `2px solid ${border}`,
+        borderRight: `2px solid ${border}`,
+        transition: 'background-color .18s ease, box-shadow .18s ease',
+        ...(isSelected
+          ? { outline: `2px solid ${border}`, outlineOffset: '-1px', boxShadow: `0 0 16px -3px ${border}, inset 0 0 24px -10px ${border}` }
+          : {}),
+      };
+
+      const existingRegion = currentRegions.find(r => r.id === regionId);
+      if (!existingRegion) {
+        // Create new region
+        wsRegions.addRegion({
+          id: regionId,
+          start: ev.t_start,
+          end: ev.t_end,
+          color,
+          drag: true,
+          resize: true,
+          content: ev.label ?? undefined,
+          // @ts-ignore
+          style,
+        });
+        regionToEventId.current.set(regionId, ev.id);
+      } else {
+        // Update existing region options
+        const startDiff = Math.abs(existingRegion.start - ev.t_start) > 0.001;
+        const endDiff = Math.abs(existingRegion.end - ev.t_end) > 0.001;
+        
+        // We compare basic options to minimize DOM reflow
+        // @ts-ignore
+        const colorDiff = existingRegion.color !== color;
+        // @ts-ignore
+        const contentDiff = existingRegion.content !== (ev.label ?? '');
+
+        if (startDiff || endDiff || colorDiff || contentDiff) {
+          existingRegion.setOptions({
+            start: ev.t_start,
+            end: ev.t_end,
+            color,
+            content: ev.label ?? undefined,
+            // @ts-ignore
+            style,
+          });
+        }
+      }
     });
+
     suppressNewRegion.current = false;
   }, [events, selectedId, wsReady]);
 

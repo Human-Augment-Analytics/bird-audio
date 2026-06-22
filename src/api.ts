@@ -1,7 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile, EventRow } from "./types";
+import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile, ExportedEvent, EventRow } from "./types";
 
 export const checkHealth = (cwd?: string) => 
   invoke<HealthStatus>("check_health", { cwd });
@@ -20,6 +20,10 @@ export const pickFolder = async (): Promise<string | null> => {
   const result = await open({ directory: true, multiple: false });
   return typeof result === "string" ? result : null;
 };
+export const pickFile = async (filters?: { name: string; extensions: string[] }[]): Promise<string | null> => {
+  const result = await open({ directory: false, multiple: false, filters });
+  return typeof result === "string" ? result : null;
+};
 export const pickSavePath = async (defaultName: string): Promise<string | null> => {
   const result = await save({ defaultPath: defaultName });
   return typeof result === "string" ? result : null;
@@ -30,14 +34,17 @@ export const getSummary = (outputDir: string, sessionId: number) =>
   invoke<Summary>("get_summary", { outputDir, sessionId });
 export const listFiles = (outputDir: string, sessionId: number) =>
   invoke<FileRow[]>("list_files", { outputDir, sessionId });
+export const getSessionEvents = (outputDir: string, sessionId: number) =>
+  invoke<ExportedEvent[]>("get_session_events", { outputDir, sessionId });
 export const exportSession = (
   outputDir: string,
   sessionId: number,
   path: string,
   fmt: string,
   completeOnly: boolean,
-  confirmedOnly: boolean
-) => invoke<number>("export_session", { outputDir, sessionId, path, fmt, completeOnly, confirmedOnly });
+  confirmedOnly: boolean,
+  metadataPath?: string | null
+) => invoke<number>("export_session", { outputDir, sessionId, path, fmt, completeOnly, confirmedOnly, metadataPath });
 
 export const onProgress = (cb: (p: Progress) => void): Promise<UnlistenFn> =>
   listen<Progress>("batch://progress", (e) => cb(e.payload));

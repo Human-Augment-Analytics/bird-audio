@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EventRow, FileRow, StartOpts, StartResult } from "../types";
 import {
   addManualEvent, audioSrc, deleteEvent, listEvents, prepareReview, setEventReview, updateEventBounds,
@@ -22,6 +22,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const currentPathRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -30,27 +31,31 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
     return () => { cancelled = true; };
   }, [dir, sid]);
 
-  const fetchEvents = useCallback(async (path: string) => {
+  const fetchEvents = useCallback(async (path: string, showLoading = false) => {
     currentPathRef.current = path;
-    setLoadingEvents(true);
+    if (showLoading) {
+      setLoadingEvents(true);
+    }
     try {
       const result = await listEvents(dir, sid, path);
       if (currentPathRef.current === path) setEvents(result);
     } catch (e) {
       if (currentPathRef.current === path) setNotice(`Failed to load events: ${String(e)}`);
     } finally {
-      if (currentPathRef.current === path) setLoadingEvents(false);
+      if (currentPathRef.current === path && showLoading) {
+        setLoadingEvents(false);
+      }
     }
   }, [dir, sid]);
 
   const refreshEvents = useCallback(async () => {
-    if (selectedPath) await fetchEvents(selectedPath);
+    if (selectedPath) await fetchEvents(selectedPath, false);
   }, [selectedPath, fetchEvents]);
 
   const selectFile = useCallback((path: string) => {
     if (path === selectedPath) return;
     setSelectedPath(path); setSelectedId(null); setEvents([]); setNotice(null);
-    fetchEvents(path);
+    fetchEvents(path, true);
   }, [selectedPath, fetchEvents]);
 
   const currentStatus = useCallback(
@@ -84,7 +89,21 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   }, [dir, currentStatus, refreshEvents]);
 
   const src = selectedPath ? audioSrc(selectedPath) : null;
-  const doneRows = rows.filter((r) => r.status === "done");
+
+  const MAX_VISIBLE = 150;
+
+  const { doneRows, visibleRows, isTruncated } = useMemo(() => {
+    const done = rows.filter((r) => r.status === "done");
+    const filtered = done.filter((r) => {
+      const basename = r.path.split("/").pop() || r.path;
+      return basename.toLowerCase().includes(searchQuery.toLowerCase());
+    });
+    return {
+      doneRows: done,
+      visibleRows: filtered.slice(0, MAX_VISIBLE),
+      isTruncated: filtered.length > MAX_VISIBLE,
+    };
+  }, [rows, searchQuery]);
 
   return (
     <div className="reveal" style={{ display: "grid", gridTemplateColumns: "264px 1fr", gap: 0,
@@ -94,11 +113,29 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
           <span style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", color: "var(--text-faint)" }}>RECORDINGS</span>
           <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--text-faint)", fontVariantNumeric: "tabular-nums" }}>{doneRows.length}/{rows.length}</span>
         </div>
+        <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>
+          <input
+            type="text"
+            placeholder="Search recordings..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "1px solid var(--line)",
+              backgroundColor: "var(--bg-deep)",
+              color: "var(--text)",
+              fontSize: "12px",
+              outline: "none"
+            }}
+          />
+        </div>
         {prepareError && (
           <div style={{ margin: "8px 10px 0", fontSize: 11, color: "var(--coral)" }}>{prepareError}</div>
         )}
         <div style={{ flex: 1, overflowY: "auto", padding: "6px 0" }}>
-          {rows.map((row) => {
+          {visibleRows.map((row) => {
             const isDone = row.status === "done";
             const isSelected = selectedPath === row.path;
             const basename = row.path.split("/").pop() || row.path;
@@ -115,6 +152,11 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
             );
           })}
         </div>
+        {isTruncated && (
+          <div style={{ padding: "8px 12px", fontSize: 10.5, color: "var(--text-faint)", textAlign: "center", borderTop: "1px solid var(--line)", fontStyle: "italic", background: "var(--bg-deep)" }}>
+            Showing first {MAX_VISIBLE} files.<br />Use search to filter.
+          </div>
+        )}
       </aside>
       <section style={{ display: "flex", flexDirection: "column", overflow: "auto", background: "var(--bg-deep)", padding: 12, gap: 12 }}>
         {notice && (

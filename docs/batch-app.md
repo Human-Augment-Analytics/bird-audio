@@ -54,7 +54,8 @@ All commands are defined in `src-tauri/src/commands.rs` and registered in `main.
 | `cancel_session` | `() → ()` | Set the shared `AtomicBool` cancel flag; workers stop after the current file. |
 | `get_summary` | `(output_dir, session_id) → Result<Summary>` | Aggregate file/event counts for a session. |
 | `list_files` | `(output_dir, session_id) → Result<Vec<FileRow>>` | Per-file status rows (path, status, n_events, n_complete, error). |
-| `export_session` | `(output_dir, session_id, path, fmt, complete_only, confirmed_only) → Result<usize>` | Export events to CSV or JSON. `complete_only` filters by Stage B quality gate; `confirmed_only` filters by `review_status = 'confirmed'`. Returns row count. |
+| `export_session` | `(output_dir, session_id, path, fmt, complete_only, confirmed_only, metadata_path?) → Result<usize>` | Export events to CSV, JSON, warbleR, or Raven selection formats. `complete_only` filters by Stage B quality gate; `confirmed_only` filters by `review_status = 'confirmed'`. Optionally joins deployment metadata. Returns row count. |
+| `get_session_events` | `(output_dir, session_id) → Result<Vec<ExportedEvent>>` | Query all event rows for a given session, including file paths and ML confidence scores, used for diagnostic sanity check views. |
 | `check_health` | `(cwd?) → Result<HealthStatus>` | Verify Python env (torch/ultralytics/librosa), detect hardware device, check model files exist. |
 | `prepare_system` | `(cwd?) → Result<()>` | Run `uv sync` to install/update Python dependencies. |
 | `check_cache` | `(output_dir) → Result<bool>` | Returns true if `batch.db` exists in the output directory. |
@@ -97,7 +98,12 @@ All commands are defined in `src-tauri/src/commands.rs` and registered in `main.
 - Subscribes to `batch://progress` and `batch://done`.
 - Shows per-file progress via `FileTable`.
 - **Cancel** triggers `cancel_session`.
-- On completion, shows summary counts (`n_events`, `n_complete`, `n_retained`) and enables export and switch to Review.
+- On completion, shows summary counts (`n_events`, `n_complete`, `n_retained`).
+- **Interactive Sanity Checks** (`src/components/SanityCheckViews.tsx`) — Renders three interactive diagnostic dashboards upon completion using `get_session_events`:
+  1. *Elevation vs. Duration Plot*: A box-plot distribution showing the duration profile of detected events across Low (PSL), Medium (PSM), and High (PSH/H) altitude bands (extracted from filename recorder prefixes).
+  2. *Bout Activity Timeline*: A histogram visualizing density over time in 5-minute bins, helping spot activity peaks/bouts.
+  3. *Sortable Site Summaries*: A tabular breakdown of recorders/sites showing event count, mean duration, and median frequency, sortable to identify anomalies.
+- **Export Control Card**: Select file formats (CSV, JSON, warbleR CSV, Raven Selection Table `.txt`), optionally upload a deployment metadata CSV to join `elevation_m`, `lat`, `lon`, and `site_id` attributes (generating a summary CSV per site/session as well), and choose to export confirmed events only.
 
 **ManageCache** (`src/components/ManageCache.tsx`)
 

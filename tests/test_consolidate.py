@@ -98,3 +98,58 @@ def test_consolidate_absorbs_edge_singleton():
     events = cons.consolidate([a, b, c], P)
     assert len(events) == 1
     assert events[0].members == [0, 1, 2]
+
+
+def test_duplicate_merging_1d_time_iou_threshold():
+    # a and b are in different windows, high/low frequency (no affinity link).
+    # Time IoU is 1.8 / 2.2 = 0.818 >= 0.75 -> should merge.
+    a = make_det(0.0, 2.0, 1000, 2000, conf=0.9, window=0)
+    b = make_det(0.2, 2.2, 8000, 9000, conf=0.8, window=1)
+    events = cons.consolidate([a, b], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1]
+
+    # d and e have Time IoU of 1.4 / 2.6 = 0.538 < 0.75 -> should not merge.
+    d = make_det(0.0, 2.0, 1000, 2000, conf=0.9, window=0)
+    e = make_det(0.6, 2.6, 8000, 9000, conf=0.8, window=1)
+    events2 = cons.consolidate([d, e], P)
+    assert len(events2) == 2
+
+
+def test_duplicate_merging_tracks_and_singletons():
+    # a and b will link in Phase 1 (same box, adjacent windows) to form a track.
+    # c is a singleton in window 2 at high frequency (no tracking link).
+    # Track has interval [0.0, 2.0], c has interval [0.2, 2.2].
+    # Time IoU between track and c is 0.818 >= 0.75 -> should merge.
+    a = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=0, norm_left=0.5, norm_right=0.5)
+    b = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=1, norm_left=0.5, norm_right=0.5)
+    c = make_det(0.2, 2.2, 8000, 8100, conf=0.8, window=2)
+    events = cons.consolidate([a, b, c], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1, 2]
+
+
+def test_duplicate_merging_respects_overlap_preservation():
+    # a and b overlap in time (IoU = 0.818) but are in the SAME window (window=0).
+    # They should not be merged (overlap preservation constraint).
+    a = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=0)
+    b = make_det(0.2, 2.2, 8000, 8100, conf=0.8, window=0)
+    events = cons.consolidate([a, b], P)
+    assert len(events) == 2
+
+
+def test_duplicate_merging_iterative_disjoint_window_chains():
+    # a (window 0) and b (window 1) overlap with Time IoU >= 0.75
+    # b (window 1) and c (window 0) overlap with Time IoU >= 0.75
+    # a and c share window 0.
+    # One of them will merge with b, but the remaining one cannot merge (no shared windows allowed).
+    # Thus, we must end up with exactly 2 events.
+    a = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=0)
+    b = make_det(0.1, 2.1, 8000, 8100, conf=0.8, window=1)
+    c = make_det(0.0, 2.0, 5000, 5100, conf=0.9, window=0)
+    events = cons.consolidate([a, b, c], P)
+    assert len(events) == 2
+    # Ensure one event has 2 members, and the other has 1 member
+    lens = sorted([len(ev.members) for ev in events])
+    assert lens == [1, 2]
+
