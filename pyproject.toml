@@ -12,7 +12,17 @@ dependencies = [
     "soundfile>=0.12.1",
     "numpy<2.0.0",
     "opencv-python>=4.8.0",
+    "scipy>=1.13.1",
 ]
 
 [tool.uv]
 managed = true
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

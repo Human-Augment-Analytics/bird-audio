@@ -1,0 +1,155 @@
+from __future__ import annotations
+
+import math
+
+from birdpipe import consolidate as cons
+from birdpipe.constants import ConsolidationParams
+from tests.conftest import make_det
+
+P = ConsolidationParams()
+
+
+def test_affinity_identical_adjacent_windows():
+    # identical centred boxes, gap 1 -> A = 0.45+0.14+0.14+0.10+0.08+0.05*0.9 = 0.955
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.45, norm_right=0.55)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.45, norm_right=0.55)
+    assert math.isclose(cons.affinity(a, b, P), 0.955, abs_tol=1e-6)
+
+
+def test_affinity_window_gap_penalty():
+    # same boxes, gap 3 -> minus 0.03*(3-1)=0.06 -> 0.895
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.45, norm_right=0.55)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=3, norm_left=0.45, norm_right=0.55)
+    assert math.isclose(cons.affinity(a, b, P), 0.895, abs_tol=1e-6)
+
+
+def test_weighted_median_uniform():
+    assert cons.weighted_median([1.0, 2.0, 3.0], [1.0, 1.0, 1.0]) == 2.0
+
+
+def test_weighted_median_skewed():
+    # heavy weight on 3 pulls the median up
+    assert cons.weighted_median([1.0, 2.0, 3.0], [1.0, 1.0, 5.0]) == 3.0
+
+
+def test_fuse_conf_and_weighted_freq():
+    a = make_det(1.0, 2.0, 5000, 6000, conf=0.8, window=0, norm_left=0.4, norm_right=0.6)
+    b = make_det(1.1, 2.1, 5100, 6100, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
+    ev = cons._fuse([0, 1], [a, b], P)
+    assert ev.conf == 0.9                      # max member confidence
+    assert ev.f_low == 5100 and ev.f_high == 6100   # conf-weighted median favours b
+    assert ev.t_start == 1.1 and ev.t_end == 2.1
+    assert ev.members == [0, 1]
+
+
+def test_fuse_excludes_left_truncated_from_start_vote():
+    # a hugs the left window edge (norm_left=0.0 -> censored from start vote)
+    a = make_det(1.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.0, norm_right=0.5)
+    b = make_det(1.3, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.3, norm_right=0.6)
+    ev = cons._fuse([0, 1], [a, b], P)
+    assert ev.t_start == 1.3                    # a excluded -> b's start wins
+
+
+def test_link_kind_strong():
+    assert cons.link_kind(0.80, 0.60, 0.30, 0.90, 0.10, 1, 0.0, P) == "strong"
+
+
+def test_link_kind_support():
+    # below strong gates, above support gates, high max-conf satisfies edge requirement
+    assert cons.link_kind(0.65, 0.40, 0.15, 0.80, 0.05, 1, 0.0, P) == "support"
+
+
+def test_link_kind_support_needs_conf_or_edge():
+    # support thresholds met but max-conf<0.70 and e_ij<0.50 -> none
+    assert cons.link_kind(0.65, 0.40, 0.15, 0.50, 0.05, 1, 0.0, P) == "none"
+
+
+def test_link_kind_none():
+    assert cons.link_kind(0.50, 0.20, 0.05, 0.20, 0.01, 1, 0.0, P) == "none"
+
+
+def test_consolidate_merges_strong_pair():
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.45, norm_right=0.55)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.45, norm_right=0.55)
+    events = cons.consolidate([a, b], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1]
+
+
+def test_consolidate_same_window_never_merges():
+    # two detections in the SAME window must stay separate (overlap preservation)
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0)
+    events = cons.consolidate([a, b], P)
+    assert len(events) == 2
+
+
+def test_consolidate_ingest_conf_filter():
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.0005, window=0)
+    assert cons.consolidate([a], P) == []
+
+
+def test_consolidate_absorbs_edge_singleton():
+    # strong pair in windows 0,1 forms a track; a small near-edge box in window 2,
+    # fully contained in the envelope, is absorbed (not linked: IoU too low).
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.4, norm_right=0.6)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
+    c = make_det(0.1, 0.4, 5400, 5600, conf=0.5, window=2, norm_left=0.0, norm_right=0.06)
+    events = cons.consolidate([a, b, c], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1, 2]
+
+
+def test_duplicate_merging_1d_time_iou_threshold():
+    # a and b are in different windows, high/low frequency (no affinity link).
+    # Time IoU is 1.8 / 2.2 = 0.818 >= 0.75 -> should merge.
+    a = make_det(0.0, 2.0, 1000, 2000, conf=0.9, window=0)
+    b = make_det(0.2, 2.2, 8000, 9000, conf=0.8, window=1)
+    events = cons.consolidate([a, b], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1]
+
+    # d and e have Time IoU of 1.4 / 2.6 = 0.538 < 0.75 -> should not merge.
+    d = make_det(0.0, 2.0, 1000, 2000, conf=0.9, window=0)
+    e = make_det(0.6, 2.6, 8000, 9000, conf=0.8, window=1)
+    events2 = cons.consolidate([d, e], P)
+    assert len(events2) == 2
+
+
+def test_duplicate_merging_tracks_and_singletons():
+    # a and b will link in Phase 1 (same box, adjacent windows) to form a track.
+    # c is a singleton in window 2 at high frequency (no tracking link).
+    # Track has interval [0.0, 2.0], c has interval [0.2, 2.2].
+    # Time IoU between track and c is 0.818 >= 0.75 -> should merge.
+    a = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=0, norm_left=0.5, norm_right=0.5)
+    b = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=1, norm_left=0.5, norm_right=0.5)
+    c = make_det(0.2, 2.2, 8000, 8100, conf=0.8, window=2)
+    events = cons.consolidate([a, b, c], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1, 2]
+
+
+def test_duplicate_merging_respects_overlap_preservation():
+    # a and b overlap in time (IoU = 0.818) but are in the SAME window (window=0).
+    # They should not be merged (overlap preservation constraint).
+    a = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=0)
+    b = make_det(0.2, 2.2, 8000, 8100, conf=0.8, window=0)
+    events = cons.consolidate([a, b], P)
+    assert len(events) == 2
+
+
+def test_duplicate_merging_iterative_disjoint_window_chains():
+    # a (window 0) and b (window 1) overlap with Time IoU >= 0.75
+    # b (window 1) and c (window 0) overlap with Time IoU >= 0.75
+    # a and c share window 0.
+    # One of them will merge with b, but the remaining one cannot merge (no shared windows allowed).
+    # Thus, we must end up with exactly 2 events.
+    a = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=0)
+    b = make_det(0.1, 2.1, 8000, 8100, conf=0.8, window=1)
+    c = make_det(0.0, 2.0, 5000, 5100, conf=0.9, window=0)
+    events = cons.consolidate([a, b, c], P)
+    assert len(events) == 2
+    # Ensure one event has 2 members, and the other has 1 member
+    lens = sorted([len(ev.members) for ev in events])
+    assert lens == [1, 2]
+

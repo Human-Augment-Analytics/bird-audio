@@ -1,6 +1,13 @@
-# Bird Audio Analysis Pipeline
+# Bird Audio Analyzer
 
-A high-performance Python-native pipeline for automated detection and classification of bird vocalizations, specifically optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
+A desktop app for automated detection and curation of bird vocalizations from field recordings, optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
+
+Built with Tauri + React (frontend) and Rust + Python (backend). One app, two modes:
+
+- **Batch mode** — pick a folder, set thresholds, run the ML pipeline across all recordings.
+- **Review mode** — step through files, inspect detections on a spectrogram, confirm/reject/edit ML events and add manual annotations.
+
+> 📖 New here? Start with the **[Usage Tutorial](docs/USAGE.md)** — install, run a batch, review, and export, step by step.
 
 ## Technical Architecture
 
@@ -16,49 +23,67 @@ To ensure no calls are missed at window boundaries, the system uses a sliding wi
 ### 3. Native Inference
 The system uses `ultralytics.YOLO` to run native inference on PyTorch checkpoints (`.pt`).
 - **Hardware Acceleration**: Supports **CUDA** (NVIDIA), **MPS** (Apple Silicon), and **CPU**.
-- **Detection**: `buzz_localizer.pt` identifies candidate vocalizations.
-- **Classification**: `classifier.pt` refines species labels.
+- **Stage A — Detection**: `buzz_localizer.pt` identifies candidate buzz vocalizations per analysis window. Overlapping per-window detections are then consolidated into event-level tracks.
+- **Stage B — Completeness Curation**: `classifier.pt` scores each consolidated event for *completeness* — `p("full")`, i.e. how clean/fully-formed the buzz is — **not** species identity. This score drives the Quality Filter (`θ_B`). See [`docs/architecture.md`](docs/architecture.md) for the full pipeline and the `θ_A` / `θ_B` thresholds.
 
 ## Getting Started
 
-We recommend using [**uv**](https://github.com/astral-sh/uv) for environment and dependency management. It is significantly faster than `venv` or `conda` and handles ML dependencies reliably.
+### Prerequisites
 
-### 1. Installation
-Install `uv` if you haven't already:
-```bash
-curl -LsSf https://astral-sh/uv/install.sh | sh
-```
+- [**uv**](https://github.com/astral-sh/uv) for Python environment management
+- [Rust + Cargo](https://rustup.rs/) and [Tauri CLI](https://tauri.app/v1/guides/getting-started/prerequisites/)
+- Node.js (for the frontend)
 
-### 2. Environment Setup
-Initialize the environment and sync dependencies:
+### Install dependencies
+
 ```bash
+npm install
 uv sync
 ```
 
-### 3. Model Verification
-Verify the integrity of your local model checkpoints:
+### Run the desktop app
+
 ```bash
-uv run scripts/verify_models.py
+npm run tauri dev
 ```
 
-### 4. Running Inference
-Process an audio file through the pipeline. You can explicitly specify the device for acceleration:
+This launches the Tauri desktop window. The first run checks for Python dependencies and model files; click **Prepare System** if prompted.
+
+### Headless CLI (batch only)
+
+Run the batch pipeline without the GUI:
+
 ```bash
-# Auto-detect device (prefers CUDA/MPS)
-uv run scripts/ml_engine.py --input data/recording.WAV
-
-# Force CPU usage
-uv run scripts/ml_engine.py --input data/recording.WAV --device cpu
-
-# Use Apple Silicon (Metal)
-uv run scripts/ml_engine.py --input data/recording.WAV --device mps
+cargo run -p batch-core --bin batch -- \
+  --input data/ \
+  --device cpu \
+  --db output/batch.db \
+  --export-csv events.csv
 ```
+
+## App Modes
+
+### Batch Mode (Setup → Run)
+
+1. **Setup** — pick an input folder, output directory, and optionally adjust `θ_A` (detection sensitivity) and `θ_B` (quality filter).
+2. **Run** — the pipeline processes all audio files in the folder. Progress is shown per-file; results are aggregated into `batch.db`.
+3. **Export** — save detected events as CSV or JSON. The *confirmed only* option exports only events you have confirmed in Review mode.
+
+### Review Mode
+
+After a batch run, switch to Review mode to curate the ML detections:
+
+- A file list shows all processed recordings. Click a file to load its events.
+- Events are displayed on an interactive spectrogram with bounding boxes.
+- For each event you can: **confirm**, **reject**, or reset to *unreviewed*.
+- Edit an event's time/frequency bounds by dragging on the spectrogram.
+- Add manual events by drawing a box on the spectrogram.
+- Delete false positives entirely.
+- Use the confirmed-only export to output only your verified detections.
 
 ## Output Structure
 
-The pipeline generates several artifacts in the `--output` directory:
-- `vis/`: Spectrogram visualizations with detection bounding boxes (JPEG).
-- `crops/`: Raw spectrogram image segments (PNG).
-- `wav/`: Extracted audio clips of each detection.
-- `labels/`: YOLO-format detection coordinates and confidence scores (TXT).
-- `results.json`: (Future) Consolidated detection manifest.
+All state is stored in `<output_dir>/batch.db` (SQLite). The database is the durable checkpoint: runs are resumable and idempotent — done files are skipped on re-run, and events accumulate curation annotations across Review sessions.
+
+Export artifacts:
+- `events.csv` / `events.json`: detected (and optionally curated) events joined to file paths, ordered by path then time.

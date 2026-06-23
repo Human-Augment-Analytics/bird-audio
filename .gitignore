@@ -24,10 +24,16 @@ dev-dist
 *.sln
 *.sw?
 
+# Rust / Cargo (root workspace)
+/target
+
 # Tauri
 src-tauri/target
 src-tauri/binaries
 src-tauri/gen/schemas
+
+# Workflow scratch
+.planning/
 
 # Python
 __pycache__/
