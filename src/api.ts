@@ -46,5 +46,5 @@ export const onDone = (cb: (s: Summary) => void): Promise<UnlistenFn> =>
 export const getConcurrencySuggestion = (device: string) =>
   invoke<{ logical: number; recommended: number }>("concurrency_suggestion", { device });
 
-export const runImportCommand = (cmd: string, dest: string) =>
-  invoke<{ success: boolean; out: string }>("run_import_command", { cmd, dest });
+export const getFeatureFlags = (cwd?: string) =>
+  invoke<Record<string, any>>("get_feature_flags", { cwd });

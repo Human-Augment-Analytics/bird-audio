@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { checkHealth, pickFolder, prepareSystem, startSession, checkCache, getConcurrencySuggestion } from "../api";
+import { checkHealth, pickFolder, prepareSystem, startSession, checkCache, getConcurrencySuggestion, getFeatureFlags } from "../api";
 import type { StartOpts, StartResult, HealthStatus } from "../types";
 import ManageCache from "./ManageCache";
 
@@ -32,9 +32,8 @@ export default function SetupView({ onStarted }: Props) {
   const [concurrency, setConcurrency] = useState("1");
   const [logicalCores, setLogicalCores] = useState<number | null>(null);
   const [recommendedConcurrency, setRecommendedConcurrency] = useState<number | null>(null);
+  const [featureFlags, setFeatureFlags] = useState<Record<string, any> | null>(null);
   const [workerCmd, setWorkerCmd] = useState("uv run python scripts/ml_engine.py --worker");
-  const [importCmd, setImportCmd] = useState("rclone copy 'onedrive:Path/To/Folder' '{dest}' --progress");
-  const [importDest, setImportDest] = useState("");
   const [cwd, setCwd] = useState("");
   const [timeoutSecs, setTimeoutSecs] = useState(600);
   const [maxAttempts, setMaxAttempts] = useState(2);
@@ -52,16 +51,19 @@ export default function SetupView({ onStarted }: Props) {
   }, [cwd]);
 
   useEffect(() => {
-    // Fetch concurrency suggestion for the selected/internal device
-    const dev = health?.internal_device || device;
-    getConcurrencySuggestion(dev).then(info => {
+    // Fetch concurrency suggestion for the selected processor
+    getConcurrencySuggestion(device).then(info => {
       setLogicalCores(info.logical);
       setRecommendedConcurrency(info.recommended);
     }).catch(() => {
       setLogicalCores(null);
       setRecommendedConcurrency(null);
     });
-  }, [health, device]);
+    // fetch feature flags
+    getFeatureFlags(cwd || undefined).then(f => {
+      setFeatureFlags(f || {});
+    }).catch(() => setFeatureFlags({}));
+  }, [device, cwd]);
 
   useEffect(() => {
     if (input) {
@@ -79,24 +81,6 @@ export default function SetupView({ onStarted }: Props) {
       setHealth(h);
       if (h?.internal_device) {
         setDevice(h.internal_device);
-      }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleRunImport = async () => {
-    setBusy(true);
-    try {
-      const dest = importDest.trim() || input || ".";
-      const res = await runImportCommand(importCmd.replace('{dest}', dest), dest);
-      if (res && res.success) {
-        setError(null);
-        setInput(dest);
-      } else {
-        setError(`Import failed: ${res ? res.out : 'unknown'}`);
       }
     } catch (e) {
       setError(String(e));
@@ -166,14 +150,6 @@ export default function SetupView({ onStarted }: Props) {
             }}
           />
         )}
-        <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-          <div style={{ fontSize: 13, color: "var(--text-dim)" }}>Or import a folder from OneDrive (examples: use <code>rclone</code> or another tool). Provide an import command and target destination, then run it.</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input style={{ flex: 1 }} value={importCmd} onChange={e => setImportCmd(e.target.value)} />
-            <input style={{ width: 220 }} value={importDest} placeholder="destination path (optional)" onChange={e => setImportDest(e.target.value)} />
-            <button onClick={handleRunImport} disabled={busy}>{busy ? "Running…" : "Run Import"}</button>
-          </div>
-        </div>
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -206,8 +182,16 @@ export default function SetupView({ onStarted }: Props) {
              </Field>
              <Field label="Execution directory"><input value={cwd} placeholder="(Default)" onChange={e => setCwd(e.target.value)} /></Field>
              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-               <Field label="Parallel tasks" hint={recommendedConcurrency ? `Auto: ${recommendedConcurrency} (recommended)` : undefined}>
-                 <input type="number" value={concurrency} onChange={e => setConcurrency(e.target.value)} />
+               <Field
+                 label="Parallel tasks"
+                 hint={featureFlags && featureFlags.parallel_control === false ? "Locked by system policy" : (recommendedConcurrency ? `Auto: ${recommendedConcurrency} (recommended)` : undefined)}
+               >
+                 <input
+                   type="number"
+                   value={concurrency}
+                   onChange={e => setConcurrency(e.target.value)}
+                   disabled={featureFlags?.parallel_control === false}
+                 />
                </Field>
                {recommendedConcurrency !== null && (() => {
                  const cnum = concurrency.trim() === "" ? 0 : Number(concurrency);

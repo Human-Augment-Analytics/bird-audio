@@ -81,14 +81,21 @@ pub fn start_session(
     } else {
         opts.concurrency
     };
+    // Read feature flags from project cwd and enforce parallel_control
+    let proj_dir = resolve_cwd(opts.cwd.clone());
+    let flags = read_feature_flags(&proj_dir);
+    let conc_final = match flags.get("parallel_control") {
+        Some(v) if v == &serde_json::Value::Bool(false) => resolve_concurrency(&opts.device, None),
+        _ => conc,
+    };
     let sid = match store.find_resumable(&roots_json).map_err(|e| e.to_string())? {
         Some(id) => id,
         None => store
-            .create_session(&NewSession {
+                .create_session(&NewSession {
                 input_roots: &roots_json,
                 output_dir: &opts.output_dir,
                 device: &opts.device,
-                concurrency: conc as i64,
+                    concurrency: conc_final as i64,
                 theta_a: opts.theta_a,
                 theta_b: opts.theta_b,
             })
@@ -114,7 +121,7 @@ pub fn start_session(
         python: program,
         worker_args,
         cwd: Some(resolve_cwd(opts.cwd)),
-        concurrency: conc,
+        concurrency: conc_final,
         theta_a: opts.theta_a,
         theta_b: opts.theta_b,
         manifest_only: true,
@@ -210,22 +217,29 @@ pub fn concurrency_suggestion(device: String) -> Result<ConcurrencyInfo, String>
     Ok(ConcurrencyInfo { logical, recommended })
 }
 
-#[tauri::command]
-pub fn run_import_command(cmd: String, dest: String) -> Result<serde_json::Value, String> {
-    use std::process::Command;
-    // Run the provided command via shell. The caller should supply safe, trusted commands.
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .current_dir(&std::path::Path::new(&dest))
-        .output()
-        .map_err(|e| format!("failed to execute import command: {}", e))?;
+fn read_feature_flags(cwd: &std::path::Path) -> serde_json::Value {
+    use std::fs;
+    let p = cwd.join("config/features.yaml");
+    if !p.exists() {
+        return serde_json::json!({ "parallel_control": true, "import_enabled": true });
+    }
+    match fs::read_to_string(&p) {
+        Ok(s) => match serde_yaml::from_str::<serde_yaml::Value>(&s) {
+            Ok(v) => {
+                // convert to serde_json::Value
+                let j = serde_json::to_value(v).unwrap_or(serde_json::json!({}));
+                j
+            }
+            Err(_) => serde_json::json!({ "parallel_control": true, "import_enabled": true }),
+        },
+        Err(_) => serde_json::json!({ "parallel_control": true, "import_enabled": true }),
+    }
+}
 
-    let success = output.status.success();
-    let out = String::from_utf8_lossy(&output.stdout).to_string();
-    let err = String::from_utf8_lossy(&output.stderr).to_string();
-    let combined = if !err.is_empty() { format!("{}\nERR:\n{}", out, err) } else { out };
-    Ok(serde_json::json!({ "success": success, "out": combined }))
+#[tauri::command]
+pub fn get_feature_flags(cwd: Option<String>) -> Result<serde_json::Value, String> {
+    let dir = resolve_cwd(cwd);
+    Ok(read_feature_flags(&dir))
 }
 
 #[tauri::command]

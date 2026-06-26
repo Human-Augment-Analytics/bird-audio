@@ -19,7 +19,7 @@ pub fn run() {
             commands::get_cached_files,
             commands::delete_cached_files,
             commands::concurrency_suggestion,
-            commands::run_import_command,
+            commands::get_feature_flags,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
