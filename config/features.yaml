@@ -5,5 +5,8 @@
 # parallel workers; the system will pick a safe default.
 parallel_control: false
 
+# Hide the entire advanced settings section when false.
+advanced_settings: true
+
 # Allow import UI (external commands)
 import_enabled: false

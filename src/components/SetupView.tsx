@@ -162,48 +162,52 @@ export default function SetupView({ onStarted }: Props) {
       </div>
 
       <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16 }}>
-        <button
-          className="disclosure"
-          aria-expanded={showAdvanced}
-          onClick={() => setShowAdvanced(!showAdvanced)}
-        >
-          <span className="chev">▶</span> System internals
-        </button>
+        {featureFlags?.advanced_settings !== false && (
+          <>
+            <button
+              className="disclosure"
+              aria-expanded={showAdvanced}
+              onClick={() => setShowAdvanced(!showAdvanced)}
+            >
+              <span className="chev">▶</span> System internals
+            </button>
 
-        {showAdvanced && (
-          <div className="internals">
-             <Field label="Worker process command"><input value={workerCmd} onChange={e => setWorkerCmd(e.target.value)} /></Field>
-             <Field label="Processing engine">
-                <select value={device} onChange={e => setDevice(e.target.value)}>
-                  <option value="cpu">System Processor (CPU)</option>
-                  <option value="cuda">NVIDIA Graphics Card (CUDA)</option>
-                  <option value="mps">Apple Silicon (MPS)</option>
-                </select>
-             </Field>
-             <Field label="Execution directory"><input value={cwd} placeholder="(Default)" onChange={e => setCwd(e.target.value)} /></Field>
-             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                 {featureFlags?.parallel_control !== false && (
-                 <Field
-                   label="Parallel tasks"
-                   hint={recommendedConcurrency ? `Auto: ${recommendedConcurrency} (recommended)` : undefined}
-                 >
-                   <input
-                     type="number"
-                     value={concurrency}
-                     onChange={e => setConcurrency(e.target.value)}
-                   />
+            {showAdvanced && (
+              <div className="internals">
+                 <Field label="Worker process command"><input value={workerCmd} onChange={e => setWorkerCmd(e.target.value)} /></Field>
+                 <Field label="Processing engine">
+                    <select value={device} onChange={e => setDevice(e.target.value)}>
+                      <option value="cpu">System Processor (CPU)</option>
+                      <option value="cuda">NVIDIA Graphics Card (CUDA)</option>
+                      <option value="mps">Apple Silicon (MPS)</option>
+                    </select>
                  </Field>
-               )}
-               {recommendedConcurrency !== null && featureFlags?.parallel_control !== false && (() => {
-                 const cnum = concurrency.trim() === "" ? 0 : Number(concurrency);
-                 return cnum > 0 && cnum > recommendedConcurrency ? (
-                   <div className="error-text">Warning: using {cnum} parallel tasks exceeds the recommended {recommendedConcurrency} for this machine ({logicalCores ?? 'unknown'} logical cores). This may fully saturate the system.</div>
-                 ) : null;
-               })()}
-               <Field label="Timeout (s)"><input type="number" value={timeoutSecs} onChange={e => setTimeoutSecs(Number(e.target.value))} /></Field>
-               <Field label="Retry limit"><input type="number" value={maxAttempts} onChange={e => setMaxAttempts(Number(e.target.value))} /></Field>
-             </div>
-          </div>
+                 <Field label="Execution directory"><input value={cwd} placeholder="(Default)" onChange={e => setCwd(e.target.value)} /></Field>
+                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                   {featureFlags?.parallel_control !== false && (
+                     <Field
+                       label="Parallel tasks"
+                       hint={recommendedConcurrency ? `Auto: ${recommendedConcurrency} (recommended)` : undefined}
+                     >
+                       <input
+                         type="number"
+                         value={concurrency}
+                         onChange={e => setConcurrency(e.target.value)}
+                       />
+                     </Field>
+                   )}
+                   {recommendedConcurrency !== null && featureFlags?.parallel_control !== false && (() => {
+                     const cnum = concurrency.trim() === "" ? 0 : Number(concurrency);
+                     return cnum > 0 && cnum > recommendedConcurrency ? (
+                       <div className="error-text">Warning: using {cnum} parallel tasks exceeds the recommended {recommendedConcurrency} for this machine ({logicalCores ?? 'unknown'} logical cores). This may fully saturate the system.</div>
+                     ) : null;
+                   })()}
+                   <Field label="Timeout (s)"><input type="number" value={timeoutSecs} onChange={e => setTimeoutSecs(Number(e.target.value))} /></Field>
+                   <Field label="Retry limit"><input type="number" value={maxAttempts} onChange={e => setMaxAttempts(Number(e.target.value))} /></Field>
+                 </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
