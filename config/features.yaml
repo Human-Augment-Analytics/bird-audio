@@ -1,0 +1,12 @@
+## Feature flags for Bird Audio
+# Set flags to true/false to enable or disable features without code changes.
+
+# When `parallel_control` is false, the user cannot change the number of
+# parallel workers; the system will pick a safe default.
+parallel_control: false
+
+# Hide the entire advanced settings section when false.
+advanced_settings: true
+
+# Allow import UI (external commands)
+import_enabled: false
