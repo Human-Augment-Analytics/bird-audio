@@ -56,6 +56,8 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   const inProg = progress?.in_progress ?? summary?.in_progress ?? 0;
   const pct = total > 0 ? Math.round(((doneN + failedN) / total) * 100) : 0;
   const eta = throughput > 0 ? Math.round(pendingN / throughput) : null;
+  const lastMs = progress?.last_elapsed_ms ?? null;
+  const elapsedTotalMs = progress?.elapsed_ms_total ?? null;
 
   const nEvents = useCountUp(summary?.n_events ?? 0, done);
   const nComplete = useCountUp(summary?.n_complete ?? 0, done);
@@ -94,6 +96,8 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         <Stat label="Remaining" value={pendingN} color="var(--text-dim)" />
         <Stat label="Total" value={total} />
         <Stat label="Speed" value={`${throughput.toFixed(1)}/s`} />
+        <Stat label="Last (ms)" value={lastMs !== null ? String(lastMs) : "—"} />
+        <Stat label="Elapsed" value={elapsedTotalMs != null ? `${Math.round(elapsedTotalMs / 1000)}s` : "—"} />
         <Stat label="ETA" value={etaTime || "—"} />
       </div>
 

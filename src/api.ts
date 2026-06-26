@@ -42,3 +42,9 @@ export const onProgress = (cb: (p: Progress) => void): Promise<UnlistenFn> =>
   listen<Progress>("batch://progress", (e) => cb(e.payload));
 export const onDone = (cb: (s: Summary) => void): Promise<UnlistenFn> =>
   listen<Summary>("batch://done", (e) => cb(e.payload));
+
+export const getConcurrencySuggestion = (device: string) =>
+  invoke<{ logical: number; recommended: number }>("concurrency_suggestion", { device });
+
+export const runImportCommand = (cmd: string, dest: string) =>
+  invoke<{ success: boolean; out: string }>("run_import_command", { cmd, dest });

@@ -196,6 +196,38 @@ pub struct HealthStatus {
     pub details: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ConcurrencyInfo {
+    pub logical: usize,
+    pub recommended: usize,
+}
+
+#[tauri::command]
+pub fn concurrency_suggestion(device: String) -> Result<ConcurrencyInfo, String> {
+    use batch_core::concurrency::resolve_concurrency;
+    let logical = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let recommended = resolve_concurrency(&device, None);
+    Ok(ConcurrencyInfo { logical, recommended })
+}
+
+#[tauri::command]
+pub fn run_import_command(cmd: String, dest: String) -> Result<serde_json::Value, String> {
+    use std::process::Command;
+    // Run the provided command via shell. The caller should supply safe, trusted commands.
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .current_dir(&std::path::Path::new(&dest))
+        .output()
+        .map_err(|e| format!("failed to execute import command: {}", e))?;
+
+    let success = output.status.success();
+    let out = String::from_utf8_lossy(&output.stdout).to_string();
+    let err = String::from_utf8_lossy(&output.stderr).to_string();
+    let combined = if !err.is_empty() { format!("{}\nERR:\n{}", out, err) } else { out };
+    Ok(serde_json::json!({ "success": success, "out": combined }))
+}
+
 #[tauri::command]
 pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
     use std::process::Command;

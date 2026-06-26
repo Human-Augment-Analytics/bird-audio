@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { checkHealth, pickFolder, prepareSystem, startSession, checkCache } from "../api";
+import { checkHealth, pickFolder, prepareSystem, startSession, checkCache, getConcurrencySuggestion } from "../api";
 import type { StartOpts, StartResult, HealthStatus } from "../types";
 import ManageCache from "./ManageCache";
 
@@ -29,8 +29,12 @@ export default function SetupView({ onStarted }: Props) {
   
   // Advanced (Hidden)
   const [device, setDevice] = useState("cpu");
-  const [concurrency, setConcurrency] = useState(0);
+  const [concurrency, setConcurrency] = useState("1");
+  const [logicalCores, setLogicalCores] = useState<number | null>(null);
+  const [recommendedConcurrency, setRecommendedConcurrency] = useState<number | null>(null);
   const [workerCmd, setWorkerCmd] = useState("uv run python scripts/ml_engine.py --worker");
+  const [importCmd, setImportCmd] = useState("rclone copy 'onedrive:Path/To/Folder' '{dest}' --progress");
+  const [importDest, setImportDest] = useState("");
   const [cwd, setCwd] = useState("");
   const [timeoutSecs, setTimeoutSecs] = useState(600);
   const [maxAttempts, setMaxAttempts] = useState(2);
@@ -46,6 +50,18 @@ export default function SetupView({ onStarted }: Props) {
       }
     }).catch(() => setHealth(null));
   }, [cwd]);
+
+  useEffect(() => {
+    // Fetch concurrency suggestion for the selected/internal device
+    const dev = health?.internal_device || device;
+    getConcurrencySuggestion(dev).then(info => {
+      setLogicalCores(info.logical);
+      setRecommendedConcurrency(info.recommended);
+    }).catch(() => {
+      setLogicalCores(null);
+      setRecommendedConcurrency(null);
+    });
+  }, [health, device]);
 
   useEffect(() => {
     if (input) {
@@ -71,12 +87,39 @@ export default function SetupView({ onStarted }: Props) {
     }
   };
 
+  const handleRunImport = async () => {
+    setBusy(true);
+    try {
+      const dest = importDest.trim() || input || ".";
+      const res = await runImportCommand(importCmd.replace('{dest}', dest), dest);
+      if (res && res.success) {
+        setError(null);
+        setInput(dest);
+      } else {
+        setError(`Import failed: ${res ? res.out : 'unknown'}`);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const start = async () => {
     if (!input) { setError("Please select a recording folder."); return; }
     setBusy(true);
+    const concurrencyNum = concurrency.trim() === "" ? 0 : Number(concurrency);
     const opts: StartOpts = {
-      input, outputDir: input, device, concurrency, workerCmd,
-      cwd: cwd.trim() || null, thetaA, thetaB, timeoutSecs, maxAttempts,
+      input,
+      outputDir: input,
+      device,
+      concurrency: concurrencyNum,
+      workerCmd,
+      cwd: cwd.trim() || null,
+      thetaA,
+      thetaB,
+      timeoutSecs,
+      maxAttempts,
     };
     try {
       const result = await startSession(opts);
@@ -123,6 +166,14 @@ export default function SetupView({ onStarted }: Props) {
             }}
           />
         )}
+        <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+          <div style={{ fontSize: 13, color: "var(--text-dim)" }}>Or import a folder from OneDrive (examples: use <code>rclone</code> or another tool). Provide an import command and target destination, then run it.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={{ flex: 1 }} value={importCmd} onChange={e => setImportCmd(e.target.value)} />
+            <input style={{ width: 220 }} value={importDest} placeholder="destination path (optional)" onChange={e => setImportDest(e.target.value)} />
+            <button onClick={handleRunImport} disabled={busy}>{busy ? "Running…" : "Run Import"}</button>
+          </div>
+        </div>
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -155,7 +206,15 @@ export default function SetupView({ onStarted }: Props) {
              </Field>
              <Field label="Execution directory"><input value={cwd} placeholder="(Default)" onChange={e => setCwd(e.target.value)} /></Field>
              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-               <Field label="Parallel tasks"><input type="number" value={concurrency} onChange={e => setConcurrency(Number(e.target.value))} /></Field>
+               <Field label="Parallel tasks" hint={recommendedConcurrency ? `Auto: ${recommendedConcurrency} (recommended)` : undefined}>
+                 <input type="number" value={concurrency} onChange={e => setConcurrency(e.target.value)} />
+               </Field>
+               {recommendedConcurrency !== null && (() => {
+                 const cnum = concurrency.trim() === "" ? 0 : Number(concurrency);
+                 return cnum > 0 && cnum > recommendedConcurrency ? (
+                   <div className="error-text">Warning: using {cnum} parallel tasks exceeds the recommended {recommendedConcurrency} for this machine ({logicalCores ?? 'unknown'} logical cores). This may fully saturate the system.</div>
+                 ) : null;
+               })()}
                <Field label="Timeout (s)"><input type="number" value={timeoutSecs} onChange={e => setTimeoutSecs(Number(e.target.value))} /></Field>
                <Field label="Retry limit"><input type="number" value={maxAttempts} onChange={e => setMaxAttempts(Number(e.target.value))} /></Field>
              </div>
