@@ -3,7 +3,7 @@
 
 # When `parallel_control` is false, the user cannot change the number of
 # parallel workers; the system will pick a safe default.
-parallel_control: true
+parallel_control: false
 
 # Allow import UI (external commands)
-import_enabled: true
+import_enabled: false

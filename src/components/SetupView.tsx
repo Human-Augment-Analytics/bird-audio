@@ -182,18 +182,19 @@ export default function SetupView({ onStarted }: Props) {
              </Field>
              <Field label="Execution directory"><input value={cwd} placeholder="(Default)" onChange={e => setCwd(e.target.value)} /></Field>
              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-               <Field
-                 label="Parallel tasks"
-                 hint={featureFlags && featureFlags.parallel_control === false ? "Locked by system policy" : (recommendedConcurrency ? `Auto: ${recommendedConcurrency} (recommended)` : undefined)}
-               >
-                 <input
-                   type="number"
-                   value={concurrency}
-                   onChange={e => setConcurrency(e.target.value)}
-                   disabled={featureFlags?.parallel_control === false}
-                 />
-               </Field>
-               {recommendedConcurrency !== null && (() => {
+                 {featureFlags?.parallel_control !== false && (
+                 <Field
+                   label="Parallel tasks"
+                   hint={recommendedConcurrency ? `Auto: ${recommendedConcurrency} (recommended)` : undefined}
+                 >
+                   <input
+                     type="number"
+                     value={concurrency}
+                     onChange={e => setConcurrency(e.target.value)}
+                   />
+                 </Field>
+               )}
+               {recommendedConcurrency !== null && featureFlags?.parallel_control !== false && (() => {
                  const cnum = concurrency.trim() === "" ? 0 : Number(concurrency);
                  return cnum > 0 && cnum > recommendedConcurrency ? (
                    <div className="error-text">Warning: using {cnum} parallel tasks exceeds the recommended {recommendedConcurrency} for this machine ({logicalCores ?? 'unknown'} logical cores). This may fully saturate the system.</div>
