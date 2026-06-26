@@ -20,6 +20,13 @@ pub fn run() {
             commands::delete_cached_files,
             commands::concurrency_suggestion,
             commands::get_feature_flags,
+            commands::get_session_events,
+            commands::list_events,
+            commands::set_event_review,
+            commands::update_event_bounds,
+            commands::add_manual_event,
+            commands::delete_event,
+            commands::prepare_review,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

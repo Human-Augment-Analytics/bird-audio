@@ -58,3 +58,38 @@ export interface HealthStatus {
   internal_device: string;
   details: string;
 }
+
+export interface ExportedEvent {
+  path: string;
+  t_start: number;
+  t_end: number;
+  duration: number;
+  f_low: number;
+  f_high: number;
+  center_freq: number;
+  stage_a_conf: number;
+  completeness_score: number | null;
+  completeness_label: string | null;
+  retained: boolean | null;
+}
+
+export interface EventRow {
+  id: number;
+  file_id: number;
+  t_start: number;
+  t_end: number;
+  duration: number;
+  f_low: number;
+  f_high: number;
+  center_freq: number;
+  stage_a_conf: number;
+  completeness_score: number | null;
+  completeness_label: string | null;
+  retained: boolean | null;
+  n_members: number;
+  review_status: "unreviewed" | "confirmed" | "rejected";
+  source: "ml" | "manual";
+  label: string | null;
+  note: string | null;
+}
+

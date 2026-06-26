@@ -251,5 +251,30 @@ def consolidate(dets: Sequence[RawDetection], p: ConsolidationParams = Consolida
             d = dets[i]
             events.append(Event(d.t_start, d.t_end, d.f_low, d.f_high, d.conf, [i]))
 
+    # Phase 5: duplicate merging pass (1D Time IoU >= 0.75)
+    merged_any = True
+    while merged_any:
+        merged_any = False
+        m = len(events)
+        for i in range(m):
+            for j in range(i + 1, m):
+                # Respect overlap preservation: do not merge if they share any source windows
+                win_i = {dets[idx].window for idx in events[i].members}
+                win_j = {dets[idx].window for idx in events[j].members}
+                if not win_i.isdisjoint(win_j):
+                    continue
+
+                iou_t = g.interval_iou(events[i].t_start, events[i].t_end, events[j].t_start, events[j].t_end)
+                if iou_t >= 0.75:
+                    union_members = list(set(events[i].members) | set(events[j].members))
+                    new_event = _fuse(union_members, dets, p)
+                    events = [events[k] for k in range(m) if k != i and k != j] + [new_event]
+                    merged_any = True
+                    break
+            if merged_any:
+                break
+
     events.sort(key=lambda e: e.t_start)
     return events
+
+

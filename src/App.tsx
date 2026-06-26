@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import SetupView from "./components/SetupView";
 import RunView from "./components/RunView";
+import ReviewView from "./components/ReviewView";
+import appIcon from "./assets/app-icon.png";
 import { cancelSession, exportSession, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
 export default function App() {
   const [view, setView] = useState<"setup" | "run">("setup");
+  const [section, setSection] = useState<"batch" | "review">("batch");
   const [start, setStart] = useState<StartResult | null>(null);
   const [opts, setOpts] = useState<StartOpts | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -57,16 +60,20 @@ export default function App() {
         unD?.();
       }
     })();
-    const iv = setInterval(() => {
-      listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
-    }, 2000);
+    // Only poll listFiles if the run is active and not complete/cancelled
+    let iv: any;
+    if (!summary && !cancelled) {
+      iv = setInterval(() => {
+        listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
+      }, 2000);
+    }
     return () => {
       active = false;
       unP?.();
       unD?.();
-      clearInterval(iv);
+      if (iv) clearInterval(iv);
     };
-  }, [view, start, opts]);
+  }, [view, start, opts, summary, cancelled]);
 
   const onStarted = (result: StartResult, o: StartOpts) => {
     setStart(result);
@@ -86,13 +93,18 @@ export default function App() {
     cancelSession();
   };
 
-  const doExport = async (fmt: string, completeOnly: boolean) => {
+  const doExport = async (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => {
     if (!start || !opts) return;
-    const path = await pickSavePath(`events.${fmt}`);
+    const ext = fmt === "json" ? "json" : fmt === "raven" ? "txt" : "csv";
+    const path = await pickSavePath(`events.${ext}`);
     if (!path) return;
     try {
-      const n = await exportSession(opts.outputDir, start.session_id, path, fmt, completeOnly);
-      setNotice(`Exported ${n} rows to ${path}`);
+      const n = await exportSession(opts.outputDir, start.session_id, path, fmt, completeOnly, confirmedOnly, metadataPath);
+      let msg = `Exported ${n} rows to ${path}`;
+      if (metadataPath) {
+        msg += ` (and summary to ${path.replace(/\.[^/.]+$/, "")}_summary.csv)`;
+      }
+      setNotice(msg);
     } catch (e) {
       setNotice(`Export failed: ${String(e)}`);
     }
@@ -101,9 +113,7 @@ export default function App() {
   return (
     <main style={{ padding: "44px 24px 64px", maxWidth: 1040, margin: "0 auto" }}>
       <header className="masthead reveal">
-        <div className="equalizer" aria-hidden="true">
-          <span /><span /><span /><span /><span /><span /><span />
-        </div>
+        <img className="masthead-icon" src={appIcon} alt="Bird Audio Analyzer Icon" aria-hidden="true" />
         <div>
           <div className="eyebrow" style={{ marginBottom: 8 }}>Bioacoustic Analysis Pipeline</div>
           <h1>Bird Audio Analyzer</h1>
@@ -113,8 +123,15 @@ export default function App() {
         </div>
       </header>
 
-      {view === "setup" && <SetupView onStarted={onStarted} />}
-      {view === "run" && start && (
+      <nav className="reveal" style={{ display: "flex", gap: 8, margin: "0 0 16px" }}>
+        <button className={section === "batch" ? "primary" : "backlink"} onClick={() => setSection("batch")}>Batch</button>
+        <button className={section === "review" ? "primary" : "backlink"} onClick={() => setSection("review")} disabled={!start || !opts}>
+          Review
+        </button>
+      </nav>
+
+      {section === "batch" && view === "setup" && <SetupView onStarted={onStarted} />}
+      {section === "batch" && view === "run" && start && (
         <>
           <button className="backlink reveal" style={{ marginBottom: 14 }} disabled={summary === null && !cancelled} onClick={() => setView("setup")}>
             ← Start a new session
@@ -132,8 +149,12 @@ export default function App() {
             throughput={throughput}
             onExport={doExport}
             onCancel={handleCancel}
+            outputDir={opts?.outputDir || ""}
           />
         </>
+      )}
+      {section === "review" && start && opts && (
+        <ReviewView start={start} opts={opts} rows={rows} />
       )}
     </main>
   );

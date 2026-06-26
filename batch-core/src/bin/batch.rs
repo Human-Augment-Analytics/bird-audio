@@ -156,7 +156,7 @@ fn main() {
 
     if let Some(csv) = args.export_csv {
         let s = store.lock().unwrap();
-        let n = export_csv(&s, sid, &csv, false).expect("export csv");
+        let n = export_csv(&s, sid, &csv, false, false, None).expect("export csv");
         println!("Exported {} event rows to {}", n, csv.display());
     }
 }
