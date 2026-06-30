@@ -6,7 +6,10 @@
 parallel_control: false
 
 # Hide the entire advanced settings section when false.
-advanced_settings: true
+advanced_settings: false
 
 # Allow import UI (external commands)
 import_enabled: false
+
+# Card-based UI
+card_ui: true

@@ -1,14 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import SetupView from "./components/SetupView";
+import CardSetupView from "./components/CardSetupView";
 import RunView from "./components/RunView";
 import ReviewView from "./components/ReviewView";
 import appIcon from "./assets/app-icon.png";
-import { cancelSession, exportSession, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
+import { cancelSession, exportSession, getFeatureFlags, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
 export default function App() {
   const [view, setView] = useState<"setup" | "run">("setup");
   const [section, setSection] = useState<"batch" | "review">("batch");
+  const [cardUi, setCardUi] = useState(false);
+
+  useEffect(() => {
+    getFeatureFlags().then((f) => setCardUi(f?.card_ui === true)).catch(() => setCardUi(false));
+  }, []);
   const [start, setStart] = useState<StartResult | null>(null);
   const [opts, setOpts] = useState<StartOpts | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -123,14 +129,16 @@ export default function App() {
         </div>
       </header>
 
-      <nav className="reveal" style={{ display: "flex", gap: 8, margin: "0 0 16px" }}>
-        <button className={section === "batch" ? "primary" : "backlink"} onClick={() => setSection("batch")}>Batch</button>
+      <nav className="reveal" style={{ display: "flex", gap: 32, margin: "0 0 28px" }}>
+        <button className={section === "batch" ? "primary" : "backlink"} onClick={() => setSection("batch")}>Analyze</button>
         <button className={section === "review" ? "primary" : "backlink"} onClick={() => setSection("review")} disabled={!start || !opts}>
           Review
         </button>
       </nav>
 
-      {section === "batch" && view === "setup" && <SetupView onStarted={onStarted} />}
+      {section === "batch" && view === "setup" && (
+        cardUi ? <CardSetupView onStarted={onStarted} /> : <SetupView onStarted={onStarted} />
+      )}
       {section === "batch" && view === "run" && start && (
         <>
           <button className="backlink reveal" style={{ marginBottom: 14 }} disabled={summary === null && !cancelled} onClick={() => setView("setup")}>
