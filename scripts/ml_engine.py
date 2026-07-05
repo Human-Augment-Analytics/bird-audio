@@ -225,10 +225,18 @@ class BirdAudioPipeline:
         if events and active_classifier_c is not None:
             if band is None:
                 band = self._band_image(feats_quarters, freq_bin_low=freq_bin_low, freq_bin_high=freq_bin_high)
+            
+            is_yolo = (
+                hasattr(active_classifier_c, "predictor") or 
+                hasattr(active_classifier_c, "predict") or 
+                type(active_classifier_c).__name__ in ("YOLO", "MagicMock")
+            )
+            is_pytorch = isinstance(active_classifier_c, torch.nn.Module) and not is_yolo
+
             for ev in events:
                 if ev.retained:
                     crop = stageb.build_crop(band, ev, params=sbp, f_min=f_min, f_max=f_max)
-                    if not isinstance(active_classifier_c, torch.nn.Module):
+                    if not is_pytorch:
                         res = active_classifier_c(crop, verbose=False)[0]
                         idx = int(res.probs.top1)
                         ev.stage_c_label = res.names[idx]

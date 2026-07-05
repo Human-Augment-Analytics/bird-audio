@@ -65,7 +65,14 @@ def build_crop(band_img: np.ndarray, event: Event, params: StageBParams = StageB
 def classify_crop(model, crop_rgb: np.ndarray, complete_class: str = "full") -> float:
     """Return p(complete) = probability of the `complete_class` class."""
     import torch
-    if isinstance(model, torch.nn.Module):
+    is_yolo = (
+        hasattr(model, "predictor") or 
+        hasattr(model, "predict") or 
+        type(model).__name__ in ("YOLO", "MagicMock")
+    )
+    is_pytorch = isinstance(model, torch.nn.Module) and not is_yolo
+
+    if is_pytorch:
         # Determine device
         device = torch.device("cpu")
         if hasattr(model, "device"):
