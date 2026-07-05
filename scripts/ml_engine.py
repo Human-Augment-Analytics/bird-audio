@@ -44,25 +44,33 @@ class BirdAudioPipeline:
             
         print(f"Using device: {self.device}", file=sys.stderr)
         
-        print(f"Loading Localizer: {localizer_path}...", file=sys.stderr)
-        self.localizer = YOLO(localizer_path)
-        self.localizer.to(self.device)
+        self._model_cache = {}
+        self.localizer_path = localizer_path
+        self.classifier_path = classifier_path
         
-        self.classifier = None
-        if classifier_path and os.path.exists(classifier_path):
-            print(f"Loading Classifier: {classifier_path}...", file=sys.stderr)
-            # The classifier might be a standard PyTorch model or another YOLO
-            # For now we'll load it as standard torch if it fails YOLO check
-            try:
-                self.classifier = YOLO(classifier_path)
-                self.classifier.to(self.device)
-            except:
-                self.classifier = torch.load(classifier_path, map_location=self.device)
-                if hasattr(self.classifier, 'eval'):
-                    self.classifier.eval()
+        self.localizer = self._get_model(localizer_path)
+        self.classifier = self._get_model(classifier_path) if classifier_path else None
         
         self.conf = conf
         self.letterbox = LetterBox((160, 512), auto=False, stride=32)
+
+    def _get_model(self, path):
+        if not path:
+            return None
+        path_str = str(path)
+        if path_str not in self._model_cache:
+            if not os.path.exists(path_str):
+                raise FileNotFoundError(f"Model path does not exist: {path_str}")
+            print(f"Loading Model: {path_str}...", file=sys.stderr)
+            try:
+                model = YOLO(path_str)
+                model.to(self.device)
+            except Exception:
+                model = torch.load(path_str, map_location=self.device)
+                if hasattr(model, 'eval'):
+                    model.eval()
+            self._model_cache[path_str] = model
+        return self._model_cache[path_str]
 
     def preprocess(self, im: np.ndarray) -> torch.Tensor:
         """Prepare spectrogram image for model inference."""
@@ -82,18 +90,25 @@ class BirdAudioPipeline:
             d.mkdir(parents=True, exist_ok=True)
         return dirs
 
-    def _band_image(self, feats_quarters):
+    def _band_image(self, feats_quarters, freq_bin_low=88, freq_bin_high=248):
         """Whole-file flipped dB band image (uint8) for Stage B crops."""
-        mag = np.concatenate(feats_quarters, axis=1)[88:248]
+        mag = np.concatenate(feats_quarters, axis=1)[freq_bin_low:freq_bin_high]
         mag = mag[::-1].copy()
         db = librosa.amplitude_to_db(mag, ref=np.max)
         rng = db.max() - db.min()
         return np.clip((db - db.min()) * 255 / (rng + 1e-6), 0, 255).astype(np.uint8)
 
     def process_file(self, input_wav, output_root="output", write_artifacts=False,
-                     theta_a=0.0, theta_b=0.530306, emit_raw=False):
+                     theta_a=0.0, theta_b=0.530306, emit_raw=False,
+                     localizer=None, classifier=None, classifier_c=None,
+                     f_min_hz=None, f_max_hz=None):
         input_wav = Path(input_wav)
         t0 = time.time()
+
+        # Resolve active models dynamically
+        active_localizer = self._get_model(localizer) if localizer else self.localizer
+        active_classifier = self._get_model(classifier) if classifier else self.classifier
+        active_classifier_c = self._get_model(classifier_c) if classifier_c else None
 
         try:
             sr = librosa.get_samplerate(str(input_wav))
@@ -104,6 +119,13 @@ class BirdAudioPipeline:
         except Exception as e:
             return {"status": "error", "input": str(input_wav),
                     "message": f"Failed to open audio: {e}"}
+
+        # Dynamic frequency calculations
+        f_min = float(f_min_hz) if f_min_hz is not None else 4125.0
+        f_max = float(f_max_hz) if f_max_hz is not None else 11625.0
+        n_fft = 1024
+        freq_bin_low = int(np.round(f_min * n_fft / sr))
+        freq_bin_high = int(np.round(f_max * n_fft / sr))
 
         feats_quarters, samps_quarters = [], []
         for y_block in stream:
@@ -117,7 +139,7 @@ class BirdAudioPipeline:
 
         # Stage A: per-window object detection -> absolute detections
         for count in range(total_windows):
-            feats = np.concatenate(feats_quarters[count:count + 4], axis=1)[88:248]
+            feats = np.concatenate(feats_quarters[count:count + 4], axis=1)[freq_bin_low:freq_bin_high]
             feats = feats[::-1].copy()
             img = librosa.amplitude_to_db(feats, ref=np.max)
             rng = np.amax(img) - np.amin(img)
@@ -125,7 +147,7 @@ class BirdAudioPipeline:
             img_png = np.tile(np.expand_dims(img_png, -1), (1, 1, 3))
 
             input_ims = self.preprocess(img_png).to(self.device)
-            result = self.localizer(input_ims, imgsz=(160, 512), verbose=False, conf=self.conf)[0]
+            result = active_localizer(input_ims, imgsz=(160, 512), verbose=False, conf=self.conf)[0]
             boxes = result.boxes
             if len(boxes.xywhn) == 0:
                 continue
@@ -149,13 +171,26 @@ class BirdAudioPipeline:
 
         # Stage B: completeness curation on consolidated events
         sbp = StageBParams(theta_b=theta_b)
-        if events and self.classifier is not None:
-            band = self._band_image(feats_quarters)
+        band = None
+        if events and active_classifier is not None:
+            band = self._band_image(feats_quarters, freq_bin_low=freq_bin_low, freq_bin_high=freq_bin_high)
             for ev in events:
-                crop = stageb.build_crop(band, ev, params=sbp)
+                crop = stageb.build_crop(band, ev, params=sbp, f_min=f_min, f_max=f_max)
                 ev.completeness_score = stageb.classify_crop(
-                    self.classifier, crop, sbp.complete_class)
+                    active_classifier, crop, sbp.complete_class)
         rec.finalize_events(events, theta_a=theta_a, theta_b=theta_b)
+
+        # Stage C: classification on retained events
+        if events and active_classifier_c is not None:
+            if band is None:
+                band = self._band_image(feats_quarters, freq_bin_low=freq_bin_low, freq_bin_high=freq_bin_high)
+            for ev in events:
+                if ev.retained:
+                    crop = stageb.build_crop(band, ev, params=sbp, f_min=f_min, f_max=f_max)
+                    res = active_classifier_c(crop, verbose=False)[0]
+                    idx = int(res.probs.top1)
+                    ev.stage_c_label = res.names[idx]
+                    ev.stage_c_score = float(res.probs.data[idx])
 
         out = {
             "status": "success",
@@ -182,6 +217,9 @@ def main():
     parser.add_argument("--output", type=str, default="output", help="Output directory")
     parser.add_argument("--localizer", type=str, default="models/buzz_localizer.pt")
     parser.add_argument("--classifier", type=str, default="models/classifier.pt")
+    parser.add_argument("--classifier-c", type=str, help="Stage C classifier model path")
+    parser.add_argument("--f-min-hz", type=float, help="Dynamic minimum frequency in Hz")
+    parser.add_argument("--f-max-hz", type=float, help="Dynamic maximum frequency in Hz")
     parser.add_argument("--device", type=str, help="Device (cpu, cuda, mps)")
     parser.add_argument("--conf", type=float, default=0.25, help="Stage A confidence threshold")
     parser.add_argument("--theta-a", type=float, default=0.0, help="Export Stage A conf threshold")
@@ -203,6 +241,8 @@ def main():
     result = pipeline.process_file(
         args.input, args.output, write_artifacts=args.write_artifacts,
         theta_a=args.theta_a, theta_b=args.theta_b,
+        localizer=args.localizer, classifier=args.classifier, classifier_c=args.classifier_c,
+        f_min_hz=args.f_min_hz, f_max_hz=args.f_max_hz,
     )
     print(json.dumps(result, indent=2))
 

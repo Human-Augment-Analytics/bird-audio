@@ -30,4 +30,6 @@ def to_record(e: Event) -> Dict:
         "completeness_label": e.completeness_label,
         "retained": e.retained,
         "n_members": len(e.members),
+        "stage_c_score": e.stage_c_score,
+        "stage_c_label": e.stage_c_label,
     }

@@ -16,7 +16,8 @@ def freq_to_row(f_hz: float, n_rows: int,
 
 
 def build_crop(band_img: np.ndarray, event: Event, params: StageBParams = StageBParams(),
-               sec_per_frame: float = C.SEC_PER_FRAME) -> np.ndarray:
+               sec_per_frame: float = C.SEC_PER_FRAME,
+               f_min: float = C.F_MIN_HZ, f_max: float = C.F_MAX_HZ) -> np.ndarray:
     """Construct the standardized 288x288x3 Stage-B crop for one event.
 
     band_img: uint8 [n_rows, n_frames] flipped dB band spectrogram of the whole file.
@@ -43,8 +44,8 @@ def build_crop(band_img: np.ndarray, event: Event, params: StageBParams = StageB
         time_crop = band_img[:, fs:fe]
 
     # vertical crop to event frequency bounds
-    r_top = int(np.floor(freq_to_row(event.f_high, n_rows)))
-    r_bot = int(np.ceil(freq_to_row(event.f_low, n_rows)))
+    r_top = int(np.floor(freq_to_row(event.f_high, n_rows, f_min, f_max)))
+    r_bot = int(np.ceil(freq_to_row(event.f_low, n_rows, f_min, f_max)))
     r_top = max(0, min(r_top, n_rows - 1))
     r_bot = max(r_top + 1, min(r_bot, n_rows))
     crop = time_crop[r_top:r_bot, :]

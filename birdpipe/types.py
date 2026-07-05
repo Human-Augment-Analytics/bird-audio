@@ -43,6 +43,8 @@ class Event:
     completeness_score: Optional[float] = None
     completeness_label: Optional[str] = None
     retained: Optional[bool] = None
+    stage_c_score: Optional[float] = None
+    stage_c_label: Optional[str] = None
 
     @property
     def duration(self) -> float:
