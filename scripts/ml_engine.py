@@ -258,8 +258,8 @@ class BirdAudioPipeline:
                             elif hasattr(active_classifier_c, "classes"):
                                 names = active_classifier_c.classes
                             
-                            if names and idx in names:
-                                label = names[idx]
+                            if names and hasattr(names, "get") and (idx in names or str(idx) in names):
+                                label = names.get(idx) or names.get(str(idx))
                             elif names and isinstance(names, list) and idx < len(names):
                                 label = names[idx]
                             else:

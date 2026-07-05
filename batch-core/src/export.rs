@@ -11,7 +11,8 @@ use rusqlite::params;
 use crate::store::Store;
 
 const SELECT: &str = "SELECT f.path, e.t_start, e.t_end, e.duration, e.f_low, e.f_high, \
-     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label, e.retained, e.n_members, e.review_status \
+     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label, e.retained, e.n_members, e.review_status, \
+     e.stage_c_label, e.stage_c_score \
      FROM events e JOIN files f ON f.id=e.file_id \
      WHERE e.session_id=?1 \
        AND (?2=0 OR e.completeness_label='complete') \
@@ -43,6 +44,8 @@ struct Row {
     retained: Option<bool>,
     n_members: i64,
     review_status: String,
+    stage_c_label: Option<String>,
+    stage_c_score: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     site_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +73,8 @@ fn collect(store: &Store, session_id: i64, complete_only: bool, confirmed_only: 
             retained: r.get::<_, Option<i64>>(10)?.map(|v| v != 0),
             n_members: r.get(11)?,
             review_status: r.get(12)?,
+            stage_c_label: r.get(13)?,
+            stage_c_score: r.get(14)?,
             site_id: None,
             elevation_m: None,
             lat: None,
@@ -368,20 +373,22 @@ pub fn export_csv(
     if metadata_path.is_some() {
         writeln!(
             f,
-            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members,review_status,site_id,elevation_m,lat,lon"
+            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members,review_status,stage_c_label,stage_c_score,site_id,elevation_m,lat,lon"
         )?;
     } else {
         writeln!(
             f,
-            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members,review_status"
+            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members,review_status,stage_c_label,stage_c_score"
         )?;
     }
 
     for r in &rows {
+        let stage_c_lbl = r.stage_c_label.clone().unwrap_or_default();
+        let stage_c_scr = r.stage_c_score.map(|v| v.to_string()).unwrap_or_default();
         if metadata_path.is_some() {
             writeln!(
                 f,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 csv_escape(&r.path),
                 r.t_start,
                 r.t_end,
@@ -395,6 +402,8 @@ pub fn export_csv(
                 r.retained.map(|v| v.to_string()).unwrap_or_default(),
                 r.n_members,
                 csv_escape(&r.review_status),
+                csv_escape(&stage_c_lbl),
+                stage_c_scr,
                 csv_escape(r.site_id.as_deref().unwrap_or("")),
                 r.elevation_m.map(|v| v.to_string()).unwrap_or_default(),
                 r.lat.map(|v| v.to_string()).unwrap_or_default(),
@@ -403,7 +412,7 @@ pub fn export_csv(
         } else {
             writeln!(
                 f,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 csv_escape(&r.path),
                 r.t_start,
                 r.t_end,
@@ -416,7 +425,9 @@ pub fn export_csv(
                 r.completeness_label.clone().unwrap_or_default(),
                 r.retained.map(|v| v.to_string()).unwrap_or_default(),
                 r.n_members,
-                csv_escape(&r.review_status)
+                csv_escape(&r.review_status),
+                csv_escape(&stage_c_lbl),
+                stage_c_scr,
             )?;
         }
     }
@@ -570,6 +581,7 @@ mod tests {
                 t_start: 1.0, t_end: 2.0, duration: 1.0, f_low: 5000.0, f_high: 6000.0,
                 center_freq: 5500.0, stage_a_conf: 0.9, completeness_score: Some(0.8),
                 completeness_label: Some("complete".into()), retained: Some(true), n_members: 2,
+                ..Default::default()
             },
         ];
         s.record_success(
@@ -584,6 +596,7 @@ mod tests {
                 t_start: 3.0, t_end: 3.3, duration: 0.3, f_low: 5000.0, f_high: 6000.0,
                 center_freq: 5500.0, stage_a_conf: 0.4, completeness_score: Some(0.2),
                 completeness_label: Some("incomplete".into()), retained: Some(false), n_members: 1,
+                ..Default::default()
             },
         ];
         s.record_success(

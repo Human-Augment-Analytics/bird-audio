@@ -11,10 +11,16 @@ pub struct Request {
     pub theta_a: f64,
     pub theta_b: f64,
     pub emit_raw: bool,
+    pub localizer: Option<String>,
+    pub classifier: Option<String>,
+    pub classifier_c: Option<String>,
+    pub f_min_hz: Option<f64>,
+    pub f_max_hz: Option<f64>,
+    pub species_name: Option<String>,
 }
 
 /// One consolidated event record (mirrors Plan-1 `records.to_record`).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct EventRecord {
     pub t_start: f64,
     pub t_end: f64,
@@ -27,6 +33,14 @@ pub struct EventRecord {
     pub completeness_label: Option<String>,
     pub retained: Option<bool>,
     pub n_members: i64,
+    pub localizer: Option<String>,
+    pub classifier: Option<String>,
+    pub classifier_c: Option<String>,
+    pub f_min_hz: Option<f64>,
+    pub f_max_hz: Option<f64>,
+    pub species_name: Option<String>,
+    pub stage_c_label: Option<String>,
+    pub stage_c_score: Option<f64>,
 }
 
 /// A line emitted by a worker on stdout. Unknown extra keys are ignored.
@@ -85,6 +99,12 @@ mod tests {
             theta_a: 0.0,
             theta_b: 0.530306,
             emit_raw: false,
+            localizer: None,
+            classifier: None,
+            classifier_c: None,
+            f_min_hz: None,
+            f_max_hz: None,
+            species_name: None,
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["id"], 123);

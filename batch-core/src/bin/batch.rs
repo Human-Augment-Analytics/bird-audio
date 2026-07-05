@@ -134,6 +134,12 @@ fn main() {
         timeout: Duration::from_secs(args.timeout_secs),
         max_attempts: args.max_attempts,
         cancel: None,
+        localizer: None,
+        classifier: None,
+        classifier_c: None,
+        f_min_hz: None,
+        f_max_hz: None,
+        species_name: None,
     };
     println!("Running {} worker(s) (device={})...", conc, args.device);
 

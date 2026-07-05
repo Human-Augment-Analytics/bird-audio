@@ -21,6 +21,12 @@ fn cfg(concurrency: usize, timeout_ms: u64, max_attempts: i64) -> EngineConfig {
         timeout: Duration::from_millis(timeout_ms),
         max_attempts,
         cancel: None,
+        localizer: None,
+        classifier: None,
+        classifier_c: None,
+        f_min_hz: None,
+        f_max_hz: None,
+        species_name: None,
     }
 }
 

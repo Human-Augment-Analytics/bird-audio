@@ -140,6 +140,12 @@ mod tests {
             theta_a: 0.0,
             theta_b: 0.53,
             emit_raw: false,
+            localizer: None,
+            classifier: None,
+            classifier_c: None,
+            f_min_hz: None,
+            f_max_hz: None,
+            species_name: None,
         }
     }
 

@@ -35,6 +35,12 @@ pub struct StartOpts {
     pub theta_b: f64,
     pub timeout_secs: u64,
     pub max_attempts: i64,
+    pub localizer: Option<String>,
+    pub classifier: Option<String>,
+    pub classifier_c: Option<String>,
+    pub f_min_hz: Option<f64>,
+    pub f_max_hz: Option<f64>,
+    pub species_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -114,7 +120,7 @@ pub fn start_session(
                 concurrency: conc as i64,
                 theta_a: opts.theta_a,
                 theta_b: opts.theta_b,
-                species_name: None,
+                species_name: opts.species_name.as_deref(),
             })
             .map_err(|e| e.to_string())?,
     };
@@ -131,6 +137,33 @@ pub fn start_session(
     worker_args.push("--device".into());
     worker_args.push(opts.device.clone());
 
+    if let Some(ref loc) = opts.localizer {
+        if !loc.trim().is_empty() {
+            worker_args.push("--localizer".into());
+            worker_args.push(loc.clone());
+        }
+    }
+    if let Some(ref cls) = opts.classifier {
+        if !cls.trim().is_empty() {
+            worker_args.push("--classifier".into());
+            worker_args.push(cls.clone());
+        }
+    }
+    if let Some(ref clsc) = opts.classifier_c {
+        if !clsc.trim().is_empty() {
+            worker_args.push("--classifier-c".into());
+            worker_args.push(clsc.clone());
+        }
+    }
+    if let Some(f_min) = opts.f_min_hz {
+        worker_args.push("--f-min-hz".into());
+        worker_args.push(f_min.to_string());
+    }
+    if let Some(f_max) = opts.f_max_hz {
+        worker_args.push("--f-max-hz".into());
+        worker_args.push(f_max.to_string());
+    }
+
     let cancel = Arc::new(AtomicBool::new(false));
     *state.cancel.lock().unwrap() = Some(cancel.clone());
 
@@ -145,6 +178,12 @@ pub fn start_session(
         timeout: Duration::from_secs(opts.timeout_secs),
         max_attempts: opts.max_attempts,
         cancel: Some(cancel),
+        localizer: opts.localizer.clone(),
+        classifier: opts.classifier.clone(),
+        classifier_c: opts.classifier_c.clone(),
+        f_min_hz: opts.f_min_hz,
+        f_max_hz: opts.f_max_hz,
+        species_name: opts.species_name.clone(),
     };
 
     let store = Arc::new(Mutex::new(store));
@@ -244,13 +283,48 @@ fn find_uv() -> std::path::PathBuf {
 }
 
 #[tauri::command]
-pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
+pub async fn check_health(
+    cwd: Option<String>,
+    localizer: Option<String>,
+    classifier: Option<String>,
+    classifier_c: Option<String>,
+) -> Result<HealthStatus, String> {
     use std::process::Command;
     let dir = resolve_cwd(cwd);
 
     // Check models
-    let m1 = dir.join("models/buzz_localizer.pt").exists();
-    let m2 = dir.join("models/classifier.pt").exists();
+    let m1 = if let Some(ref loc) = localizer.as_ref().filter(|s| !s.trim().is_empty()) {
+        let p = std::path::Path::new(loc);
+        if p.is_absolute() {
+            p.exists()
+        } else {
+            dir.join(p).exists()
+        }
+    } else {
+        dir.join("models/buzz_localizer.pt").exists()
+    };
+
+    let m2 = if let Some(ref cls) = classifier.as_ref().filter(|s| !s.trim().is_empty()) {
+        let p = std::path::Path::new(cls);
+        if p.is_absolute() {
+            p.exists()
+        } else {
+            dir.join(p).exists()
+        }
+    } else {
+        dir.join("models/classifier.pt").exists()
+    };
+
+    let m3 = if let Some(ref clsc) = classifier_c.as_ref().filter(|s| !s.trim().is_empty()) {
+        let p = std::path::Path::new(clsc);
+        if p.is_absolute() {
+            p.exists()
+        } else {
+            dir.join(p).exists()
+        }
+    } else {
+        true
+    };
 
     // Check Python env
     let output = Command::new(find_uv())
@@ -276,7 +350,7 @@ pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
         _ => (false, "Not Found".to_string(), "cpu".to_string()),
     };
 
-    let details = if !m1 || !m2 {
+    let details = if !m1 || !m2 || !m3 {
         "Missing model files in models/ folder.".into()
     } else if !env_ok {
         "Python environment or dependencies missing. Click 'Prepare System'.".into()
@@ -286,7 +360,7 @@ pub async fn check_health(cwd: Option<String>) -> Result<HealthStatus, String> {
 
     Ok(HealthStatus {
         env_ok,
-        models_ok: m1 && m2,
+        models_ok: m1 && m2 && m3,
         device: device_info,
         internal_device,
         details,

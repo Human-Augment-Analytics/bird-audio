@@ -23,6 +23,12 @@ pub struct EngineConfig {
     pub timeout: Duration,
     pub max_attempts: i64,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub localizer: Option<String>,
+    pub classifier: Option<String>,
+    pub classifier_c: Option<String>,
+    pub f_min_hz: Option<f64>,
+    pub f_max_hz: Option<f64>,
+    pub species_name: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -83,6 +89,12 @@ fn worker_loop(
             theta_a: cfg.theta_a,
             theta_b: cfg.theta_b,
             emit_raw: false,
+            localizer: cfg.localizer.clone(),
+            classifier: cfg.classifier.clone(),
+            classifier_c: cfg.classifier_c.clone(),
+            f_min_hz: cfg.f_min_hz,
+            f_max_hz: cfg.f_max_hz,
+            species_name: cfg.species_name.clone(),
         };
 
         let w = worker.as_mut().unwrap();

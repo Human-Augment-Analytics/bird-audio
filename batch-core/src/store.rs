@@ -287,8 +287,9 @@ impl Store {
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO events(session_id, file_id, t_start, t_end, duration, f_low, f_high,
-                     center_freq, stage_a_conf, completeness_score, completeness_label, retained, n_members)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                     center_freq, stage_a_conf, completeness_score, completeness_label, retained, n_members,
+                     stage_c_label, stage_c_score)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             )?;
             for e in r.events {
                 stmt.execute(params![
@@ -305,6 +306,8 @@ impl Store {
                     e.completeness_label,
                     e.retained,
                     e.n_members,
+                    e.stage_c_label,
+                    e.stage_c_score,
                 ])?;
             }
         }
@@ -574,11 +577,15 @@ mod tests {
                 t_start: 1.0, t_end: 2.5, duration: 1.5, f_low: 5000.0, f_high: 6000.0,
                 center_freq: 5500.0, stage_a_conf: 0.9, completeness_score: Some(0.8),
                 completeness_label: Some("complete".into()), retained: Some(true), n_members: 3,
+                stage_c_label: Some("buzzing_warbler".into()),
+                stage_c_score: Some(0.95),
+                ..Default::default()
             },
             EventRecord {
                 t_start: 3.0, t_end: 3.4, duration: 0.4, f_low: 5000.0, f_high: 6000.0,
                 center_freq: 5500.0, stage_a_conf: 0.5, completeness_score: Some(0.2),
                 completeness_label: Some("incomplete".into()), retained: Some(false), n_members: 1,
+                ..Default::default()
             },
         ];
         s.record_success(
@@ -586,6 +593,12 @@ mod tests {
             &RecordedResult { n_events: 2, n_complete: 1, n_retained: 1, elapsed_ms: 42, events: &events },
         ).unwrap();
         assert_eq!(s.file_status(c.file_id).unwrap().as_deref(), Some("done"));
+        let evs = s.list_events(sid, "/data/a.wav").unwrap();
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[0].stage_c_label.as_deref(), Some("buzzing_warbler"));
+        assert_eq!(evs[0].stage_c_score, Some(0.95));
+        assert_eq!(evs[1].stage_c_label, None);
+        assert_eq!(evs[1].stage_c_score, None);
         let sum = s.summary(sid).unwrap();
         assert_eq!(sum.done, 1);
         assert_eq!(sum.n_events, 2);
@@ -676,10 +689,10 @@ mod tests {
         let evs = vec![
             EventRecord { t_start: 1.0, t_end: 2.0, duration: 1.0, f_low: 4000.0, f_high: 8000.0,
                 center_freq: 6000.0, stage_a_conf: 0.9, completeness_score: Some(0.7),
-                completeness_label: Some("complete".into()), retained: Some(true), n_members: 2 },
+                completeness_label: Some("complete".into()), retained: Some(true), n_members: 2, ..Default::default() },
             EventRecord { t_start: 3.0, t_end: 3.5, duration: 0.5, f_low: 4000.0, f_high: 8000.0,
                 center_freq: 6000.0, stage_a_conf: 0.6, completeness_score: Some(0.3),
-                completeness_label: Some("incomplete".into()), retained: Some(false), n_members: 1 },
+                completeness_label: Some("incomplete".into()), retained: Some(false), n_members: 1, ..Default::default() },
         ];
         store.record_success(sid, c.file_id,
             &RecordedResult { n_events: 2, n_complete: 1, n_retained: 1, elapsed_ms: 10, events: &evs }).unwrap();
