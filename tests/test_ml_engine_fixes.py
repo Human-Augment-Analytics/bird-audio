@@ -227,4 +227,40 @@ def test_stageb_classify_crop():
     assert abs(prob_yolo - 0.9) < 1e-5
 
 
+def test_f_max_nyquist_capping_and_map_box(tmp_path):
+    import numpy as np
+    import soundfile as sf
+    from birdpipe import coords
+    
+    wav_path = tmp_path / "test_nyquist.wav"
+    sr = 16000
+    y = np.zeros(int(10.0 * sr), dtype=np.float32)
+    sf.write(str(wav_path), y, sr)
+
+    from tests.test_stage_c import FakeResult
+    mock_localizer = MagicMock()
+    mock_localizer.return_value = [FakeResult([[0.5, 0.5, 0.2, 0.2]], [0.85])]
+
+    with patch("scripts.ml_engine.YOLO", return_value=mock_localizer), \
+         patch("scripts.ml_engine.os.path.exists", return_value=True), \
+         patch("scripts.ml_engine.coords.map_box", wraps=coords.map_box) as mock_map_box:
+        
+        pipeline = BirdAudioPipeline(localizer_path="dummy_localizer.pt", classifier_path=None, device="cpu")
+
+        # requested f_max_hz is 12000, which is higher than Nyquist (8000.0)
+        result = pipeline.process_file(
+            str(wav_path),
+            f_min_hz=2000.0,
+            f_max_hz=12000.0,
+            localizer="dummy_localizer.pt"
+        )
+        
+        assert result["status"] == "success"
+        assert mock_map_box.call_count > 0
+        _, called_kwargs = mock_map_box.call_args
+        assert called_kwargs.get("f_max") == 8000.0
+        assert called_kwargs.get("f_min") == 2000.0
+
+
+
 

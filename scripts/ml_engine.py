@@ -153,8 +153,13 @@ class BirdAudioPipeline:
             return {"status": "error", "input": str(input_wav),
                     "message": f"Failed to open audio: {e}"}
 
-        if f_min >= sr / 2.0:
-            return {"status": "error", "message": f"Minimum frequency f_min_hz={f_min} must be below the Nyquist frequency={sr / 2.0}"}
+        # Cap f_max at Nyquist frequency (sr / 2.0)
+        nyquist = sr / 2.0
+        if f_max > nyquist:
+            f_max = nyquist
+
+        if f_min >= nyquist:
+            return {"status": "error", "message": f"Minimum frequency f_min_hz={f_min} must be below the Nyquist frequency={nyquist}"}
 
         n_fft = 1024
         freq_bin_low = int(np.round(f_min * n_fft / sr))
@@ -200,7 +205,7 @@ class BirdAudioPipeline:
             confs = boxes.conf.cpu().numpy()
             for k in range(len(xywhn)):
                 x, y, w, h = (float(v) for v in xywhn[k])
-                raw.append(coords.map_box(x, y, w, h, float(confs[k]), count))
+                raw.append(coords.map_box(x, y, w, h, float(confs[k]), count, f_min=f_min, f_max=f_max))
 
         # Consolidation -> event tracks
         events = consolidate.consolidate(raw, ConsolidationParams())
