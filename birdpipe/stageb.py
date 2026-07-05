@@ -64,7 +64,38 @@ def build_crop(band_img: np.ndarray, event: Event, params: StageBParams = StageB
 
 def classify_crop(model, crop_rgb: np.ndarray, complete_class: str = "full") -> float:
     """Return p(complete) = probability of the `complete_class` class."""
-    res = model(crop_rgb, verbose=False)[0]
-    names = res.names
-    idx = next(k for k, v in names.items() if v == complete_class)
-    return float(res.probs.data[idx])
+    import torch
+    if isinstance(model, torch.nn.Module) and not hasattr(model, 'names'):
+        # Determine device
+        device = torch.device("cpu")
+        if hasattr(model, "device"):
+            device = model.device
+        else:
+            try:
+                device = next(model.parameters()).device
+            except (StopIteration, AttributeError):
+                pass
+
+        # Convert crop_rgb to shape (1, 3, 288, 288) scaled to [0, 1]
+        crop_t = crop_rgb.transpose((2, 0, 1))
+        crop_t = np.ascontiguousarray(crop_t)
+        crop_tensor = torch.from_numpy(crop_t).float().unsqueeze(0).to(device)
+        crop_tensor /= 255.0
+
+        with torch.no_grad():
+            outputs = model(crop_tensor)
+
+        if isinstance(outputs, tuple):
+            outputs = outputs[0]
+
+        # Extract prediction probability
+        out_features = outputs.shape[-1]
+        if out_features == 1:
+            return float(torch.sigmoid(outputs).item())
+        else:
+            return float(torch.softmax(outputs, dim=-1)[..., 1].item())
+    else:
+        res = model(crop_rgb, verbose=False)[0]
+        names = res.names
+        idx = next(k for k, v in names.items() if v == complete_class)
+        return float(res.probs.data[idx])

@@ -159,4 +159,72 @@ def test_non_yolo_stage_c_classifier_failing(tmp_path):
                 assert event["stage_c_score"] == 0.0
 
 
+def test_narrow_and_nyquist_frequency_bounds(tmp_path):
+    import numpy as np
+    import soundfile as sf
+    from scripts.ml_engine import BirdAudioPipeline
+    
+    wav_path = tmp_path / "test_bounds.wav"
+    sr = 16000
+    y = np.zeros(int(1.0 * sr), dtype=np.float32)
+    sf.write(str(wav_path), y, sr)
+
+    pipeline = BirdAudioPipeline(localizer_path=None, classifier_path=None)
+    
+    # 1. Minimum frequency exceeding Nyquist (sr/2.0 = 8000 Hz)
+    res_nyquist = pipeline.process_file(str(wav_path), f_min_hz=9000.0, f_max_hz=10000.0)
+    assert res_nyquist["status"] == "error"
+    assert "must be below the Nyquist frequency" in res_nyquist["message"]
+
+    # 2. Too narrow frequency range resulting in less than 1 bin
+    # For n_fft = 1024, sr = 16000, 1 bin maps to 16000 / 1024 = 15.625 Hz.
+    # If f_min = 2000 and f_max = 2005: both round to index round(2000 * 1024 / 16000) = 128.
+    res_narrow = pipeline.process_file(str(wav_path), f_min_hz=2000.0, f_max_hz=2005.0)
+    assert res_narrow["status"] == "error"
+    assert "maps to less than 1 bin" in res_narrow["message"]
+
+
+class DummyStageBPyTorchModel(torch.nn.Module):
+    def __init__(self, out_features=2):
+        super().__init__()
+        self.out_features = out_features
+        self.dummy_param = torch.nn.Parameter(torch.zeros(1))
+    def forward(self, x):
+        # x is expected to be [1, 3, 288, 288]
+        assert x.shape == (1, 3, 288, 288)
+        if self.out_features == 1:
+            return torch.tensor([[10.0]])
+        else:
+            return torch.tensor([[-10.0, 10.0]])
+
+
+def test_stageb_classify_crop():
+    from birdpipe import stageb
+    
+    # Test standard PyTorch model (dim=1)
+    model_dim1 = DummyStageBPyTorchModel(out_features=1)
+    crop = np.zeros((288, 288, 3), dtype=np.uint8)
+    prob1 = stageb.classify_crop(model_dim1, crop)
+    assert isinstance(prob1, float)
+    assert prob1 > 0.99
+    
+    # Test standard PyTorch model (dim=2)
+    model_dim2 = DummyStageBPyTorchModel(out_features=2)
+    prob2 = stageb.classify_crop(model_dim2, crop)
+    assert isinstance(prob2, float)
+    assert prob2 > 0.99
+    
+    # Test YOLO-like model mock
+    mock_yolo_model = MagicMock()
+    mock_yolo_result = MagicMock()
+    mock_yolo_result.names = {0: "not_full", 1: "full"}
+    mock_yolo_result.probs.data = torch.tensor([0.1, 0.9])
+    mock_yolo_model.return_value = [mock_yolo_result]
+    mock_yolo_model.names = {0: "not_full", 1: "full"}
+    
+    prob_yolo = stageb.classify_crop(mock_yolo_model, crop, complete_class="full")
+    assert isinstance(prob_yolo, float)
+    assert abs(prob_yolo - 0.9) < 1e-5
+
+
 

@@ -152,9 +152,16 @@ class BirdAudioPipeline:
         except Exception as e:
             return {"status": "error", "input": str(input_wav),
                     "message": f"Failed to open audio: {e}"}
+
+        if f_min >= sr / 2.0:
+            return {"status": "error", "message": f"Minimum frequency f_min_hz={f_min} must be below the Nyquist frequency={sr / 2.0}"}
+
         n_fft = 1024
         freq_bin_low = int(np.round(f_min * n_fft / sr))
         freq_bin_high = int(np.round(f_max * n_fft / sr))
+
+        if freq_bin_high - freq_bin_low < 1:
+            return {"status": "error", "message": f"Frequency range maps to less than 1 bin: low={freq_bin_low}, high={freq_bin_high}"}
 
         feats_quarters, samps_quarters = [], []
         for y_block in stream:
