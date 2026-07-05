@@ -16,6 +16,7 @@ pub struct NewSession<'a> {
     pub concurrency: i64,
     pub theta_a: f64,
     pub theta_b: f64,
+    pub species_name: Option<&'a str>,
 }
 
 /// A file claimed for processing.
@@ -77,6 +78,8 @@ pub struct EventRow {
     pub source: String,
     pub label: Option<String>,
     pub note: Option<String>,
+    pub stage_c_label: Option<String>,
+    pub stage_c_score: Option<f64>,
 }
 
 const SCHEMA: &str = r#"
@@ -90,7 +93,8 @@ CREATE TABLE IF NOT EXISTS sessions(
   theta_a REAL NOT NULL,
   theta_b REAL NOT NULL,
   total_files INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'running'
+  status TEXT NOT NULL DEFAULT 'running',
+  species_name TEXT DEFAULT 'Hume''s Leaf Warbler'
 );
 CREATE TABLE IF NOT EXISTS files(
   id INTEGER PRIMARY KEY,
@@ -116,32 +120,51 @@ CREATE TABLE IF NOT EXISTS events(
   completeness_score REAL,
   completeness_label TEXT,
   retained INTEGER,
-  n_members INTEGER
+  n_members INTEGER,
+  stage_c_label TEXT,
+  stage_c_score REAL
 );
 CREATE INDEX IF NOT EXISTS idx_files_session_status ON files(session_id, status);
 CREATE INDEX IF NOT EXISTS idx_events_file ON events(file_id);
 CREATE INDEX IF NOT EXISTS idx_events_session_label ON events(session_id, completeness_label, retained);
 "#;
 
-/// Idempotent migration: add curation columns to `events` if not already present.
+/// Idempotent migration: add curation and stage c columns to `events` and `sessions` if not already present.
 fn ensure_curation_columns(conn: &Connection) -> rusqlite::Result<()> {
-    let existing: Vec<String> = {
+    let existing_events: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(events)")?;
         let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
         names.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    let columns: &[(&str, &str)] = &[
+    let event_columns: &[(&str, &str)] = &[
         ("review_status", "TEXT NOT NULL DEFAULT 'unreviewed'"),
         ("source",        "TEXT NOT NULL DEFAULT 'ml'"),
         ("label",         "TEXT"),
         ("note",          "TEXT"),
         ("reviewed_at",   "TEXT"),
+        ("stage_c_label", "TEXT"),
+        ("stage_c_score", "REAL"),
     ];
-    for (col, def) in columns {
-        if !existing.iter().any(|n| n == col) {
+    for (col, def) in event_columns {
+        if !existing_events.iter().any(|n| n == col) {
             conn.execute_batch(&format!("ALTER TABLE events ADD COLUMN {col} {def}"))?;
         }
     }
+
+    let existing_sessions: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+        let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        names.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let session_columns: &[(&str, &str)] = &[
+        ("species_name", "TEXT DEFAULT 'Hume''s Leaf Warbler'"),
+    ];
+    for (col, def) in session_columns {
+        if !existing_sessions.iter().any(|n| n == col) {
+            conn.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {col} {def}"))?;
+        }
+    }
+
     Ok(())
 }
 
@@ -163,9 +186,17 @@ impl Store {
 
     pub fn create_session(&self, s: &NewSession) -> rusqlite::Result<i64> {
         self.conn.execute(
-            "INSERT INTO sessions(input_roots, output_dir, device, concurrency, theta_a, theta_b)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            params![s.input_roots, s.output_dir, s.device, s.concurrency, s.theta_a, s.theta_b],
+            "INSERT INTO sessions(input_roots, output_dir, device, concurrency, theta_a, theta_b, species_name)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                s.input_roots,
+                s.output_dir,
+                s.device,
+                s.concurrency,
+                s.theta_a,
+                s.theta_b,
+                s.species_name
+            ],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -355,7 +386,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.file_id, e.t_start, e.t_end, e.duration, e.f_low, e.f_high,
                     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label,
-                    e.retained, e.n_members, e.review_status, e.source, e.label, e.note
+                    e.retained, e.n_members, e.review_status, e.source, e.label, e.note,
+                    e.stage_c_label, e.stage_c_score
              FROM events e
              WHERE e.file_id = (SELECT id FROM files WHERE session_id=?1 AND path=?2)
              ORDER BY e.t_start",
@@ -367,6 +399,7 @@ impl Store {
                 stage_a_conf: r.get(8)?, completeness_score: r.get(9)?, completeness_label: r.get(10)?,
                 retained: r.get::<_, Option<i64>>(11)?.map(|v| v != 0), n_members: r.get(12)?,
                 review_status: r.get(13)?, source: r.get(14)?, label: r.get(15)?, note: r.get(16)?,
+                stage_c_label: r.get(17)?, stage_c_score: r.get(18)?,
             })
         })?;
         rows.collect()
@@ -476,6 +509,7 @@ mod tests {
                 concurrency: 2,
                 theta_a: 0.0,
                 theta_b: 0.53,
+                species_name: None,
             })
             .unwrap()
     }
@@ -609,7 +643,7 @@ mod tests {
     fn test_granular_cache_deletion() {
         let store = Store::open_memory().unwrap();
         let sid = store.create_session(&NewSession {
-            input_roots: "[]", output_dir: "out", device: "cpu", concurrency: 1, theta_a: 0.1, theta_b: 0.5
+            input_roots: "[]", output_dir: "out", device: "cpu", concurrency: 1, theta_a: 0.1, theta_b: 0.5, species_name: None
         }).unwrap();
         store.add_files(sid, &[PathBuf::from("a.wav"), PathBuf::from("b.wav")]).unwrap();
 
@@ -721,5 +755,18 @@ mod tests {
         let after = s.list_events(sid, "/data/x.wav").unwrap();
         assert_eq!(after.len(), 1);
         assert!(after.iter().all(|r| r.id != eid));
+    }
+
+    #[test]
+    fn test_migration_includes_stage_c_columns() {
+        let store = Store::open_memory().unwrap();
+        let mut stmt = store.conn.prepare("PRAGMA table_info(events)").unwrap();
+        let cols: Vec<String> = stmt.query_map([], |r| r.get(1)).unwrap().map(|x| x.unwrap()).collect();
+        assert!(cols.contains(&"stage_c_label".to_string()));
+        assert!(cols.contains(&"stage_c_score".to_string()));
+
+        let mut stmt = store.conn.prepare("PRAGMA table_info(sessions)").unwrap();
+        let cols: Vec<String> = stmt.query_map([], |r| r.get(1)).unwrap().map(|x| x.unwrap()).collect();
+        assert!(cols.contains(&"species_name".to_string()));
     }
 }

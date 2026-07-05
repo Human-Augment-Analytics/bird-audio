@@ -34,6 +34,7 @@ fn session_with(paths: &[&str]) -> (Arc<Mutex<Store>>, i64) {
             concurrency: 2,
             theta_a: 0.0,
             theta_b: 0.53,
+            species_name: None,
         })
         .unwrap();
     let pbs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();

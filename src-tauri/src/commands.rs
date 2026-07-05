@@ -114,6 +114,7 @@ pub fn start_session(
                 concurrency: conc as i64,
                 theta_a: opts.theta_a,
                 theta_b: opts.theta_b,
+                species_name: None,
             })
             .map_err(|e| e.to_string())?,
     };

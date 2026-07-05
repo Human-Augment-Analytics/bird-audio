@@ -107,6 +107,7 @@ fn main() {
                 concurrency: conc as i64,
                 theta_a: args.theta_a,
                 theta_b: args.theta_b,
+                species_name: None,
             })
             .expect("create_session"),
     };

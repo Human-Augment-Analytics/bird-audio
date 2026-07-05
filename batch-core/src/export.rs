@@ -557,6 +557,7 @@ mod tests {
                 concurrency: 1,
                 theta_a: 0.0,
                 theta_b: 0.53,
+                species_name: None,
             })
             .unwrap();
         s.add_files(sid, &[
