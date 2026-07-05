@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import constants as C
-from .constants import StageBParams
+from .constants import StageBParams, is_yolo_model
 from .types import Event
 
 
@@ -65,12 +65,8 @@ def build_crop(band_img: np.ndarray, event: Event, params: StageBParams = StageB
 def classify_crop(model, crop_rgb: np.ndarray, complete_class: str = "full") -> float:
     """Return p(complete) = probability of the `complete_class` class."""
     import torch
-    is_yolo = (
-        hasattr(model, "predictor") or 
-        hasattr(model, "predict") or 
-        type(model).__name__ in ("YOLO", "MagicMock")
-    )
-    is_pytorch = isinstance(model, torch.nn.Module) and not is_yolo
+    is_yolo = is_yolo_model(model)
+    is_pytorch = isinstance(model, torch.nn.Module) and not is_yolo_model(model)
 
     if is_pytorch:
         # Determine device
@@ -100,7 +96,29 @@ def classify_crop(model, crop_rgb: np.ndarray, complete_class: str = "full") -> 
         if out_features == 1:
             return float(torch.sigmoid(outputs).item())
         else:
-            return float(torch.softmax(outputs, dim=-1)[..., 1].item())
+            # Resolve class index dynamically using model's names or classes if present
+            names = None
+            if hasattr(model, "names"):
+                names = model.names
+            elif hasattr(model, "classes"):
+                names = model.classes
+
+            idx = None
+            if isinstance(names, dict):
+                for k, v in names.items():
+                    if v == complete_class:
+                        idx = int(k)
+                        break
+            elif isinstance(names, (list, tuple)):
+                for i, v in enumerate(names):
+                    if v == complete_class:
+                        idx = i
+                        break
+
+            if idx is None:
+                idx = 0
+
+            return float(torch.softmax(outputs, dim=-1)[..., idx].item())
     else:
         res = model(crop_rgb, verbose=False)[0]
         names = res.names

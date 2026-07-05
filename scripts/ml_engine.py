@@ -30,7 +30,7 @@ from birdpipe import consolidate, coords
 from birdpipe import records as rec
 from birdpipe import stageb
 from birdpipe import constants as C
-from birdpipe.constants import ConsolidationParams, StageBParams
+from birdpipe.constants import ConsolidationParams, StageBParams, is_yolo_model
 
 class BirdAudioPipeline:
     def __init__(self, localizer_path, classifier_path=None, device=None, conf=0.25):
@@ -226,12 +226,8 @@ class BirdAudioPipeline:
             if band is None:
                 band = self._band_image(feats_quarters, freq_bin_low=freq_bin_low, freq_bin_high=freq_bin_high)
             
-            is_yolo = (
-                hasattr(active_classifier_c, "predictor") or 
-                hasattr(active_classifier_c, "predict") or 
-                type(active_classifier_c).__name__ in ("YOLO", "MagicMock")
-            )
-            is_pytorch = isinstance(active_classifier_c, torch.nn.Module) and not is_yolo
+            is_yolo = is_yolo_model(active_classifier_c)
+            is_pytorch = isinstance(active_classifier_c, torch.nn.Module) and not is_yolo_model(active_classifier_c)
 
             for ev in events:
                 if ev.retained:

@@ -185,9 +185,10 @@ def test_narrow_and_nyquist_frequency_bounds(tmp_path):
 
 
 class DummyStageBPyTorchModel(torch.nn.Module):
-    def __init__(self, out_features=2):
+    def __init__(self, out_features=2, return_high_at_idx=0):
         super().__init__()
         self.out_features = out_features
+        self.return_high_at_idx = return_high_at_idx
         self.dummy_param = torch.nn.Parameter(torch.zeros(1))
     def forward(self, x):
         # x is expected to be [1, 3, 288, 288]
@@ -195,7 +196,9 @@ class DummyStageBPyTorchModel(torch.nn.Module):
         if self.out_features == 1:
             return torch.tensor([[10.0]])
         else:
-            return torch.tensor([[-10.0, 10.0]])
+            logits = torch.full((1, self.out_features), -10.0)
+            logits[0, self.return_high_at_idx] = 10.0
+            return logits
 
 
 def test_stageb_classify_crop():
@@ -208,11 +211,25 @@ def test_stageb_classify_crop():
     assert isinstance(prob1, float)
     assert prob1 > 0.99
     
-    # Test standard PyTorch model (dim=2)
-    model_dim2 = DummyStageBPyTorchModel(out_features=2)
+    # Test standard PyTorch model (dim=2) defaulting to index 0
+    model_dim2 = DummyStageBPyTorchModel(out_features=2, return_high_at_idx=0)
     prob2 = stageb.classify_crop(model_dim2, crop)
     assert isinstance(prob2, float)
     assert prob2 > 0.99
+    
+    # Test standard PyTorch model (dim=2) resolving index dynamically via names
+    model_dim2_dynamic = DummyStageBPyTorchModel(out_features=2, return_high_at_idx=1)
+    model_dim2_dynamic.names = {0: "not_full", 1: "full"}
+    prob3 = stageb.classify_crop(model_dim2_dynamic, crop, complete_class="full")
+    assert isinstance(prob3, float)
+    assert prob3 > 0.99
+
+    # Test standard PyTorch model (dim=2) resolving index dynamically via classes list
+    model_dim2_list = DummyStageBPyTorchModel(out_features=2, return_high_at_idx=1)
+    model_dim2_list.classes = ["not_full", "full"]
+    prob4 = stageb.classify_crop(model_dim2_list, crop, complete_class="full")
+    assert isinstance(prob4, float)
+    assert prob4 > 0.99
     
     # Test YOLO-like model mock
     mock_yolo_model = MagicMock()

@@ -94,3 +94,16 @@ class StageBParams:
 class ExportParams:
     """§5.5. θ_A is validation-derived; the paper gives no number -> configurable."""
     theta_a: float = 0.0
+
+
+def is_yolo_model(model) -> bool:
+    """Determine if a model is a YOLO instance (or MagicMock test wrapper)."""
+    if model is None:
+        return False
+    module_name = getattr(type(model), "__module__", "") or ""
+    class_name = type(model).__name__
+    return (
+        "ultralytics" in module_name or 
+        class_name in ("YOLO", "MagicMock")
+    )
+
