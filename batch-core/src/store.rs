@@ -195,7 +195,7 @@ impl Store {
                 s.concurrency,
                 s.theta_a,
                 s.theta_b,
-                s.species_name
+                s.species_name.unwrap_or("Hume's Leaf Warbler")
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -768,5 +768,23 @@ mod tests {
         let mut stmt = store.conn.prepare("PRAGMA table_info(sessions)").unwrap();
         let cols: Vec<String> = stmt.query_map([], |r| r.get(1)).unwrap().map(|x| x.unwrap()).collect();
         assert!(cols.contains(&"species_name".to_string()));
+
+        // Assert that when a new session is created with species_name: None,
+        // retrieving it returns the default "Hume's Leaf Warbler".
+        let sid = store.create_session(&NewSession {
+            input_roots: "[]",
+            output_dir: "out",
+            device: "cpu",
+            concurrency: 1,
+            theta_a: 0.1,
+            theta_b: 0.5,
+            species_name: None,
+        }).unwrap();
+        let species: String = store.conn.query_row(
+            "SELECT species_name FROM sessions WHERE id = ?1",
+            params![sid],
+            |r| r.get(0)
+        ).unwrap();
+        assert_eq!(species, "Hume's Leaf Warbler");
     }
 }
