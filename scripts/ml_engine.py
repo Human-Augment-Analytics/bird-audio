@@ -29,6 +29,7 @@ from ultralytics.data.augment import LetterBox
 from birdpipe import consolidate, coords
 from birdpipe import records as rec
 from birdpipe import stageb
+from birdpipe import constants as C
 from birdpipe.constants import ConsolidationParams, StageBParams
 
 class BirdAudioPipeline:
@@ -63,12 +64,34 @@ class BirdAudioPipeline:
                 raise FileNotFoundError(f"Model path does not exist: {path_str}")
             print(f"Loading Model: {path_str}...", file=sys.stderr)
             try:
-                model = YOLO(path_str)
-                model.to(self.device)
-            except Exception:
-                model = torch.load(path_str, map_location=self.device)
-                if hasattr(model, 'eval'):
-                    model.eval()
+                try:
+                    model = YOLO(path_str)
+                    model.to(self.device)
+                except Exception:
+                    model = torch.load(path_str, map_location=self.device)
+                    if hasattr(model, 'eval'):
+                        model.eval()
+            except Exception as e:
+                if self.device.type != "cpu":
+                    print(f"Warning: Failed to load model {path_str} on device {self.device}: {e}. Falling back to CPU.", file=sys.stderr)
+                    self.device = torch.device("cpu")
+                    # Move any already cached models to cpu
+                    for cached_model in self._model_cache.values():
+                        if hasattr(cached_model, "to"):
+                            try:
+                                cached_model.to(self.device)
+                            except Exception:
+                                pass
+                    # Retry loading on cpu
+                    try:
+                        model = YOLO(path_str)
+                        model.to(self.device)
+                    except Exception:
+                        model = torch.load(path_str, map_location=self.device)
+                        if hasattr(model, 'eval'):
+                            model.eval()
+                else:
+                    raise e
             self._model_cache[path_str] = model
         return self._model_cache[path_str]
 
@@ -105,10 +128,20 @@ class BirdAudioPipeline:
         input_wav = Path(input_wav)
         t0 = time.time()
 
+        # Dynamic frequency calculations & validation
+        f_min = float(f_min_hz) if f_min_hz is not None else C.F_MIN_HZ
+        f_max = float(f_max_hz) if f_max_hz is not None else C.F_MAX_HZ
+
+        if f_min <= 0 or f_max <= 0 or f_min >= f_max:
+            return {"status": "error", "message": f"Invalid frequency bounds: f_min_hz={f_min_hz}, f_max_hz={f_max_hz} must be positive and f_min_hz < f_max_hz"}
+
         # Resolve active models dynamically
-        active_localizer = self._get_model(localizer) if localizer else self.localizer
-        active_classifier = self._get_model(classifier) if classifier else self.classifier
-        active_classifier_c = self._get_model(classifier_c) if classifier_c else None
+        try:
+            active_localizer = self._get_model(localizer) if localizer else self.localizer
+            active_classifier = self._get_model(classifier) if classifier else self.classifier
+            active_classifier_c = self._get_model(classifier_c) if classifier_c else None
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to load model: {e}"}
 
         try:
             sr = librosa.get_samplerate(str(input_wav))
@@ -119,10 +152,6 @@ class BirdAudioPipeline:
         except Exception as e:
             return {"status": "error", "input": str(input_wav),
                     "message": f"Failed to open audio: {e}"}
-
-        # Dynamic frequency calculations
-        f_min = float(f_min_hz) if f_min_hz is not None else 4125.0
-        f_max = float(f_max_hz) if f_max_hz is not None else 11625.0
         n_fft = 1024
         freq_bin_low = int(np.round(f_min * n_fft / sr))
         freq_bin_high = int(np.round(f_max * n_fft / sr))
@@ -187,10 +216,45 @@ class BirdAudioPipeline:
             for ev in events:
                 if ev.retained:
                     crop = stageb.build_crop(band, ev, params=sbp, f_min=f_min, f_max=f_max)
-                    res = active_classifier_c(crop, verbose=False)[0]
-                    idx = int(res.probs.top1)
-                    ev.stage_c_label = res.names[idx]
-                    ev.stage_c_score = float(res.probs.data[idx])
+                    if not isinstance(active_classifier_c, torch.nn.Module):
+                        res = active_classifier_c(crop, verbose=False)[0]
+                        idx = int(res.probs.top1)
+                        ev.stage_c_label = res.names[idx]
+                        ev.stage_c_score = float(res.probs.data[idx])
+                    else:
+                        # Standard PyTorch model fallback
+                        try:
+                            crop_t = crop.transpose((2, 0, 1))
+                            crop_t = np.ascontiguousarray(crop_t)
+                            crop_tensor = torch.from_numpy(crop_t).float().unsqueeze(0).to(self.device)
+                            crop_tensor /= 255.0
+                            with torch.no_grad():
+                                outputs = active_classifier_c(crop_tensor)
+                            if isinstance(outputs, tuple):
+                                outputs = outputs[0]
+                            probs = torch.softmax(outputs, dim=1).squeeze(0)
+                            idx = int(torch.argmax(probs).item())
+                            score = float(probs[idx].item())
+                            
+                            names = None
+                            if hasattr(active_classifier_c, "names"):
+                                names = active_classifier_c.names
+                            elif hasattr(active_classifier_c, "classes"):
+                                names = active_classifier_c.classes
+                            
+                            if names and idx in names:
+                                label = names[idx]
+                            elif names and isinstance(names, list) and idx < len(names):
+                                label = names[idx]
+                            else:
+                                label = str(idx)
+                            
+                            ev.stage_c_label = label
+                            ev.stage_c_score = score
+                        except Exception as e:
+                            print(f"Warning: Failed to execute Stage C non-YOLO model: {e}", file=sys.stderr)
+                            ev.stage_c_label = "unknown"
+                            ev.stage_c_score = 0.0
 
         out = {
             "status": "success",
