@@ -249,7 +249,7 @@ fn read_feature_flags(cwd: &std::path::Path) -> serde_json::Value {
     use std::fs;
     let p = cwd.join("config/features.yaml");
     if !p.exists() {
-        return serde_json::json!({ "parallel_control": true, "import_enabled": true, "advanced_settings": true, "card_ui": false });
+        return serde_json::json!({ "parallel_control": true, "import_enabled": true, "advanced_settings": true, "card_ui": false, "time_estimates": true, "resume_runs": true, "cloud_import": false });
     }
     match fs::read_to_string(&p) {
         Ok(s) => match serde_yaml::from_str::<serde_yaml::Value>(&s) {
@@ -258,9 +258,9 @@ fn read_feature_flags(cwd: &std::path::Path) -> serde_json::Value {
                 let j = serde_json::to_value(v).unwrap_or(serde_json::json!({}));
                 j
             }
-            Err(_) => serde_json::json!({ "parallel_control": true, "import_enabled": true, "advanced_settings": true, "card_ui": false }),
+            Err(_) => serde_json::json!({ "parallel_control": true, "import_enabled": true, "advanced_settings": true, "card_ui": false, "time_estimates": true, "resume_runs": true, "cloud_import": false }),
         },
-        Err(_) => serde_json::json!({ "parallel_control": true, "import_enabled": true, "advanced_settings": true, "card_ui": false }),
+        Err(_) => serde_json::json!({ "parallel_control": true, "import_enabled": true, "advanced_settings": true, "card_ui": false, "time_estimates": true, "resume_runs": true, "cloud_import": false }),
     }
 }
 
@@ -359,6 +359,11 @@ pub async fn prepare_system(cwd: Option<String>) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn count_audio_files(input: String) -> Result<usize, String> {
+    Ok(enumerate_audio(&[PathBuf::from(&input)]).len())
 }
 
 #[tauri::command]

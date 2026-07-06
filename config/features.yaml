@@ -13,3 +13,14 @@ import_enabled: false
 
 # Card-based UI
 card_ui: true
+
+# Show time estimates (before a run, from your previous runs; during a run,
+# from live throughput).
+time_estimates: true
+
+# Offer to continue an interrupted run when earlier results are found in the
+# selected folder.
+resume_runs: true
+
+# Show guidance for analyzing recordings stored in OneDrive.
+cloud_import: false

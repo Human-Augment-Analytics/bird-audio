@@ -81,6 +81,14 @@ export default function App() {
     };
   }, [view, start, opts, summary, cancelled]);
 
+  // Remember how long each recording takes so the setup flow can estimate the
+  // next run's duration before it starts.
+  useEffect(() => {
+    if (summary && summary.done > 0 && progress?.elapsed_ms_total) {
+      localStorage.setItem("birdaudio.secPerFile", String(progress.elapsed_ms_total / 1000 / summary.done));
+    }
+  }, [summary, progress]);
+
   const onStarted = (result: StartResult, o: StartOpts) => {
     setStart(result);
     setOpts(o);

@@ -14,6 +14,7 @@ pub fn run() {
             commands::export_session,
             commands::check_health,
             commands::prepare_system,
+            commands::count_audio_files,
             commands::check_cache,
             commands::clear_cache,
             commands::get_cached_files,
