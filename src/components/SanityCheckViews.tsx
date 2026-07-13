@@ -1,32 +1,12 @@
 import { useState, useMemo } from "react";
 import type { ExportedEvent } from "../types";
+import { findDeviceId, getElevationBand } from "../deviceId";
 
 interface Props {
   events: ExportedEvent[];
 }
 
 type TabType = "elevation" | "timeline" | "sites";
-
-// Extractor helpers matching Rust logic
-function findDeviceId(path: string): string | null {
-  const matchPS = path.match(/PS[LMH]\d+/i);
-  if (matchPS) {
-    return matchPS[0].toUpperCase();
-  }
-  const matchH = path.match(/(?:^|[^a-zA-Z0-9])(H\d+)/i);
-  if (matchH) {
-    return matchH[1].toUpperCase();
-  }
-  return null;
-}
-
-function getElevationBand(deviceId: string | null): "Low" | "Medium" | "High" | "Unknown" {
-  if (!deviceId) return "Unknown";
-  if (deviceId.startsWith("PSL")) return "Low";
-  if (deviceId.startsWith("PSM")) return "Medium";
-  if (deviceId.startsWith("PSH") || deviceId.startsWith("H")) return "High";
-  return "Unknown";
-}
 
 function parseSessionDatetime(path: string): Date | null {
   const match = path.match(/(\d{8})_(\d{6})/);

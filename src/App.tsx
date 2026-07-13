@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import SetupView from "./components/SetupView";
-import CardSetupView from "./components/CardSetupView";
+import CardSetupView, { type CardSetupViewHandle } from "./components/CardSetupView";
 import RunView from "./components/RunView";
 import ReviewView from "./components/ReviewView";
 import appIcon from "./assets/app-icon.png";
@@ -44,6 +44,7 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [cancelled, setCancelled] = useState(false);
   const tRef = useRef<{ t: number; done: number } | null>(null);
+  const cardSetupRef = useRef<CardSetupViewHandle>(null);
 
   useEffect(() => {
     let active = true;
@@ -193,7 +194,7 @@ export default function App() {
           so the setup card's own step/folder state isn't lost. */}
       {view === "setup" && (
         <div style={{ display: section === "batch" ? "contents" : "none" }}>
-          {uiMode === "card" ? <CardSetupView onStarted={onStarted} onViewResults={onViewCachedResults} /> : <SetupView onStarted={onStarted} />}
+          {uiMode === "card" ? <CardSetupView ref={cardSetupRef} onStarted={onStarted} onViewResults={onViewCachedResults} /> : <SetupView onStarted={onStarted} />}
         </div>
       )}
       {section === "batch" && view === "run" && start && (
@@ -219,7 +220,15 @@ export default function App() {
         </>
       )}
       {section === "review" && start && opts && (
-        <ReviewView start={start} opts={opts} rows={rows} />
+        <ReviewView
+          start={start}
+          opts={opts}
+          rows={rows}
+          onProceedToAnalyze={view === "setup" ? () => {
+            cardSetupRef.current?.returnToAnalyze();
+            setSection("batch");
+          } : undefined}
+        />
       )}
     </main>
   );

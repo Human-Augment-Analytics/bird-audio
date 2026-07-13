@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState, type CSSProperties, type ReactNode } from "react";
 import {
   checkHealth, clearCache, countAudioFiles, getCachedFiles, getConcurrencySuggestion,
   getFeatureFlags, getReviewSession, listFiles, pickFolder, prepareSystem, startSession,
@@ -10,6 +10,14 @@ import ManageCache from "./ManageCache";
 interface Props {
   onStarted: (result: StartResult, opts: StartOpts) => void;
   onViewResults: (result: StartResult, opts: StartOpts, rows: FileRow[]) => void;
+}
+
+export interface CardSetupViewHandle {
+  /** Refreshes the cached-file counts for the current folder and jumps
+   * straight to the final "ready to analyze" step, skipping folder/resume/
+   * inspect/options — used when returning from the Review tab after picking
+   * which cached files to reuse. */
+  returnToAnalyze: () => void;
 }
 
 const DEFAULT_SENSITIVITY = 0;
@@ -63,7 +71,7 @@ function fmtDuration(totalSecs: number): string {
   return `about ${rounded} hour${rounded === 1 ? "" : "s"}`;
 }
 
-export default function CardSetupView({ onStarted, onViewResults }: Props) {
+const CardSetupView = forwardRef<CardSetupViewHandle, Props>(function CardSetupView({ onStarted, onViewResults }, ref) {
   const [step, setStep] = useState<Step>("folder");
   const [direction, setDirection] = useState<Direction>("forward");
   const [flags, setFlags] = useState<Record<string, any> | null>(null);
@@ -122,6 +130,12 @@ export default function CardSetupView({ onStarted, onViewResults }: Props) {
       setAlreadyDone(cached.filter((c) => c.status === "done").length);
       return cached;
     });
+
+  useImperativeHandle(ref, () => ({
+    returnToAnalyze: () => {
+      refreshCachedFiles(input).finally(() => goTo("analyze", "back"));
+    },
+  }), [input]);
 
   const secPerFile = (() => {
     const v = Number(localStorage.getItem(RATE_KEY));
@@ -458,4 +472,6 @@ export default function CardSetupView({ onStarted, onViewResults }: Props) {
       )}
     </div>
   );
-}
+});
+
+export default CardSetupView;

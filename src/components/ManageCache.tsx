@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getCachedFiles, deleteCachedFiles, clearCache } from "../api";
 import type { CachedFile } from "../types";
 import { STAGE_LABEL, STAGE_COLOR } from "../stageMeta";
+import { relativeDir } from "../pathTree";
 
 interface Props {
   outputDir: string;
@@ -85,20 +86,30 @@ export default function ManageCache({ outputDir, onProceed }: Props) {
       )}
 
       <div className="cache__list">
-        {files.map(f => (
+        {files.map(f => {
+          const dir = relativeDir(f.path, outputDir);
+          return (
           <label
             key={f.path}
             className="cache__row"
-            title={f.error ? `Error: ${f.error}` : undefined}
+            title={f.error ? `Error: ${f.error}` : f.path}
           >
             <input
               type="checkbox"
               checked={selected.has(f.path)}
               onChange={() => toggle(f.path)}
             />
-            <span style={{ flex: 1, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
-              {f.broken && <span style={{ color: "var(--coral)", marginRight: 6 }}>⚠</span>}
-              {f.path.split('/').pop()}
+            <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 1 }}>
+              {dir && (
+                <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--text-faint)",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {dir}/
+                </span>
+              )}
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {f.broken && <span style={{ color: "var(--coral)", marginRight: 6 }}>⚠</span>}
+                {f.path.split('/').pop()}
+              </span>
             </span>
             {f.status === "done" && (
               <span className="status-pill" style={{ color: STAGE_COLOR[f.stage] }}>
@@ -109,7 +120,8 @@ export default function ManageCache({ outputDir, onProceed }: Props) {
               {f.status}
             </span>
           </label>
-        ))}
+          );
+        })}
         {files.length === 0 && (
           <div className="empty">No files found in cache.</div>
         )}
