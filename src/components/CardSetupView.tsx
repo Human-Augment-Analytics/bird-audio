@@ -292,9 +292,6 @@ const CardSetupView = forwardRef<CardSetupViewHandle, Props>(function CardSetupV
             <button className="secondary-cta" onClick={handleViewResults} disabled={busy}>
               {busy ? "Loading…" : "See which recordings were cached →"}
             </button>
-            <button className="backlink" onClick={() => goTo("inspect")}>
-              Choose which cached files to use →
-            </button>
           </div>
 
           <div style={{ display: "flex", justifyContent: "center", gap: 10 }}>

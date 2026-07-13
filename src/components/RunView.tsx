@@ -1,8 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FileRow, Progress, StartResult, Summary, ExportedEvent } from "../types";
-import FileTable from "./FileTable";
 import { pickFile, getSessionEvents } from "../api";
 import SanityCheckViews from "./SanityCheckViews";
+import { FolderTree } from "./FolderTree";
+import { buildTree, countFiles } from "../pathTree";
+
+const STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  in_progress: "Listening",
+  done: "Complete",
+  failed: "Failed",
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  pending: "var(--text-faint)",
+  in_progress: "var(--amber)",
+  done: "var(--jade)",
+  failed: "var(--coral)",
+};
 
 interface Props {
   start: StartResult;
@@ -13,6 +28,7 @@ interface Props {
   onExport: (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => void;
   onCancel: () => void;
   outputDir: string;
+  inputDir: string;
 }
 
 /* Eased count-up for the completion stats — adds a beat of delight on finish. */
@@ -49,7 +65,7 @@ const FILTERS: { key: "all" | "done" | "failed"; label: string }[] = [
   { key: "failed", label: "Failed" },
 ];
 
-export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel, outputDir }: Props) {
+export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel, outputDir, inputDir }: Props) {
   const [filter, setFilter] = useState<"all" | "done" | "failed">("all");
   const [metadataPath, setMetadataPath] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<string>("csv");
@@ -103,6 +119,10 @@ export default function RunView({ start, progress, summary, rows, throughput, on
     () => (filter === "all" ? rows : rows.filter((r) => r.status === filter)),
     [rows, filter]
   );
+
+  // Group the filtered recordings by their folder structure so it's clear which
+  // folder each file came from — collapsible, just like the Review page.
+  const tree = useMemo(() => buildTree(filtered, inputDir), [filtered, inputDir]);
 
   const handlePickMetadata = async () => {
     try {
@@ -285,7 +305,40 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         {!done && <button onClick={onCancel}>Cancel run</button>}
       </div>
 
-      <FileTable rows={filtered} />
+      <div className="tablewrap" style={{ height: 420, overflow: "auto" }}>
+        {filtered.length === 0 ? (
+          <div className="empty">No recordings to show in this view yet.</div>
+        ) : (
+          <FolderTree
+            root={tree}
+            leafKey={(r) => r.path}
+            renderFolderMeta={(node) => (
+              <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, color: "var(--text-faint)", flex: "none" }}>{countFiles(node)}</span>
+            )}
+            renderLeaf={(r) => {
+              const color = STATUS_COLORS[r.status] ?? "var(--text)";
+              const basename = r.path.split("/").pop() || r.path;
+              return (
+                <div className="trow" style={{ height: 34 }}>
+                  <span className="status-pill" style={{ width: 96, color }}>
+                    <span className="dot" style={{ background: color }} />
+                    {STATUS_LABELS[r.status] ?? r.status}
+                  </span>
+                  <span className="trow__name" title={r.path}>{basename}</span>
+                  <span className="trow__count" style={{ width: 96 }}>
+                    {r.n_events} {r.n_events === 1 ? "buzz" : "buzzes"}
+                  </span>
+                  {r.error && (
+                    <span className="trow__err" style={{ width: 200 }} title={r.error}>
+                      {r.error}
+                    </span>
+                  )}
+                </div>
+              );
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }

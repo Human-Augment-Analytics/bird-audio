@@ -214,11 +214,17 @@ export default function ReviewView({ start, opts, rows, onProceedToAnalyze }: Re
         {onProceedToAnalyze && (
           <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>
             <button
-              className="chip"
-              style={{ width: "100%", justifyContent: "center", color: mode === "select" ? "var(--amber)" : "var(--text-dim)" }}
+              className={mode === "browse" ? "chip primary" : "chip"}
+              style={{
+                width: "100%",
+                justifyContent: "center",
+                ...(mode === "browse"
+                  ? { color: "#1a1206", fontWeight: 700, boxShadow: "0 1px 6px var(--amber-soft)" }
+                  : { color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)" }),
+              }}
               onClick={() => setMode((m) => (m === "browse" ? "select" : "browse"))}
             >
-              {mode === "browse" ? "Select files to use →" : "← Back to review"}
+              {mode === "browse" ? "Select cached files to use →" : "← Back to review"}
             </button>
           </div>
         )}

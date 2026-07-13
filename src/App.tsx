@@ -216,6 +216,7 @@ export default function App() {
             onExport={doExport}
             onCancel={handleCancel}
             outputDir={opts?.outputDir || ""}
+            inputDir={opts?.input || ""}
           />
         </>
       )}
