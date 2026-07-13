@@ -1,19 +1,27 @@
 import { useEffect, useState } from "react";
 import { getCachedFiles, deleteCachedFiles, clearCache } from "../api";
 import type { CachedFile } from "../types";
+import { STAGE_LABEL, STAGE_COLOR } from "../stageMeta";
 
 interface Props {
   outputDir: string;
-  onCleared: () => void;
+  /** Called after any deselected (excluded) files have been cleared, so the
+   * caller can refresh its own counts and continue the setup flow. */
+  onProceed: () => void;
 }
 
-export default function ManageCache({ outputDir, onCleared }: Props) {
+export default function ManageCache({ outputDir, onProceed }: Props) {
   const [files, setFiles] = useState<CachedFile[]>([]);
+  // Checked = "use this cached result". Starts with everything checked, so
+  // doing nothing and clicking Proceed reuses the cache exactly as before.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    getCachedFiles(outputDir).then(setFiles);
+    getCachedFiles(outputDir).then((fs) => {
+      setFiles(fs);
+      setSelected(new Set(fs.map(f => f.path)));
+    });
   }, [outputDir]);
 
   const toggle = (path: string) => {
@@ -23,20 +31,27 @@ export default function ManageCache({ outputDir, onCleared }: Props) {
     setSelected(next);
   };
 
+  const brokenCount = files.filter(f => f.broken).length;
+  const stageACount = files.filter(f => f.stage === "stage_a").length;
+  const excludedCount = files.length - selected.size;
+
   const selectAll = () => setSelected(new Set(files.map(f => f.path)));
   const selectNone = () => setSelected(new Set());
-  const selectFailed = () => setSelected(new Set(files.filter(f => f.status === 'failed').map(f => f.path)));
+  const excludeBroken = () => setSelected(new Set(files.filter(f => !f.broken).map(f => f.path)));
+  const excludeStageAOnly = () => setSelected(new Set(files.filter(f => f.stage !== "stage_a").map(f => f.path)));
 
-  const handleClear = async () => {
-    if (selected.size === 0) return;
+  const handleProceed = async () => {
     setBusy(true);
     try {
-      if (selected.size === files.length) {
-        await clearCache(outputDir); // Nuke the whole DB if all selected
-      } else {
-        await deleteCachedFiles(outputDir, Array.from(selected));
+      const toClear = files.filter(f => !selected.has(f.path)).map(f => f.path);
+      if (toClear.length > 0) {
+        if (selected.size === 0) {
+          await clearCache(outputDir); // nothing kept — nuke the whole DB
+        } else {
+          await deleteCachedFiles(outputDir, toClear);
+        }
       }
-      onCleared();
+      onProceed();
     } finally {
       setBusy(false);
     }
@@ -44,27 +59,53 @@ export default function ManageCache({ outputDir, onCleared }: Props) {
 
   return (
     <div className="cache">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h4 className="eyebrow" style={{ color: "var(--violet)" }}>Previous results cached</h4>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button className="chip" onClick={selectAll}>All</button>
-          <button className="chip" onClick={selectNone}>None</button>
-          <button className="chip" onClick={selectFailed}>Failed</button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button className="chip" onClick={selectAll}>Use all</button>
+          <button className="chip" onClick={selectNone}>Use none</button>
+          {brokenCount > 0 && (
+            <button className="chip" style={{ color: "var(--coral)" }} onClick={excludeBroken}>
+              Exclude broken ({brokenCount})
+            </button>
+          )}
+          {stageACount > 0 && (
+            <button className="chip" style={{ color: "var(--amber)" }} onClick={excludeStageAOnly}>
+              Exclude Stage A only ({stageACount})
+            </button>
+          )}
         </div>
       </div>
 
+      {brokenCount > 0 && (
+        <div className="error-text" style={{ margin: 0 }}>
+          ⚠ {brokenCount} cached {brokenCount === 1 ? "file looks" : "files look"} broken (crashed or errored) —
+          uncheck them below (or use "Exclude broken") to have them re-analyzed instead of reused.
+        </div>
+      )}
+
       <div className="cache__list">
         {files.map(f => (
-          <label key={f.path} className="cache__row">
+          <label
+            key={f.path}
+            className="cache__row"
+            title={f.error ? `Error: ${f.error}` : undefined}
+          >
             <input
               type="checkbox"
               checked={selected.has(f.path)}
               onChange={() => toggle(f.path)}
             />
             <span style={{ flex: 1, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
+              {f.broken && <span style={{ color: "var(--coral)", marginRight: 6 }}>⚠</span>}
               {f.path.split('/').pop()}
             </span>
-            <span className="status-pill" style={{ color: f.status === 'done' ? 'var(--jade)' : f.status === 'failed' ? 'var(--coral)' : 'var(--text-faint)' }}>
+            {f.status === "done" && (
+              <span className="status-pill" style={{ color: STAGE_COLOR[f.stage] }}>
+                {STAGE_LABEL[f.stage]}
+              </span>
+            )}
+            <span className="status-pill" style={{ color: f.status === 'done' ? 'var(--jade)' : f.status === 'failed' || f.broken ? 'var(--coral)' : 'var(--text-faint)' }}>
               {f.status}
             </span>
           </label>
@@ -74,9 +115,14 @@ export default function ManageCache({ outputDir, onCleared }: Props) {
         )}
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button className="primary" style={{ fontSize: 12, padding: "7px 14px" }} onClick={handleClear} disabled={busy || selected.size === 0}>
-          {busy ? "Clearing…" : `Clear ${selected.size} selected`}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <span style={{ fontSize: 11, color: "var(--text-faint)" }}>
+          {excludedCount > 0
+            ? `${excludedCount} unchecked recording${excludedCount === 1 ? "" : "s"} will be re-analyzed.`
+            : "Everything checked — nothing will be re-analyzed."}
+        </span>
+        <button className="primary" style={{ fontSize: 12, padding: "7px 14px" }} onClick={handleProceed} disabled={busy}>
+          {busy ? "Applying…" : `Use ${selected.size} of ${files.length} →`}
         </button>
       </div>
     </div>

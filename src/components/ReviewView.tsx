@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EventRow, FileRow, StartOpts, StartResult } from "../types";
+import type { CachedFile, EventRow, FileRow, StartOpts, StartResult } from "../types";
 import {
-  addManualEvent, audioSrc, deleteEvent, listEvents, prepareReview, setEventReview, updateEventBounds,
+  addManualEvent, audioSrc, deleteEvent, getCachedFiles, listEvents, prepareReview, setEventReview, updateEventBounds,
 } from "../api";
 import { AudioVisualizer } from "./AudioVisualizer";
 import { EventTable } from "./EventTable";
+import { STAGE_COLOR, STAGE_LABEL } from "../stageMeta";
+
+type StageFilter = "all" | CachedFile["stage"];
 
 export interface ReviewViewProps {
   start: StartResult;
@@ -23,6 +26,8 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [stageByPath, setStageByPath] = useState<Record<string, CachedFile>>({});
+  const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const currentPathRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -30,6 +35,17 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
     prepareReview(dir, sid).catch((e) => { if (!cancelled) setPrepareError(String(e)); });
     return () => { cancelled = true; };
   }, [dir, sid]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getCachedFiles(dir).then((files) => {
+      if (cancelled) return;
+      const map: Record<string, CachedFile> = {};
+      for (const f of files) map[f.path] = f;
+      setStageByPath(map);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [dir]);
 
   const fetchEvents = useCallback(async (path: string, showLoading = false) => {
     currentPathRef.current = path;
@@ -92,18 +108,35 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
 
   const MAX_VISIBLE = 150;
 
-  const { doneRows, visibleRows, isTruncated } = useMemo(() => {
+  const { doneRows, visibleRows, isTruncated, stageCounts } = useMemo(() => {
     const done = rows.filter((r) => r.status === "done");
-    const filtered = done.filter((r) => {
-      const basename = r.path.split("/").pop() || r.path;
-      return basename.toLowerCase().includes(searchQuery.toLowerCase());
-    });
+    const counts = { pending: 0, stage_a: 0, complete: 0 };
+    for (const r of done) {
+      const stage = stageByPath[r.path]?.stage;
+      if (stage) counts[stage]++;
+    }
+    const filtered = done
+      .filter((r) => stageFilter === "all" || stageByPath[r.path]?.stage === stageFilter)
+      .filter((r) => {
+        const basename = r.path.split("/").pop() || r.path;
+        return basename.toLowerCase().includes(searchQuery.toLowerCase());
+      });
     return {
       doneRows: done,
       visibleRows: filtered.slice(0, MAX_VISIBLE),
       isTruncated: filtered.length > MAX_VISIBLE,
+      stageCounts: counts,
     };
-  }, [rows, searchQuery]);
+  }, [rows, searchQuery, stageByPath, stageFilter]);
+
+  // Jump straight to the first available recording instead of showing an
+  // empty "select a recording" page — most useful coming from a "jump to
+  // cached results" entry point where nothing has been clicked yet.
+  useEffect(() => {
+    if (!selectedPath && visibleRows.length > 0) {
+      selectFile(visibleRows[0].path);
+    }
+  }, [selectedPath, visibleRows, selectFile]);
 
   return (
     <div className="reveal" style={{ display: "grid", gridTemplateColumns: "264px 1fr", gap: 0,
@@ -131,6 +164,35 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
             }}
           />
         </div>
+        {(stageCounts.complete > 0 || stageCounts.stage_a > 0) && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>
+            <button
+              className="chip"
+              style={{ color: stageFilter === "all" ? "var(--text)" : "var(--text-faint)", background: stageFilter === "all" ? "var(--surface-2)" : "transparent" }}
+              onClick={() => setStageFilter("all")}
+            >
+              All ({doneRows.length})
+            </button>
+            {stageCounts.complete > 0 && (
+              <button
+                className="chip"
+                style={{ color: stageFilter === "complete" ? STAGE_COLOR.complete : "var(--text-faint)", background: stageFilter === "complete" ? "var(--surface-2)" : "transparent" }}
+                onClick={() => setStageFilter("complete")}
+              >
+                Complete ({stageCounts.complete})
+              </button>
+            )}
+            {stageCounts.stage_a > 0 && (
+              <button
+                className="chip"
+                style={{ color: stageFilter === "stage_a" ? STAGE_COLOR.stage_a : "var(--text-faint)", background: stageFilter === "stage_a" ? "var(--surface-2)" : "transparent" }}
+                onClick={() => setStageFilter("stage_a")}
+              >
+                Stage A only ({stageCounts.stage_a})
+              </button>
+            )}
+          </div>
+        )}
         {prepareError && (
           <div style={{ margin: "8px 10px 0", fontSize: 11, color: "var(--coral)" }}>{prepareError}</div>
         )}
@@ -147,6 +209,12 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
                   cursor: isDone ? "pointer" : "default", opacity: isDone ? 1 : 0.4, textAlign: "left", minWidth: 0 }}>
                 <span style={{ flex: 1, fontFamily: "var(--mono)", fontSize: 11.5, color: isSelected ? "var(--text)" : "var(--text-dim)",
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{basename}</span>
+                {stageByPath[row.path] && (
+                  <span
+                    title={STAGE_LABEL[stageByPath[row.path].stage]}
+                    style={{ width: 6, height: 6, borderRadius: 99, flex: "none", background: STAGE_COLOR[stageByPath[row.path].stage] }}
+                  />
+                )}
                 {isDone && <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-faint)", border: "1px solid var(--line)", borderRadius: 999, padding: "1px 7px", fontVariantNumeric: "tabular-nums" }}>{row.n_events}</span>}
               </button>
             );

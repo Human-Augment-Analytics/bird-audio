@@ -49,6 +49,13 @@ export interface FileRow {
 export interface CachedFile {
   path: string;
   status: string;
+  nEvents: number;
+  nComplete: number;
+  error: string | null;
+  /** "pending" (not yet run), "stage_a" (detected, not classified), or "complete". */
+  stage: "pending" | "stage_a" | "complete";
+  /** True when this file's last run looks broken (errored, or interrupted mid-run). */
+  broken: boolean;
 }
 
 export interface HealthStatus {

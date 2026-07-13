@@ -149,9 +149,9 @@ export default function SetupView({ onStarted }: Props) {
         {hasCache && (
           <ManageCache
             outputDir={input}
-            onCleared={() => {
+            onProceed={() => {
               checkCache(input).then(setHasCache).catch(() => setHasCache(false));
-              setError("Selected results cleared from cache.");
+              setError("Cache updated — unchecked recordings will be re-analyzed.");
             }}
           />
         )}

@@ -154,6 +154,16 @@ button.primary {
 button.primary:hover { transform: translateY(-1px); filter: brightness(1.05); }
 button.primary:active { transform: translateY(0); }
 
+button.secondary-cta {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px solid rgba(244, 162, 58, 0.45);
+}
+button.secondary-cta:hover {
+  background: rgba(244, 162, 58, 0.22);
+  border-color: var(--amber);
+}
+
 button:disabled,
 button.primary:disabled {
   opacity: 0.4;
@@ -488,6 +498,24 @@ input[type="checkbox"]:checked::after {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Card-flow step transitions — direction-aware so "back" reads as reversing. */
+.card-step {
+  opacity: 0;
+  animation-duration: 0.38s;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  animation-fill-mode: forwards;
+}
+.card-step--forward { animation-name: cardStepInForward; }
+.card-step--back { animation-name: cardStepInBack; }
+@keyframes cardStepInForward {
+  from { opacity: 0; transform: translateX(28px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes cardStepInBack {
+  from { opacity: 0; transform: translateX(-28px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
@@ -495,6 +523,7 @@ input[type="checkbox"]:checked::after {
     transition-duration: 0.001ms !important;
   }
   .reveal { opacity: 1; }
+  .card-step { opacity: 1; }
 }
 
 /* ============================================================================
@@ -537,6 +566,39 @@ input[type="checkbox"]:checked::after {
   font-weight: 600;
   color: var(--text);
   font-family: var(--serif);
+}
+
+/* Setup layout toggle (guided cards vs. full page) — deliberately quiet,
+   sits in the masthead corner rather than competing with the Analyze/Review nav. */
+.ui-mode-toggle {
+  display: flex;
+  gap: 2px;
+  flex: none;
+  align-self: flex-start;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+.ui-mode-toggle button {
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  transition: color 0.18s ease, background 0.18s ease;
+}
+.ui-mode-toggle button:hover {
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+.ui-mode-toggle button.active {
+  background: var(--surface-2);
+  color: var(--text-dim);
 }
 
 .sanity-tabs {

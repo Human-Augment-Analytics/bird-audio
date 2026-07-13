@@ -17,6 +17,8 @@ export const getCachedFiles = (outputDir: string) =>
   invoke<CachedFile[]>("get_cached_files", { outputDir });
 export const deleteCachedFiles = (outputDir: string, paths: string[]) =>
   invoke<void>("delete_cached_files", { outputDir, paths });
+export const getReviewSession = (outputDir: string) =>
+  invoke<StartResult | null>("get_review_session", { outputDir });
 
 export const pickFolder = async (): Promise<string | null> => {
   const result = await open({ directory: true, multiple: false });

@@ -7,13 +7,33 @@ import appIcon from "./assets/app-icon.png";
 import { cancelSession, exportSession, getFeatureFlags, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
+const UI_MODE_KEY = "birdaudio.uiMode";
+
 export default function App() {
   const [view, setView] = useState<"setup" | "run">("setup");
   const [section, setSection] = useState<"batch" | "review">("batch");
-  const [cardUi, setCardUi] = useState(false);
+
+  // Layout preference: card-based guided flow vs. the classic full-page form.
+  // Defaults to the `card_ui` feature flag, but once the researcher flips the
+  // toggle themselves we remember that choice in this browser from then on.
+  const savedUiMode = localStorage.getItem(UI_MODE_KEY);
+  const [uiMode, setUiModeState] = useState<"card" | "full">(
+    savedUiMode === "card" || savedUiMode === "full" ? savedUiMode : "card"
+  );
+  const [uiModeIsUserSet, setUiModeIsUserSet] = useState(savedUiMode === "card" || savedUiMode === "full");
+
+  const setUiMode = (m: "card" | "full") => {
+    setUiModeState(m);
+    setUiModeIsUserSet(true);
+    localStorage.setItem(UI_MODE_KEY, m);
+  };
 
   useEffect(() => {
-    getFeatureFlags().then((f) => setCardUi(f?.card_ui === true)).catch(() => setCardUi(false));
+    getFeatureFlags().then((f) => {
+      if (!uiModeIsUserSet) setUiModeState(f?.card_ui === true ? "card" : "full");
+    }).catch(() => {});
+    // Only meant to seed the default once, before the user has an opinion.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [start, setStart] = useState<StartResult | null>(null);
   const [opts, setOpts] = useState<StartOpts | null>(null);
@@ -89,6 +109,13 @@ export default function App() {
     }
   }, [summary, progress]);
 
+  const onViewCachedResults = (result: StartResult, o: StartOpts, r: FileRow[]) => {
+    setStart(result);
+    setOpts(o);
+    setRows(r);
+    setSection("review");
+  };
+
   const onStarted = (result: StartResult, o: StartOpts) => {
     setStart(result);
     setOpts(o);
@@ -128,13 +155,31 @@ export default function App() {
     <main style={{ padding: "44px 24px 64px", maxWidth: 1040, margin: "0 auto" }}>
       <header className="masthead reveal">
         <img className="masthead-icon" src={appIcon} alt="Bird Audio Analyzer Icon" aria-hidden="true" />
-        <div>
+        <div style={{ flex: 1 }}>
           <div className="eyebrow" style={{ marginBottom: 8 }}>Bioacoustic Analysis Pipeline</div>
           <h1>Bird Audio Analyzer</h1>
           <div className="sub">
             Detecting <b>buzzes</b> in bird field recordings
           </div>
         </div>
+        {section === "batch" && view === "setup" && (
+          <div className="ui-mode-toggle" role="group" aria-label="Setup layout">
+            <button
+              className={uiMode === "card" ? "active" : ""}
+              aria-pressed={uiMode === "card"}
+              onClick={() => setUiMode("card")}
+            >
+              Guided cards
+            </button>
+            <button
+              className={uiMode === "full" ? "active" : ""}
+              aria-pressed={uiMode === "full"}
+              onClick={() => setUiMode("full")}
+            >
+              Full page
+            </button>
+          </div>
+        )}
       </header>
 
       <nav className="reveal" style={{ display: "flex", gap: 32, margin: "0 0 28px" }}>
@@ -144,8 +189,12 @@ export default function App() {
         </button>
       </nav>
 
-      {section === "batch" && view === "setup" && (
-        cardUi ? <CardSetupView onStarted={onStarted} /> : <SetupView onStarted={onStarted} />
+      {/* Kept mounted (just hidden) while section flips to "review" and back,
+          so the setup card's own step/folder state isn't lost. */}
+      {view === "setup" && (
+        <div style={{ display: section === "batch" ? "contents" : "none" }}>
+          {uiMode === "card" ? <CardSetupView onStarted={onStarted} onViewResults={onViewCachedResults} /> : <SetupView onStarted={onStarted} />}
+        </div>
       )}
       {section === "batch" && view === "run" && start && (
         <>

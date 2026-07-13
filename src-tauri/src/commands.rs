@@ -381,9 +381,15 @@ pub fn clear_cache(output_dir: String) -> Result<(), String> {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CachedFile {
     pub path: String,
     pub status: String,
+    pub n_events: i64,
+    pub n_complete: i64,
+    pub error: Option<String>,
+    pub stage: String,
+    pub broken: bool,
 }
 
 #[tauri::command]
@@ -397,9 +403,38 @@ pub fn get_cached_files(output_dir: String) -> Result<Vec<CachedFile>, String> {
         Some(id) => id,
         None => return Ok(vec![]),
     };
-    
-    let rows = store.list_files(sid).map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().map(|r| CachedFile { path: r.path, status: r.status }).collect())
+
+    let rows = store.list_cached_files(sid).map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| CachedFile {
+            path: r.path,
+            status: r.status,
+            n_events: r.n_events,
+            n_complete: r.n_complete,
+            error: r.error,
+            stage: r.stage,
+            broken: r.broken,
+        })
+        .collect())
+}
+
+/// Resolves the existing session for `output_dir` without touching the analysis
+/// engine, so the frontend can jump straight to reviewing cached results without
+/// risking kicking off a new run for any files that aren't done yet.
+#[tauri::command]
+pub fn get_review_session(output_dir: String) -> Result<Option<StartResult>, String> {
+    let path = db_path(&output_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let store = Store::open(&path).map_err(|e| e.to_string())?;
+    let sid = match store.get_latest_session_id().map_err(|e| e.to_string())? {
+        Some(id) => id,
+        None => return Ok(None),
+    };
+    let total_files = store.list_files(sid).map_err(|e| e.to_string())?.len();
+    Ok(Some(StartResult { session_id: sid, total_files }))
 }
 
 #[tauri::command]

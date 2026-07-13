@@ -18,6 +18,7 @@ pub fn run() {
             commands::check_cache,
             commands::clear_cache,
             commands::get_cached_files,
+            commands::get_review_session,
             commands::delete_cached_files,
             commands::concurrency_suggestion,
             commands::get_feature_flags,

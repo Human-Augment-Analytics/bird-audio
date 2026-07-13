@@ -57,6 +57,26 @@ pub struct FileRow {
     pub error: Option<String>,
 }
 
+/// A cached file's status enriched with which ML stages it finished and
+/// whether it looks broken, for the cache-inspection UI.
+#[derive(Debug, serde::Serialize)]
+pub struct CachedFileDetail {
+    pub path: String,
+    pub status: String,
+    pub n_events: i64,
+    pub n_complete: i64,
+    pub error: Option<String>,
+    /// "pending" (not yet run), "stage_a" (detected events but completeness
+    /// classification didn't run on all of them), or "complete" (both stages
+    /// finished, or no events were found to classify).
+    pub stage: String,
+    /// True when this file's last run looks broken: it terminally failed, or
+    /// it was left `in_progress` by a session that crashed before finishing
+    /// (normally cleared by `reset_in_progress` at the start of the next run
+    /// on that session, so a leftover here means the app never got that far).
+    pub broken: bool,
+}
+
 /// A single event row with curation fields, for the review UI.
 #[derive(Debug, serde::Serialize)]
 pub struct EventRow {
@@ -350,6 +370,44 @@ impl Store {
         rows.collect()
     }
 
+    /// All files for a session with per-file stage progress and a broken-run
+    /// flag, for the cache-inspection UI. See [`CachedFileDetail`].
+    pub fn list_cached_files(&self, session_id: i64) -> rusqlite::Result<Vec<CachedFileDetail>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.path, f.status, f.n_events, f.n_complete, f.error,
+                    COUNT(e.id) AS ev_count,
+                    COALESCE(SUM(CASE WHEN e.completeness_score IS NOT NULL THEN 1 ELSE 0 END), 0) AS scored_count
+             FROM files f
+             LEFT JOIN events e ON e.file_id = f.id
+             WHERE f.session_id = ?1
+             GROUP BY f.id
+             ORDER BY f.id",
+        )?;
+        let rows = stmt.query_map(params![session_id], |r| {
+            let status: String = r.get(1)?;
+            let ev_count: i64 = r.get(5)?;
+            let scored_count: i64 = r.get(6)?;
+            let stage = if status != "done" {
+                "pending"
+            } else if ev_count == 0 || scored_count == ev_count {
+                "complete"
+            } else {
+                "stage_a"
+            };
+            let broken = status == "failed" || status == "in_progress";
+            Ok(CachedFileDetail {
+                path: r.get(0)?,
+                status,
+                n_events: r.get(2)?,
+                n_complete: r.get(3)?,
+                error: r.get(4)?,
+                stage: stage.to_string(),
+                broken,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// Return all events for a specific file within a session, ordered by t_start.
     pub fn list_events(&self, session_id: i64, path: &str) -> rusqlite::Result<Vec<EventRow>> {
         let mut stmt = self.conn.prepare(
@@ -603,6 +661,57 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.status == "failed" && r.error.as_deref() == Some("boom")));
         assert!(rows.iter().any(|r| r.status == "pending"));
+    }
+
+    #[test]
+    fn list_cached_files_flags_stage_and_broken() {
+        let store = Store::open_memory().unwrap();
+        let sid = store.create_session(&NewSession {
+            input_roots: "[]", output_dir: "out", device: "cpu", concurrency: 1, theta_a: 0.1, theta_b: 0.5
+        }).unwrap();
+        store.add_files(sid, &[
+            PathBuf::from("pending.wav"),
+            PathBuf::from("done_no_events.wav"),
+            PathBuf::from("done_scored.wav"),
+            PathBuf::from("done_unscored.wav"),
+            PathBuf::from("failed.wav"),
+            PathBuf::from("stuck.wav"),
+        ]).unwrap();
+
+        for p in ["done_no_events.wav", "done_scored.wav", "done_unscored.wav"] {
+            store.conn.execute("UPDATE files SET status='done' WHERE path=?1", params![p]).unwrap();
+        }
+        store.conn.execute("UPDATE files SET status='failed', error='boom' WHERE path='failed.wav'", []).unwrap();
+        store.conn.execute("UPDATE files SET status='in_progress' WHERE path='stuck.wav'", []).unwrap();
+
+        let scored_id: i64 = store.conn
+            .query_row("SELECT id FROM files WHERE path='done_scored.wav'", [], |r| r.get(0)).unwrap();
+        store.conn.execute(
+            "INSERT INTO events(session_id, file_id, completeness_score) VALUES (?1, ?2, 0.9)",
+            params![sid, scored_id],
+        ).unwrap();
+
+        let unscored_id: i64 = store.conn
+            .query_row("SELECT id FROM files WHERE path='done_unscored.wav'", [], |r| r.get(0)).unwrap();
+        store.conn.execute(
+            "INSERT INTO events(session_id, file_id, completeness_score) VALUES (?1, ?2, NULL)",
+            params![sid, unscored_id],
+        ).unwrap();
+
+        let rows = store.list_cached_files(sid).unwrap();
+        let get = |p: &str| rows.iter().find(|r| r.path == p).unwrap();
+
+        assert_eq!(get("pending.wav").stage, "pending");
+        assert!(!get("pending.wav").broken);
+
+        assert_eq!(get("done_no_events.wav").stage, "complete");
+        assert_eq!(get("done_scored.wav").stage, "complete");
+        assert_eq!(get("done_unscored.wav").stage, "stage_a");
+        assert!(!get("done_scored.wav").broken);
+
+        assert!(get("failed.wav").broken);
+        assert_eq!(get("failed.wav").error.as_deref(), Some("boom"));
+        assert!(get("stuck.wav").broken);
     }
 
     #[test]

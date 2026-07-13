@@ -1,20 +1,23 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
   checkHealth, clearCache, countAudioFiles, getCachedFiles, getConcurrencySuggestion,
-  getFeatureFlags, pickFolder, prepareSystem, startSession,
+  getFeatureFlags, getReviewSession, listFiles, pickFolder, prepareSystem, startSession,
 } from "../api";
-import type { StartOpts, StartResult, HealthStatus } from "../types";
+import type { StartOpts, StartResult, HealthStatus, CachedFile, FileRow } from "../types";
 import birdImg from "../assets/hero.png";
+import ManageCache from "./ManageCache";
 
 interface Props {
   onStarted: (result: StartResult, opts: StartOpts) => void;
+  onViewResults: (result: StartResult, opts: StartOpts, rows: FileRow[]) => void;
 }
 
 const DEFAULT_SENSITIVITY = 0;
 const DEFAULT_QUALITY = 0.530306;
 const RATE_KEY = "birdaudio.secPerFile"; // seconds per recording, saved after each finished run
 
-type Step = "folder" | "resume" | "options" | "analyze";
+type Step = "folder" | "resume" | "inspect" | "options" | "analyze";
+type Direction = "forward" | "back";
 
 function Field({ label, children, hint }: { label: ReactNode; children: ReactNode; hint?: string }) {
   return (
@@ -60,12 +63,14 @@ function fmtDuration(totalSecs: number): string {
   return `about ${rounded} hour${rounded === 1 ? "" : "s"}`;
 }
 
-export default function CardSetupView({ onStarted }: Props) {
+export default function CardSetupView({ onStarted, onViewResults }: Props) {
   const [step, setStep] = useState<Step>("folder");
+  const [direction, setDirection] = useState<Direction>("forward");
   const [flags, setFlags] = useState<Record<string, any> | null>(null);
   const [input, setInput] = useState("");
   const [fileCount, setFileCount] = useState<number | null>(null);
   const [alreadyDone, setAlreadyDone] = useState(0);
+  const [cachedFiles, setCachedFiles] = useState<CachedFile[]>([]);
   const [thetaA, setThetaA] = useState(DEFAULT_SENSITIVITY);
   const [thetaB, setThetaB] = useState(DEFAULT_QUALITY);
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -102,6 +107,22 @@ export default function CardSetupView({ onStarted }: Props) {
   const estimatesEnabled = flags?.time_estimates !== false;
   const cloudHintEnabled = flags?.cloud_import === true;
 
+  const brokenCount = cachedFiles.filter((f) => f.broken).length;
+
+  // Move between steps with a direction so the transition animates the right way.
+  const goTo = (next: Step, dir: Direction = "forward") => {
+    setDirection(dir);
+    setStep(next);
+  };
+  const stepAnim = `card-step card-step--${direction}`;
+
+  const refreshCachedFiles = (folder: string) =>
+    getCachedFiles(folder).then((cached) => {
+      setCachedFiles(cached);
+      setAlreadyDone(cached.filter((c) => c.status === "done").length);
+      return cached;
+    });
+
   const secPerFile = (() => {
     const v = Number(localStorage.getItem(RATE_KEY));
     return Number.isFinite(v) && v > 0 ? v : null;
@@ -119,13 +140,14 @@ export default function CardSetupView({ onStarted }: Props) {
       getCachedFiles(f).catch(() => []),
     ]);
     setFileCount(count);
+    setCachedFiles(cached);
     const doneCount = cached.filter((c) => c.status === "done").length;
     setAlreadyDone(doneCount);
     if (count === 0) {
       setError("We couldn't find any audio recordings in that folder. Try choosing the folder that contains your recordings directly.");
       return;
     }
-    setStep(resumeEnabled && doneCount > 0 ? "resume" : "options");
+    goTo(resumeEnabled && doneCount > 0 ? "resume" : "options");
   };
 
   const handleStartOver = async () => {
@@ -133,7 +155,31 @@ export default function CardSetupView({ onStarted }: Props) {
     try {
       await clearCache(input);
       setAlreadyDone(0);
-      setStep("options");
+      setCachedFiles([]);
+      goTo("options");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleViewResults = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const session = await getReviewSession(input);
+      if (!session) {
+        setError("No cached results found for this folder yet.");
+        return;
+      }
+      const rows = await listFiles(input, session.session_id);
+      const concurrencyNum = concurrency.trim() === "" ? 0 : Number(concurrency);
+      const reviewOpts: StartOpts = {
+        input, outputDir: input, device, concurrency: concurrencyNum, workerCmd, cwd: null,
+        thetaA, thetaB, timeoutSecs, maxAttempts,
+      };
+      onViewResults(session, reviewOpts, rows);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -183,11 +229,11 @@ export default function CardSetupView({ onStarted }: Props) {
   const folderName = input.split("/").pop() || input;
 
   return (
-    <div className="card reveal" style={{ display: "grid", gap: 22, maxWidth: 560, margin: "0 auto", "--d": "0.06s" } as CSSProperties}>
+    <div className="card reveal" style={{ display: "grid", gap: 22, maxWidth: step === "inspect" ? 720 : 560, margin: "0 auto", transition: "max-width 0.3s ease", "--d": "0.06s" } as CSSProperties}>
 
       {/* ── Step 1: choose folder ─────────────────────────────────────── */}
       {step === "folder" && (
-        <div style={{ display: "grid", gap: 16, textAlign: "center", padding: "20px 8px" }}>
+        <div className={stepAnim} style={{ display: "grid", gap: 16, textAlign: "center", padding: "20px 8px" }}>
           <h2 style={{ margin: 0 }}>Choose the folder your audio files are in</h2>
           <p className="sub" style={{ margin: 0 }}>
             This app listens through your field recordings and marks every place it
@@ -208,29 +254,70 @@ export default function CardSetupView({ onStarted }: Props) {
 
       {/* ── Step 1b: earlier progress found ───────────────────────────── */}
       {step === "resume" && (
-        <div style={{ display: "grid", gap: 16, textAlign: "center", padding: "12px 8px" }}>
+        <div className={stepAnim} style={{ display: "grid", gap: 16, textAlign: "center", padding: "12px 8px" }}>
           <h2 style={{ margin: 0 }}>Welcome back!</h2>
           <p className="sub" style={{ margin: 0 }}>
             It looks like you've worked on this folder before. Your earlier progress was saved:
             {" "}<b>{alreadyDone}</b> of <b>{fileCount}</b> recordings are already analyzed.
           </p>
-          <button className="primary" style={{ height: 52, fontSize: 15 }} onClick={() => setStep("options")}>
+          <button className="primary" style={{ height: 52, fontSize: 15 }} onClick={() => goTo("options")}>
             Pick up where I left off
           </button>
           <p className="sub" style={{ margin: 0, fontSize: 12 }}>
             Recordings that are already finished will be skipped, so this will be faster.
           </p>
+
+          {brokenCount > 0 && (
+            <div className="error-text" style={{ margin: 0 }}>
+              ⚠ {brokenCount} of {alreadyDone} cached {brokenCount === 1 ? "result looks" : "results look"} broken
+              (crashed or errored) — we won't guess for you.
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap" }}>
+            <button className="secondary-cta" onClick={handleViewResults} disabled={busy}>
+              {busy ? "Loading…" : "See which recordings were cached →"}
+            </button>
+            <button className="backlink" onClick={() => goTo("inspect")}>
+              Choose which cached files to use →
+            </button>
+          </div>
+
           <div style={{ display: "flex", justifyContent: "center", gap: 10 }}>
-            <BackButton onClick={() => setStep("folder")} label="← Different folder" />
+            <BackButton onClick={() => goTo("folder", "back")} label="← Different folder" />
             <BackButton onClick={handleStartOver} label={busy ? "Clearing…" : "Erase progress and start over"} />
           </div>
           {error && <div className="error-text">{error}</div>}
         </div>
       )}
 
+      {/* ── Step 1c: inspect cached files ─────────────────────────────── */}
+      {step === "inspect" && (
+        <div className={stepAnim} style={{ display: "grid", gap: 16, padding: "12px 8px" }}>
+          <div style={{ textAlign: "center" }}>
+            <h2 style={{ margin: 0 }}>Cached recordings in {folderName}</h2>
+            <p className="sub" style={{ margin: "8px 0 0" }}>
+              Each recording below was analyzed in an earlier run. Check the ones you want to reuse as-is —
+              they'll be skipped on the next run. Uncheck any you want re-analyzed instead, including files
+              flagged <b>broken</b> that crashed or errored out last time.
+            </p>
+          </div>
+          <ManageCache
+            outputDir={input}
+            onProceed={() => {
+              refreshCachedFiles(input);
+              goTo("options");
+            }}
+          />
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <BackButton onClick={() => goTo("resume", "back")} label="← Back" />
+          </div>
+        </div>
+      )}
+
       {/* ── Step 2: settings ──────────────────────────────────────────── */}
       {step === "options" && (
-        <div style={{ display: "grid", gap: 18 }}>
+        <div className={stepAnim} style={{ display: "grid", gap: 18 }}>
           <div style={{ textAlign: "center" }}>
             <h2 style={{ margin: 0 }}>Set detection sensitivity and quality filter</h2>
             <p className="sub" style={{ margin: "8px 0 0" }}>
@@ -292,16 +379,16 @@ export default function CardSetupView({ onStarted }: Props) {
             </div>
           )}
 
-          <button className="primary" style={{ height: 48 }} onClick={() => setStep("analyze")}>Continue →</button>
+          <button className="primary" style={{ height: 48 }} onClick={() => goTo("analyze")}>Continue →</button>
           <div style={{ display: "flex", justifyContent: "center" }}>
-            <BackButton onClick={() => setStep(resumeEnabled && alreadyDone > 0 ? "resume" : "folder")} />
+            <BackButton onClick={() => goTo(resumeEnabled && alreadyDone > 0 ? "resume" : "folder", "back")} />
           </div>
         </div>
       )}
 
       {/* ── Step 3: analyze ───────────────────────────────────────────── */}
       {step === "analyze" && (
-        <div style={{ display: "grid", gap: 16, textAlign: "center", padding: "12px 8px" }}>
+        <div className={stepAnim} style={{ display: "grid", gap: 16, textAlign: "center", padding: "12px 8px" }}>
           <img
             src={birdImg}
             alt=""
@@ -365,7 +452,7 @@ export default function CardSetupView({ onStarted }: Props) {
             ) : "Analyze!"}
           </button>
           <div style={{ display: "flex", justifyContent: "center" }}>
-            <BackButton onClick={() => setStep("options")} label="← Back to settings" />
+            <BackButton onClick={() => goTo("options", "back")} label="← Back to settings" />
           </div>
         </div>
       )}
