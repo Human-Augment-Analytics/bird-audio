@@ -147,7 +147,7 @@ fn main() {
         println!();
     });
 
-    let summary = run_session(store.clone(), sid, cfg, Some(tx));
+    let summary = run_session(store.clone(), sid, cfg, Some(tx), None);
     let _ = printer.join();
     println!(
         "Session {} complete: {} ok, {} failed, {} events ({} complete, {} retained)",

@@ -515,6 +515,70 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+
+    /// Re-queue every terminally `failed` file so a re-run retries it. Clears the
+    /// stored error and resets the attempt counter. Returns how many were reset.
+    pub fn reset_failed(&self, session_id: i64) -> rusqlite::Result<usize> {
+        let n = self.conn.execute(
+            "UPDATE files SET status='pending', error=NULL, attempts=0, updated_at=datetime('now')
+             WHERE session_id=?1 AND status='failed'",
+            params![session_id],
+        )?;
+        Ok(n)
+    }
+
+    /// Re-queue specific files by path (per-row retry). Returns how many matched.
+    pub fn reset_files(&self, session_id: i64, paths: &[String]) -> rusqlite::Result<usize> {
+        let mut n = 0;
+        for p in paths {
+            n += self.conn.execute(
+                "UPDATE files SET status='pending', error=NULL, attempts=0, updated_at=datetime('now')
+                 WHERE session_id=?1 AND path=?2",
+                params![session_id, p],
+            )?;
+        }
+        Ok(n)
+    }
+
+    /// Re-queue every "broken" file — terminally `failed` or left `in_progress`
+    /// by a crashed run — so a re-run retries it. Distinct from [`reset_failed`]
+    /// in that it also rescues rows stuck `in_progress`. Returns how many reset.
+    pub fn reset_broken(&self, session_id: i64) -> rusqlite::Result<usize> {
+        let n = self.conn.execute(
+            "UPDATE files SET status='pending', error=NULL, attempts=0, updated_at=datetime('now')
+             WHERE session_id=?1 AND status IN ('failed','in_progress')",
+            params![session_id],
+        )?;
+        Ok(n)
+    }
+
+    /// Drop manifest rows (and their events) whose audio file no longer exists on
+    /// disk, so a moved/deleted recording can't linger forever as `pending` and
+    /// block the run from finishing. Returns the number of pruned files.
+    pub fn prune_missing(&self, session_id: i64) -> rusqlite::Result<usize> {
+        let paths: Vec<(i64, String)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, path FROM files WHERE session_id=?1")?;
+            let rows = stmt.query_map(params![session_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut pruned = 0;
+        for (id, path) in paths {
+            if !Path::new(&path).exists() {
+                self.conn.execute("DELETE FROM events WHERE file_id=?1", params![id])?;
+                self.conn.execute("DELETE FROM files WHERE id=?1", params![id])?;
+                pruned += 1;
+            }
+        }
+        if pruned > 0 {
+            self.conn.execute(
+                "UPDATE sessions SET total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1) WHERE id=?1",
+                params![session_id],
+            )?;
+        }
+        Ok(pruned)
+    }
 }
 
 #[cfg(test)]
@@ -830,5 +894,57 @@ mod tests {
         let after = s.list_events(sid, "/data/x.wav").unwrap();
         assert_eq!(after.len(), 1);
         assert!(after.iter().all(|r| r.id != eid));
+    }
+
+    #[test]
+    fn reset_failed_requeues_only_failed() {
+        let s = mem();
+        let sid = new_session(&s);
+        s.add_files(sid, &[PathBuf::from("/data/a.wav"), PathBuf::from("/data/b.wav")]).unwrap();
+        let c = s.claim_next_pending(sid).unwrap().unwrap();
+        s.mark_failed(c.file_id, "boom").unwrap();
+        assert_eq!(s.reset_failed(sid).unwrap(), 1);
+        assert_eq!(s.file_status(c.file_id).unwrap().as_deref(), Some("pending"));
+        // error cleared and attempts reset
+        let (err, attempts): (Option<String>, i64) = s.conn.query_row(
+            "SELECT error, attempts FROM files WHERE id=?1", params![c.file_id],
+            |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(err, None);
+        assert_eq!(attempts, 0);
+        // nothing left to reset the second time
+        assert_eq!(s.reset_failed(sid).unwrap(), 0);
+    }
+
+    #[test]
+    fn reset_broken_rescues_failed_and_in_progress() {
+        let s = mem();
+        let sid = new_session(&s);
+        s.add_files(sid, &[PathBuf::from("/data/a.wav"), PathBuf::from("/data/b.wav")]).unwrap();
+        s.conn.execute("UPDATE files SET status='failed' WHERE path='/data/a.wav'", []).unwrap();
+        s.conn.execute("UPDATE files SET status='in_progress' WHERE path='/data/b.wav'", []).unwrap();
+        assert_eq!(s.reset_broken(sid).unwrap(), 2);
+        for p in ["/data/a.wav", "/data/b.wav"] {
+            let st: String = s.conn.query_row(
+                "SELECT status FROM files WHERE path=?1", params![p], |r| r.get(0)).unwrap();
+            assert_eq!(st, "pending");
+        }
+    }
+
+    #[test]
+    fn prune_missing_drops_only_vanished_files() {
+        let dir = std::env::temp_dir().join(format!("bc_prune_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let present = dir.join("here.wav");
+        std::fs::write(&present, b"x").unwrap();
+        let missing = dir.join("gone.wav"); // never created
+
+        let s = mem();
+        let sid = new_session(&s);
+        s.add_files(sid, &[present.clone(), missing.clone()]).unwrap();
+        assert_eq!(s.prune_missing(sid).unwrap(), 1);
+        let rows = s.list_files(sid).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].path.ends_with("here.wav"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

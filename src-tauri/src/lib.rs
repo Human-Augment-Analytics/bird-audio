@@ -8,6 +8,7 @@ pub fn run() {
         .manage(state::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::start_session,
+            commands::retry_failed,
             commands::cancel_session,
             commands::get_summary,
             commands::list_files,
@@ -17,6 +18,7 @@ pub fn run() {
             commands::count_audio_files,
             commands::check_cache,
             commands::clear_cache,
+            commands::clean_cache,
             commands::get_cached_files,
             commands::get_review_session,
             commands::delete_cached_files,

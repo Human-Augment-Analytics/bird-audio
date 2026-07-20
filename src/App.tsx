@@ -4,8 +4,10 @@ import CardSetupView, { type CardSetupViewHandle } from "./components/CardSetupV
 import RunView from "./components/RunView";
 import ReviewView from "./components/ReviewView";
 import appIcon from "./assets/app-icon.png";
-import { cancelSession, exportSession, getFeatureFlags, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
-import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
+import { cancelSession, exportSession, getFeatureFlags, getReviewSession, getSummary, listFiles, onDone, onFileDone, onProgress, pickSavePath, retryFailed, startSession } from "./api";
+import type { FileDone, FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
+
+const LAST_RUN_KEY = "birdaudio.lastRun";
 
 const UI_MODE_KEY = "birdaudio.uiMode";
 
@@ -43,8 +45,32 @@ export default function App() {
   const [throughput, setThroughput] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [cancelled, setCancelled] = useState(false);
+  const [activity, setActivity] = useState<FileDone[]>([]);
+  const [resume, setResume] = useState<{ opts: StartOpts; unfinished: number } | null>(null);
   const tRef = useRef<{ t: number; done: number } | null>(null);
   const cardSetupRef = useRef<CardSetupViewHandle>(null);
+
+  // On launch, if the last run left files unfinished (interruption/crash), offer
+  // to continue it straight from the saved settings — no folder picker needed.
+  useEffect(() => {
+    const raw = localStorage.getItem(LAST_RUN_KEY);
+    if (!raw) return;
+    let saved: StartOpts;
+    try { saved = JSON.parse(raw) as StartOpts; } catch { return; }
+    let active = true;
+    (async () => {
+      try {
+        const session = await getReviewSession(saved.outputDir);
+        if (!session || !active) return;
+        const s = await getSummary(saved.outputDir, session.session_id);
+        // Resume (start_session) reprocesses pending + orphaned in_progress files;
+        // terminally-failed files are left to the explicit Retry button instead.
+        const unfinished = s.pending + s.in_progress;
+        if (active && unfinished > 0) setResume({ opts: saved, unfinished });
+      } catch { /* no resumable run — ignore */ }
+    })();
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -67,6 +93,7 @@ export default function App() {
     let active = true;
     let unP: (() => void) | undefined;
     let unD: (() => void) | undefined;
+    let unF: (() => void) | undefined;
     (async () => {
       unP = await onProgress((p) => {
         setProgress(p);
@@ -82,9 +109,14 @@ export default function App() {
         setSummary(s);
         listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
       });
+      unF = await onFileDone((f) => {
+        // Keep a bounded, newest-first activity log of stored/failed files.
+        setActivity((prev) => [f, ...prev].slice(0, 50));
+      });
       if (!active) {
         unP?.();
         unD?.();
+        unF?.();
       }
     })();
     // Only poll listFiles if the run is active and not complete/cancelled
@@ -98,6 +130,7 @@ export default function App() {
       active = false;
       unP?.();
       unD?.();
+      unF?.();
       if (iv) clearInterval(iv);
     };
   }, [view, start, opts, summary, cancelled]);
@@ -126,13 +159,44 @@ export default function App() {
     setThroughput(0);
     setNotice(null);
     setCancelled(false);
+    setActivity([]);
+    setResume(null);
     tRef.current = null;
+    // Remember this run so an interruption can be resumed without re-picking.
+    try { localStorage.setItem(LAST_RUN_KEY, JSON.stringify(o)); } catch { /* ignore quota */ }
     setView("run");
   };
 
   const handleCancel = () => {
     setCancelled(true);
     cancelSession();
+  };
+
+  // Re-run this session's failed files without leaving the run view.
+  const handleRetryFailed = async () => {
+    if (!start || !opts) return;
+    setSummary(null);
+    setCancelled(false);
+    setActivity([]);
+    setThroughput(0);
+    tRef.current = null;
+    try {
+      const result = await retryFailed(opts, start.session_id);
+      setStart(result);
+    } catch (e) {
+      setNotice(`Retry failed: ${String(e)}`);
+    }
+  };
+
+  // Resume the last interrupted run straight from saved settings.
+  const handleResume = async () => {
+    if (!resume) return;
+    try {
+      const result = await startSession(resume.opts);
+      onStarted(result, resume.opts);
+    } catch (e) {
+      setNotice(`Could not resume: ${String(e)}`);
+    }
   };
 
   const doExport = async (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => {
@@ -192,6 +256,19 @@ export default function App() {
 
       {/* Kept mounted (just hidden) while section flips to "review" and back,
           so the setup card's own step/folder state isn't lost. */}
+      {view === "setup" && section === "batch" && resume && (
+        <div className="notice reveal" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+          <span>
+            <span className="dot dot--ok" /> A previous run in{" "}
+            <b>{resume.opts.input.split("/").pop() || resume.opts.input}</b> was interrupted —{" "}
+            {resume.unfinished} recording{resume.unfinished === 1 ? "" : "s"} left to analyze.
+          </span>
+          <span style={{ display: "flex", gap: 8 }}>
+            <button className="primary" onClick={handleResume}>▸ Resume run</button>
+            <button className="backlink" onClick={() => setResume(null)}>Dismiss</button>
+          </span>
+        </div>
+      )}
       {view === "setup" && (
         <div style={{ display: section === "batch" ? "contents" : "none" }}>
           {uiMode === "card" ? <CardSetupView ref={cardSetupRef} onStarted={onStarted} onViewResults={onViewCachedResults} /> : <SetupView onStarted={onStarted} />}
@@ -212,9 +289,11 @@ export default function App() {
             progress={progress}
             summary={summary}
             rows={rows}
+            activity={activity}
             throughput={throughput}
             onExport={doExport}
             onCancel={handleCancel}
+            onRetryFailed={handleRetryFailed}
             outputDir={opts?.outputDir || ""}
             inputDir={opts?.input || ""}
           />

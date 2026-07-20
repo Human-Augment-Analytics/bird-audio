@@ -50,7 +50,8 @@ All commands are defined in `src-tauri/src/commands.rs` and registered in `main.
 
 | Command | Signature (Rust) | Description |
 |---|---|---|
-| `start_session` | `(opts: StartOpts) → Result<StartResult>` | Enumerate audio files, create/resume session, spawn Python worker pool, stream progress via `batch://progress`. Fires `batch://done` when complete. |
+| `start_session` | `(opts: StartOpts) → Result<StartResult>` | Enumerate audio files, create/resume session, prune files missing from disk, spawn Python worker pool, stream progress via `batch://progress` and per-file completions via `batch://file_done`. Fires `batch://done` when complete. |
+| `retry_failed` | `(opts, session_id, paths?) → Result<StartResult>` | Re-queue failed files (all, or just `paths`) and re-run the same session — no folder re-selection. Shares `start_session`'s engine plumbing. |
 | `cancel_session` | `() → ()` | Set the shared `AtomicBool` cancel flag; workers stop after the current file. |
 | `get_summary` | `(output_dir, session_id) → Result<Summary>` | Aggregate file/event counts for a session. |
 | `list_files` | `(output_dir, session_id) → Result<Vec<FileRow>>` | Per-file status rows (path, status, n_events, n_complete, error). |
@@ -59,7 +60,8 @@ All commands are defined in `src-tauri/src/commands.rs` and registered in `main.
 | `check_health` | `(cwd?) → Result<HealthStatus>` | Verify Python env (torch/ultralytics/librosa), detect hardware device, check model files exist. |
 | `prepare_system` | `(cwd?) → Result<()>` | Run `uv sync` to install/update Python dependencies. |
 | `check_cache` | `(output_dir) → Result<bool>` | Returns true if `batch.db` exists in the output directory. |
-| `clear_cache` | `(output_dir) → Result<()>` | Delete `batch.db`. |
+| `clear_cache` | `(output_dir) → Result<()>` | Delete `batch.db` **and its `-wal`/`-shm` sidecars** so no committed data survives in the write-ahead log. |
+| `clean_cache` | `(output_dir) → Result<CleanResult>` | Non-destructive tidy: re-queue broken files (`failed` + stuck `in_progress`) and prune manifest rows for recordings no longer on disk. Returns `{ reset, pruned }`. |
 | `get_cached_files` | `(output_dir) → Result<Vec<CachedFile>>` | List path + status for all files in the latest session. |
 | `delete_cached_files` | `(output_dir, paths) → Result<()>` | Remove specific files (and their events) from the session, allowing them to be re-processed on next run. |
 
@@ -79,6 +81,7 @@ All commands are defined in `src-tauri/src/commands.rs` and registered in `main.
 | Event | Payload | When |
 |---|---|---|
 | `batch://progress` | `Progress` struct (aggregate counts) | Throttled ~250ms during an active session. |
+| `batch://file_done` | `FileDone` struct (`path`, `status` = `done`/`failed`/`retry`, counts, `attempt`/`max_attempts`, `error`) | One **un-throttled** message each time a file is stored, terminally fails, or is about to auto-retry. Drives the RunView activity log. |
 | `batch://done` | `Result<Summary>` | Emitted once when the engine finishes (success or error). |
 
 ## UI modes

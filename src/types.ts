@@ -46,6 +46,19 @@ export interface FileRow {
   error: string | null;
 }
 
+/** One per file as it reaches a terminal outcome (or is about to be retried) —
+ * the payload of the un-throttled `batch://file_done` event. */
+export interface FileDone {
+  path: string;
+  status: "done" | "failed" | "retry";
+  n_events: number;
+  n_complete: number;
+  elapsed_ms: number;
+  attempt: number;
+  max_attempts: number;
+  error: string | null;
+}
+
 export interface CachedFile {
   path: string;
   status: string;

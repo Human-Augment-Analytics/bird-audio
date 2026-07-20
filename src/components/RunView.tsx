@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { FileRow, Progress, StartResult, Summary, ExportedEvent } from "../types";
+import type { FileDone, FileRow, Progress, StartResult, Summary, ExportedEvent } from "../types";
 import { pickFile, getSessionEvents } from "../api";
 import SanityCheckViews from "./SanityCheckViews";
 import { FolderTree } from "./FolderTree";
@@ -24,9 +24,11 @@ interface Props {
   progress: Progress | null;
   summary: Summary | null; // non-null once done
   rows: FileRow[];
+  activity: FileDone[]; // newest-first per-file "stored"/failed/retry log
   throughput: number; // files/sec
   onExport: (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => void;
   onCancel: () => void;
+  onRetryFailed: () => void;
   outputDir: string;
   inputDir: string;
 }
@@ -65,7 +67,7 @@ const FILTERS: { key: "all" | "done" | "failed"; label: string }[] = [
   { key: "failed", label: "Failed" },
 ];
 
-export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel, outputDir, inputDir }: Props) {
+export default function RunView({ start, progress, summary, rows, activity, throughput, onExport, onCancel, onRetryFailed, outputDir, inputDir }: Props) {
   const [filter, setFilter] = useState<"all" | "done" | "failed">("all");
   const [metadataPath, setMetadataPath] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<string>("csv");
@@ -175,6 +177,29 @@ export default function RunView({ start, progress, summary, rows, throughput, on
       {!done && progress?.last_file && (
         <div className="mono" style={{ fontSize: 11.5, color: "var(--text-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           ▸ {progress.last_file}
+        </div>
+      )}
+
+      {activity.length > 0 && (
+        <div className="activity-log" style={{ display: "grid", gap: 3, maxHeight: 132, overflow: "auto", padding: "10px 12px", background: "rgba(255,255,255,0.015)", border: "1px solid var(--line)", borderRadius: 8 }}>
+          <span className="eyebrow" style={{ marginBottom: 2 }}>Activity</span>
+          {activity.map((f, i) => {
+            const name = f.path.split("/").pop() || f.path;
+            const color = f.status === "done" ? "var(--jade)" : f.status === "retry" ? "var(--amber)" : "var(--coral)";
+            const mark = f.status === "done" ? "✓" : f.status === "retry" ? "↻" : "✕";
+            const msg = f.status === "done"
+              ? `${f.n_events} ${f.n_events === 1 ? "buzz" : "buzzes"} · saved`
+              : f.status === "retry"
+                ? `error — retrying (attempt ${f.attempt}/${f.max_attempts})`
+                : `failed${f.error ? ` — ${f.error}` : ""}`;
+            return (
+              <div key={`${f.path}-${i}`} className="mono" style={{ fontSize: 11, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ color, fontWeight: 700, marginRight: 6 }}>{mark}</span>
+                <span style={{ color: "var(--text)" }}>{name}</span>
+                <span style={{ color: "var(--text-faint)" }}> — {msg}</span>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -302,6 +327,11 @@ export default function RunView({ start, progress, summary, rows, throughput, on
           </button>
         ))}
         <span style={{ flex: 1 }} />
+        {done && failedN > 0 && (
+          <button className="primary" style={{ borderColor: "var(--coral)" }} onClick={onRetryFailed}>
+            ↻ Retry failed ({failedN})
+          </button>
+        )}
         {!done && <button onClick={onCancel}>Cancel run</button>}
       </div>
 

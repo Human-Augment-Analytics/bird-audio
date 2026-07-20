@@ -216,13 +216,21 @@ buzz is it?"**, and `retained` is the intersection.
   (`UPDATE … RETURNING`), so no two workers grab the same file.
 - **Retries / timeouts** — per-file timeout; on timeout/disconnect the worker is
   killed and the file is requeued until `max_attempts`, then marked `failed`.
+  Worker-reported **errors are auto-retried the same way** (routed through
+  `fail_or_requeue`) rather than failing on the first attempt — each retry emits
+  a `batch://file_done` with `status:"retry"` so it's visible, not silent.
 - **Cancellation** — a shared `AtomicBool`; workers stop after the current file
   (in-flight work is not preempted).
 
 ## 9. Export
 
-`events` joined to `files`, ordered by path then time, written as **CSV** or
-**JSON** (`batch-core/src/export.rs`). Two optional filters:
+CSV/JSON exports **LEFT JOIN from `files`** (`batch-core/src/export.rs`), so every
+scanned file in the manifest appears at least once — a file with no detections or
+one that terminally failed shows up as a single row with empty event columns plus
+`file_status` and `file_error`. warbleR/Raven selection tables stay event-only by
+definition. Ordered by path then time. Two optional filters, applied in the JOIN's
+`ON` clause so filtering a file's events leaves the file present (manifest coverage
+wins over the filter for *presence*; filters still govern *event rows*):
 - `complete_only` — restricts to `completeness_label = 'complete'` (Stage B quality gate).
 - `confirmed_only` — restricts to `review_status = 'confirmed'` (human-curated events only; includes manual events).
 

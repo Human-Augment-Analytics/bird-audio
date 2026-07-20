@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getCachedFiles, deleteCachedFiles, clearCache } from "../api";
+import { getCachedFiles, deleteCachedFiles, clearCache, cleanCache } from "../api";
 import type { CachedFile } from "../types";
 import { STAGE_LABEL, STAGE_COLOR } from "../stageMeta";
 import { relativeDir } from "../pathTree";
@@ -17,13 +17,36 @@ export default function ManageCache({ outputDir, onProceed }: Props) {
   // doing nothing and clicking Proceed reuses the cache exactly as before.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [cleanNote, setCleanNote] = useState<string | null>(null);
 
-  useEffect(() => {
+  const reload = () =>
     getCachedFiles(outputDir).then((fs) => {
       setFiles(fs);
       setSelected(new Set(fs.map(f => f.path)));
     });
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [outputDir]);
+
+  // Tidy the cache so a re-run is trustworthy: re-queue broken files and drop
+  // rows for recordings no longer on disk. Non-destructive to finished work.
+  const handleClean = async () => {
+    setBusy(true);
+    setCleanNote(null);
+    try {
+      const { reset, pruned } = await cleanCache(outputDir);
+      await reload();
+      setCleanNote(
+        reset === 0 && pruned === 0
+          ? "Already tidy — nothing to clean up."
+          : `Re-queued ${reset} broken file${reset === 1 ? "" : "s"}${pruned > 0 ? `, removed ${pruned} missing` : ""}.`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const toggle = (path: string) => {
     const next = new Set(selected);
@@ -75,8 +98,15 @@ export default function ManageCache({ outputDir, onProceed }: Props) {
               Exclude Stage A only ({stageACount})
             </button>
           )}
+          <button className="chip" onClick={handleClean} disabled={busy} title="Re-queue broken files and drop recordings no longer on disk">
+            🧹 Tidy up
+          </button>
         </div>
       </div>
+
+      {cleanNote && (
+        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{cleanNote}</div>
+      )}
 
       {brokenCount > 0 && (
         <div className="error-text" style={{ margin: 0 }}>

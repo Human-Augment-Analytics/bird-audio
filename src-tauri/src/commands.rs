@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use batch_core::concurrency::resolve_concurrency;
-use batch_core::engine::{run_session, EngineConfig};
+use batch_core::engine::{run_session, EngineConfig, FileDone, Progress};
 use batch_core::enumerate::enumerate_audio;
 use batch_core::export::{export_csv, export_json, export_warbler, export_raven};
 use batch_core::store::{EventRow, FileRow, NewSession, Store, Summary};
@@ -86,6 +86,87 @@ fn resolve_cwd(cwd: Option<String>) -> PathBuf {
 }
 
 
+/// Build the engine config from the UI options: resolve worker command, device
+/// args, and concurrency (honoring the `parallel_control` feature flag). Shared
+/// by `start_session` and `retry_failed` so the two never drift.
+fn make_engine_config(
+    opts: &StartOpts,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<EngineConfig, String> {
+    let conc = if opts.concurrency == 0 {
+        resolve_concurrency(&opts.device, None)
+    } else {
+        opts.concurrency
+    };
+    let proj_dir = resolve_cwd(opts.cwd.clone());
+    let flags = read_feature_flags(&proj_dir);
+    let conc_final = match flags.get("parallel_control") {
+        Some(v) if v == &serde_json::Value::Bool(false) => resolve_concurrency(&opts.device, None),
+        _ => conc,
+    };
+
+    // worker command: split "uv run python scripts/ml_engine.py --worker" + device
+    let mut parts: Vec<String> = opts.worker_cmd.split_whitespace().map(String::from).collect();
+    if parts.is_empty() {
+        return Err("worker_cmd is empty".into());
+    }
+    let program = parts.remove(0);
+    let mut worker_args = parts;
+    worker_args.push("--device".into());
+    worker_args.push(opts.device.clone());
+
+    Ok(EngineConfig {
+        python: program,
+        worker_args,
+        cwd: Some(proj_dir),
+        concurrency: conc_final,
+        theta_a: opts.theta_a,
+        theta_b: opts.theta_b,
+        manifest_only: true,
+        timeout: Duration::from_secs(opts.timeout_secs),
+        max_attempts: opts.max_attempts,
+        cancel,
+    })
+}
+
+/// Spawn the worker pool for a session and wire its two event streams to the
+/// frontend: `batch://progress` (throttled ~250ms aggregate) and
+/// `batch://file_done` (one unthrottled message per file as it's stored).
+/// Emits `batch://done` with the final summary. Shared by start/retry.
+fn spawn_run(app: AppHandle, store: Store, sid: i64, cfg: EngineConfig) {
+    let store = Arc::new(Mutex::new(store));
+    let (tx, rx) = mpsc::channel::<Progress>();
+    let (ftx, frx) = mpsc::channel::<FileDone>();
+
+    // aggregate progress: throttle to ~250ms so we don't flood the webview
+    let app_p = app.clone();
+    let fwd_p = thread::spawn(move || {
+        let mut last = Instant::now() - Duration::from_millis(500);
+        for p in rx {
+            if last.elapsed() >= Duration::from_millis(250) {
+                let _ = app_p.emit("batch://progress", &p);
+                last = Instant::now();
+            }
+        }
+    });
+
+    // per-file completion: never throttled — this is the "file stored" signal
+    let app_f = app.clone();
+    let fwd_f = thread::spawn(move || {
+        for fd in frx {
+            let _ = app_f.emit("batch://file_done", &fd);
+        }
+    });
+
+    let app_done = app.clone();
+    thread::spawn(move || {
+        let summary = run_session(store, sid, cfg, Some(tx), Some(ftx));
+        let _ = fwd_p.join();
+        let _ = fwd_f.join();
+        let _ = app_done.emit("batch://done", &summary);
+    });
+}
+
 #[tauri::command]
 pub fn start_session(
     app: AppHandle,
@@ -99,84 +180,60 @@ pub fn start_session(
         .unwrap_or_else(|_| PathBuf::from(&opts.input));
     let roots_json =
         serde_json::to_string(&vec![input_abs.to_string_lossy()]).map_err(|e| e.to_string())?;
-    let conc = if opts.concurrency == 0 {
-        resolve_concurrency(&opts.device, None)
-    } else {
-        opts.concurrency
-    };
-    // Read feature flags from project cwd and enforce parallel_control
-    let proj_dir = resolve_cwd(opts.cwd.clone());
-    let flags = read_feature_flags(&proj_dir);
-    let conc_final = match flags.get("parallel_control") {
-        Some(v) if v == &serde_json::Value::Bool(false) => resolve_concurrency(&opts.device, None),
-        _ => conc,
-    };
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cfg = make_engine_config(&opts, Some(cancel.clone()))?;
+
     let sid = match store.find_resumable(&roots_json).map_err(|e| e.to_string())? {
         Some(id) => id,
         None => store
-                .create_session(&NewSession {
+            .create_session(&NewSession {
                 input_roots: &roots_json,
                 output_dir: &opts.output_dir,
                 device: &opts.device,
-                    concurrency: conc_final as i64,
+                concurrency: cfg.concurrency as i64,
                 theta_a: opts.theta_a,
                 theta_b: opts.theta_b,
             })
             .map_err(|e| e.to_string())?,
     };
     store.add_files(sid, &paths).map_err(|e| e.to_string())?;
+    // Drop any files that vanished from disk since a previous run so they can't
+    // linger as `pending` and keep the session from ever finishing.
+    store.prune_missing(sid).map_err(|e| e.to_string())?;
     let total_files = store.list_files(sid).map_err(|e| e.to_string())?.len();
 
-    // worker command: split "uv run python scripts/ml_engine.py --worker" + device
-    let mut parts: Vec<String> = opts.worker_cmd.split_whitespace().map(String::from).collect();
-    if parts.is_empty() {
-        return Err("worker_cmd is empty".into());
-    }
-    let program = parts.remove(0);
-    let mut worker_args = parts;
-    worker_args.push("--device".into());
-    worker_args.push(opts.device.clone());
-
-    let cancel = Arc::new(AtomicBool::new(false));
-    *state.cancel.lock().unwrap() = Some(cancel.clone());
-
-    let cfg = EngineConfig {
-        python: program,
-        worker_args,
-        cwd: Some(resolve_cwd(opts.cwd)),
-        concurrency: conc_final,
-        theta_a: opts.theta_a,
-        theta_b: opts.theta_b,
-        manifest_only: true,
-        timeout: Duration::from_secs(opts.timeout_secs),
-        max_attempts: opts.max_attempts,
-        cancel: Some(cancel),
-    };
-
-    let store = Arc::new(Mutex::new(store));
-    let (tx, rx) = mpsc::channel();
-
-    // forwarder thread: throttle progress events to ~250ms
-    let app_fwd = app.clone();
-    let fwd = thread::spawn(move || {
-        let mut last = Instant::now() - Duration::from_millis(500);
-        for p in rx {
-            if last.elapsed() >= Duration::from_millis(250) {
-                let _ = app_fwd.emit("batch://progress", &p);
-                last = Instant::now();
-            }
-        }
-    });
-
-    // run thread: drives the engine, then emits final summary
-    let app_done = app.clone();
-    thread::spawn(move || {
-        let summary = run_session(store, sid, cfg, Some(tx));
-        let _ = fwd.join();
-        let _ = app_done.emit("batch://done", &summary);
-    });
+    *state.cancel.lock().unwrap() = Some(cancel);
+    spawn_run(app, store, sid, cfg);
 
     Ok(StartResult { session_id: sid, total_files })
+}
+
+/// Re-run a session's failed files without re-picking the folder. With `paths`
+/// it retries just those files (per-row retry); without, it retries every
+/// terminally-failed file in the session. Reuses the same engine plumbing as
+/// `start_session`.
+#[tauri::command]
+pub fn retry_failed(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    opts: StartOpts,
+    session_id: i64,
+    paths: Option<Vec<String>>,
+) -> Result<StartResult, String> {
+    let store = Store::open(&db_path(&opts.output_dir)).map_err(|e| e.to_string())?;
+    match &paths {
+        Some(ps) => { store.reset_files(session_id, ps).map_err(|e| e.to_string())?; }
+        None => { store.reset_failed(session_id).map_err(|e| e.to_string())?; }
+    };
+    let total_files = store.list_files(session_id).map_err(|e| e.to_string())?.len();
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cfg = make_engine_config(&opts, Some(cancel.clone()))?;
+    *state.cancel.lock().unwrap() = Some(cancel);
+    spawn_run(app, store, session_id, cfg);
+
+    Ok(StartResult { session_id, total_files })
 }
 
 #[tauri::command]
@@ -373,11 +430,45 @@ pub fn check_cache(output_dir: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub fn clear_cache(output_dir: String) -> Result<(), String> {
-    let path = db_path(&output_dir);
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|e| format!("Failed to delete cache: {}", e))?;
+    // WAL mode keeps the write-ahead log and shared-memory index in sidecar
+    // files; deleting only batch.db can leave committed data behind in -wal that
+    // reopens later. Remove all three so "start over" is truly clean.
+    let base = db_path(&output_dir);
+    for suffix in ["", "-wal", "-shm"] {
+        let p = PathBuf::from(format!("{}{}", base.to_string_lossy(), suffix));
+        if p.exists() {
+            std::fs::remove_file(&p).map_err(|e| format!("Failed to delete cache: {}", e))?;
+        }
     }
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanResult {
+    /// Broken files (failed or stuck in_progress) re-queued for another run.
+    pub reset: usize,
+    /// Manifest rows dropped because their audio file no longer exists on disk.
+    pub pruned: usize,
+}
+
+/// Tidy the cache so a re-run is trustworthy without nuking finished work:
+/// re-queue broken files and prune manifest rows for recordings that have
+/// disappeared from disk. Distinct from `clear_cache`, which deletes everything.
+#[tauri::command]
+pub fn clean_cache(output_dir: String) -> Result<CleanResult, String> {
+    let path = db_path(&output_dir);
+    if !path.exists() {
+        return Ok(CleanResult { reset: 0, pruned: 0 });
+    }
+    let store = Store::open(&path).map_err(|e| e.to_string())?;
+    let sid = match store.get_latest_session_id().map_err(|e| e.to_string())? {
+        Some(id) => id,
+        None => return Ok(CleanResult { reset: 0, pruned: 0 }),
+    };
+    let reset = store.reset_broken(sid).map_err(|e| e.to_string())?;
+    let pruned = store.prune_missing(sid).map_err(|e| e.to_string())?;
+    Ok(CleanResult { reset, pruned })
 }
 
 #[derive(Debug, Serialize)]

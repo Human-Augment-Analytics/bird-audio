@@ -37,12 +37,33 @@ pub struct Progress {
     pub elapsed_ms_total: i64,
 }
 
-fn fail_or_requeue(store: &Arc<Mutex<Store>>, c: &Claimed, cfg: &EngineConfig, reason: &str) {
+/// One message per file each time it reaches a terminal outcome or is about to
+/// be retried — the "this recording finished and was stored" signal the UI
+/// turns into an activity-log line. Unlike [`Progress`] it is never throttled.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileDone {
+    pub path: String,
+    /// "done" (saved), "failed" (terminal), or "retry" (transient error, will retry).
+    pub status: String,
+    pub n_events: i64,
+    pub n_complete: i64,
+    pub elapsed_ms: i64,
+    /// Which attempt this outcome was on (1-based), and the configured ceiling.
+    pub attempt: i64,
+    pub max_attempts: i64,
+    pub error: Option<String>,
+}
+
+/// Persist a non-success outcome. Returns `true` when the file was terminally
+/// failed (attempts exhausted), `false` when it was requeued for another try.
+fn fail_or_requeue(store: &Arc<Mutex<Store>>, c: &Claimed, cfg: &EngineConfig, reason: &str) -> bool {
     let s = store.lock().unwrap();
     if c.attempts >= cfg.max_attempts {
         s.mark_failed(c.file_id, reason).expect("mark_failed");
+        true
     } else {
         s.requeue(c.file_id).expect("requeue");
+        false
     }
 }
 
@@ -51,6 +72,7 @@ fn worker_loop(
     session_id: i64,
     cfg: Arc<EngineConfig>,
     progress: Option<Sender<Progress>>,
+    file_done: Option<Sender<FileDone>>,
     start: std::time::Instant,
 ) {
     let mut worker: Option<Worker> = None;
@@ -96,34 +118,61 @@ fn worker_loop(
             Err(crate::worker::WorkerError::Closed)
         };
 
+        // Emit a FileDone describing a terminal/retry outcome for this file.
+        let emit_done = |status: &str, n_events: i64, n_complete: i64, elapsed_ms: i64, error: Option<String>| {
+            if let Some(tx) = &file_done {
+                let _ = tx.send(FileDone {
+                    path: c.path.clone(),
+                    status: status.to_string(),
+                    n_events,
+                    n_complete,
+                    elapsed_ms,
+                    attempt: c.attempts,
+                    max_attempts: cfg.max_attempts,
+                    error,
+                });
+            }
+        };
+
+        // A non-success outcome: retry until attempts are exhausted, then fail.
+        // Emits "retry" while attempts remain so auto-retries are visible, and
+        // "failed" once poisoned.
+        let handle_failure = |reason: String| {
+            let terminal = fail_or_requeue(&store, &c, &cfg, &reason);
+            emit_done(if terminal { "failed" } else { "retry" }, 0, 0, 0, Some(reason));
+        };
+
         match outcome {
             Ok(WorkerMsg::Result {
                 id, n_events, n_complete, n_retained, elapsed_ms, events, ..
             }) if id == c.file_id as u64 => {
                 last_elapsed_ms = Some(elapsed_ms as i64);
-                let mut s = store.lock().unwrap();
-                s.record_success(
-                    session_id,
-                    c.file_id,
-                    &RecordedResult { n_events, n_complete, n_retained, elapsed_ms, events: &events },
-                )
-                .expect("record_success");
+                {
+                    let mut s = store.lock().unwrap();
+                    s.record_success(
+                        session_id,
+                        c.file_id,
+                        &RecordedResult { n_events, n_complete, n_retained, elapsed_ms, events: &events },
+                    )
+                    .expect("record_success");
+                }
+                emit_done("done", n_events, n_complete, elapsed_ms as i64, None);
             }
             Ok(WorkerMsg::Error { message, .. }) => {
-                let s = store.lock().unwrap();
-                s.mark_failed(c.file_id, &message).expect("mark_failed");
+                // Retry transient worker errors up to max_attempts before poisoning.
+                handle_failure(message);
             }
             Ok(_other) => {
                 if let Some(mut bad) = worker.take() {
                     bad.kill();
                 }
-                fail_or_requeue(&store, &c, &cfg, "protocol/id mismatch");
+                handle_failure("protocol/id mismatch".to_string());
             }
             Err(_) => {
                 if let Some(mut bad) = worker.take() {
                     bad.kill();
                 }
-                fail_or_requeue(&store, &c, &cfg, "timeout or worker died");
+                handle_failure("timeout or worker died".to_string());
             }
         }
 
@@ -156,6 +205,7 @@ pub fn run_session(
     session_id: i64,
     cfg: EngineConfig,
     progress: Option<Sender<Progress>>,
+    file_done: Option<Sender<FileDone>>,
 ) -> Summary {
     {
         let s = store.lock().unwrap();
@@ -168,7 +218,8 @@ pub fn run_session(
         let store = store.clone();
         let cfg = cfg.clone();
         let progress = progress.clone();
-        handles.push(thread::spawn(move || worker_loop(store, session_id, cfg, progress, start)));
+        let file_done = file_done.clone();
+        handles.push(thread::spawn(move || worker_loop(store, session_id, cfg, progress, file_done, start)));
     }
     for h in handles {
         let _ = h.join();
