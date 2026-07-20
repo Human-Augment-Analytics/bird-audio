@@ -1,5 +1,6 @@
 mod commands;
 mod state;
+mod active_learning_commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,6 +28,9 @@ pub fn run() {
             commands::add_manual_event,
             commands::delete_event,
             commands::prepare_review,
+            active_learning_commands::run_pcen,
+            active_learning_commands::run_active_learning,
+            active_learning_commands::run_qbe_search,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

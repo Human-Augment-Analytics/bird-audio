@@ -130,6 +130,7 @@ def main():
                         help="Feature extraction type")
     parser.add_argument("--recache", action="store_true", help="Force recomputing embeddings")
     parser.add_argument("--cache-dir", type=str, default="output", help="Directory for storing embeddings cache")
+    parser.add_argument("--json", action="store_true", help="Output results in JSON format")
     args = parser.parse_args()
 
     db_path = str(_REPO_ROOT / args.db)
@@ -147,21 +148,27 @@ def main():
         print(f"Error: Query Event ID {args.query_id} not found in database.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Query Event Info:")
-    print(f"  - ID: {query_event['id']}")
-    print(f"  - Session ID: {query_event['session_id']}")
-    print(f"  - File: {Path(query_event['file_path']).name}")
-    print(f"  - Time: {query_event['t_start']:.2f}s - {query_event['t_end']:.2f}s (duration: {query_event['t_end'] - query_event['t_start']:.2f}s)")
-    print(f"  - Frequency Band: {query_event['f_low']:.1f}Hz - {query_event['f_high']:.1f}Hz")
-    print(f"  - Retained: {query_event['retained']}, Stage A Conf: {query_event['stage_a_conf']:.3f}")
+    def log_info(msg):
+        if args.json:
+            print(msg, file=sys.stderr)
+        else:
+            print(msg)
+
+    log_info("Query Event Info:")
+    log_info(f"  - ID: {query_event['id']}")
+    log_info(f"  - Session ID: {query_event['session_id']}")
+    log_info(f"  - File: {Path(query_event['file_path']).name}")
+    log_info(f"  - Time: {query_event['t_start']:.2f}s - {query_event['t_end']:.2f}s (duration: {query_event['t_end'] - query_event['t_start']:.2f}s)")
+    log_info(f"  - Frequency Band: {query_event['f_low']:.1f}Hz - {query_event['f_high']:.1f}Hz")
+    log_info(f"  - Retained: {query_event['retained']}, Stage A Conf: {query_event['stage_a_conf']:.3f}")
 
     # Determine session to search in
     search_session_id = args.session_id if args.session_id is not None else query_event["session_id"]
-    print(f"\nSearching in Session {search_session_id}...")
+    log_info(f"\nSearching in Session {search_session_id}...")
 
     # Fetch search pool events
     pool_events = query_session_events(cursor, search_session_id)
-    print(f"Search pool size: {len(pool_events)} events.")
+    log_info(f"Search pool size: {len(pool_events)} events.")
 
     # Cache file path
     cache_path = Path(args.cache_dir) / f"embeddings_session_{search_session_id}_{args.feature_type}.npz"
@@ -176,20 +183,20 @@ def main():
             cached_ids = cache_data["ids"].tolist()
             cached_embs = cache_data["embeddings"]
             embeddings = {eid: cached_embs[i] for i, eid in enumerate(cached_ids)}
-            print(f"Loaded {len(embeddings)} embeddings from cache: {cache_path}")
+            log_info(f"Loaded {len(embeddings)} embeddings from cache: {cache_path}")
         except Exception as e:
-            print(f"Warning: Failed to load cache: {e}. Recomputing.")
+            print(f"Warning: Failed to load cache: {e}. Recomputing.", file=sys.stderr)
 
     # Compute missing embeddings
     missing_events = [e for e in pool_events if e["id"] not in embeddings]
     if missing_events:
-        print(f"Computing embeddings for {len(missing_events)} events...")
+        log_info(f"Computing embeddings for {len(missing_events)} events...")
         for idx, ev in enumerate(missing_events):
             try:
                 emb = extract_features(ev, args.feature_type)
                 embeddings[ev["id"]] = emb
             except Exception as e:
-                print(f"Warning: Failed to extract features for event {ev['id']}: {e}")
+                print(f"Warning: Failed to extract features for event {ev['id']}: {e}", file=sys.stderr)
         
         # Save cache
         try:
@@ -197,9 +204,9 @@ def main():
             ids_to_save = list(embeddings.keys())
             embs_to_save = np.array([embeddings[eid] for eid in ids_to_save])
             np.savez(cache_path, ids=ids_to_save, embeddings=embs_to_save)
-            print(f"Saved {len(embeddings)} embeddings to cache: {cache_path}")
+            log_info(f"Saved {len(embeddings)} embeddings to cache: {cache_path}")
         except Exception as e:
-            print(f"Warning: Failed to save cache: {e}")
+            print(f"Warning: Failed to save cache: {e}", file=sys.stderr)
 
     # Gather matching pool vectors
     valid_events = []
@@ -225,25 +232,46 @@ def main():
     # Sort matches
     sorted_indices = np.argsort(similarities)[::-1]
     
-    print(f"\nTop-{args.k} matches for Query Event {args.query_id}:")
-    print(f"{'Rank':<5} | {'Event ID':<8} | {'Sim':<6} | {'Retained':<8} | {'File':<25} | {'Time Range':<15} | {'Freq Range':<15}")
-    print("-" * 105)
-
-    rank = 1
-    for idx in sorted_indices:
-        match_ev = valid_events[idx]
-        sim = similarities[idx]
-        
-        # Skip query event itself in display but show neighbors
-        if match_ev["id"] == args.query_id:
-            continue
+    if args.json:
+        import json
+        matches = []
+        rank = 1
+        for idx in sorted_indices:
+            match_ev = valid_events[idx]
+            sim = similarities[idx]
             
-        print(f"{rank:<5} | {match_ev['id']:<8} | {sim:.4f} | {str(match_ev['retained']):<8} | {Path(match_ev['file_path']).name:<25} | "
-              f"{match_ev['t_start']:.2f}-{match_ev['t_end']:.2f}s | {match_ev['f_low']:.0f}-{match_ev['f_high']:.0f}Hz")
-        
-        rank += 1
-        if rank > args.k:
-            break
+            # Skip query event itself
+            if match_ev["id"] == args.query_id:
+                continue
+                
+            event_dict = dict(match_ev)
+            event_dict["similarity"] = float(sim)
+            matches.append(event_dict)
+            
+            rank += 1
+            if rank > args.k:
+                break
+        print(json.dumps(matches))
+    else:
+        print(f"\nTop-{args.k} matches for Query Event {args.query_id}:")
+        print(f"{'Rank':<5} | {'Event ID':<8} | {'Sim':<6} | {'Retained':<8} | {'File':<25} | {'Time Range':<15} | {'Freq Range':<15}")
+        print("-" * 105)
+
+        rank = 1
+        for idx in sorted_indices:
+            match_ev = valid_events[idx]
+            sim = similarities[idx]
+            
+            # Skip query event itself in display but show neighbors
+            if match_ev["id"] == args.query_id:
+                continue
+                
+            print(f"{rank:<5} | {match_ev['id']:<8} | {sim:.4f} | {str(match_ev['retained']):<8} | {Path(match_ev['file_path']).name:<25} | "
+                  f"{match_ev['t_start']:.2f}-{match_ev['t_end']:.2f}s | {match_ev['f_low']:.0f}-{match_ev['f_high']:.0f}Hz")
+            
+            rank += 1
+            if rank > args.k:
+                break
 
     conn.close()
 

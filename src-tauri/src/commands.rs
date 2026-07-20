@@ -49,7 +49,7 @@ pub struct StartResult {
     pub total_files: usize,
 }
 
-fn resolve_cwd(cwd: Option<String>) -> PathBuf {
+pub(crate) fn resolve_cwd(cwd: Option<String>) -> PathBuf {
     if let Some(c) = cwd.filter(|s| !s.trim().is_empty()).map(PathBuf::from) {
         return c;
     }
@@ -310,7 +310,7 @@ pub fn get_feature_flags(cwd: Option<String>) -> Result<serde_json::Value, Strin
     Ok(read_feature_flags(&dir))
 }
 
-fn find_uv() -> std::path::PathBuf {
+pub(crate) fn find_uv() -> std::path::PathBuf {
     if let Ok(home) = std::env::var("HOME") {
         let path = std::path::Path::new(&home).join(".local/bin/uv");
         if path.exists() {

@@ -7,7 +7,11 @@ Built with Tauri + React (frontend) and Rust + Python (backend). One app, two mo
 - **Batch mode** — pick a folder, set thresholds, run the ML pipeline across all recordings.
 - **Review mode** — step through files, inspect detections on a spectrogram, confirm/reject/edit ML events and add manual annotations.
 
-> 📖 New here? Start with the **[Usage Tutorial](docs/USAGE.md)** — install, run a batch, review, and export, step by step.
+> 📖 **Guides & Tutorials:**
+> - **[Usage Tutorial](docs/USAGE.md)** — Installation, basic controls, and troubleshooting.
+> - **[Your First Analysis Session](docs/tutorial-first-analysis.md)** — Guided end-to-end lab walkthrough of running and curating a batch.
+> - **[Active Learning Loop Tutorial](docs/tutorial-active-learning.md)** — Guided workflow to improve the model on your own data.
+> - **[Export Cookbook](docs/tutorial-export-cookbook.md)** — Copy-paste code recipes for Python, R (warbleR), and Cornell Raven Pro.
 
 ## Technical Architecture
 

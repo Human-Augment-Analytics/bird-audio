@@ -140,6 +140,9 @@ cargo run -p batch-core --bin batch -- \
 
 Still stuck? Open an issue: <https://github.com/Human-Augment-Analytics/bird-audio/issues>.
 
----
+For more hands-on workflows and downstream usage:
+- **[Your First Analysis Session](tutorial-first-analysis.md)** — Step-by-step guided analysis walk-through.
+- **[Active Learning Loop Tutorial](tutorial-active-learning.md)** — Learn how to fine-tune the model to improve performance.
+- **[Export Cookbook](tutorial-export-cookbook.md)** — Detailed snippets to load and visualize data in R, Python, and Raven Pro.
 
 For the pipeline internals (Quarter-Step YOLO streaming, Stage A / Stage B, the `θ_A` / `θ_B` thresholds), see [`architecture.md`](architecture.md).
