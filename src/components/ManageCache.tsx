@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getCachedFiles, deleteCachedFiles, clearCache, cleanCache } from "../api";
+import { getCachedFiles, deleteCachedFiles, clearCache, cleanCache, getFeatureFlags } from "../api";
 import type { CachedFile } from "../types";
 import { STAGE_LABEL, STAGE_COLOR } from "../stageMeta";
 import { relativeDir } from "../pathTree";
@@ -18,6 +18,11 @@ export default function ManageCache({ outputDir, onProceed }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [cleanNote, setCleanNote] = useState<string | null>(null);
+  const [flags, setFlags] = useState<Record<string, any>>({});
+
+  useEffect(() => {
+    getFeatureFlags().then((f) => setFlags(f || {})).catch(() => setFlags({}));
+  }, []);
 
   const reload = () =>
     getCachedFiles(outputDir).then((fs) => {
@@ -42,6 +47,25 @@ export default function ManageCache({ outputDir, onProceed }: Props) {
         reset === 0 && pruned === 0
           ? "Already tidy — nothing to clean up."
           : `Re-queued ${reset} broken file${reset === 1 ? "" : "s"}${pruned > 0 ? `, removed ${pruned} missing` : ""}.`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Delete the cache database outright and name the files that went with it.
+  // The WAL sidecars (`-wal`/`-shm`) can hold committed rows, so "cleared" is
+  // only believable if the researcher can see they were removed too.
+  const handleClearAll = async () => {
+    setBusy(true);
+    setCleanNote(null);
+    try {
+      const removed = await clearCache(outputDir);
+      await reload();
+      setCleanNote(
+        removed.length === 0
+          ? "No cache files found — nothing to clear."
+          : `Cleared ${removed.join(", ")} — no cache data left behind.`
       );
     } finally {
       setBusy(false);
@@ -101,6 +125,17 @@ export default function ManageCache({ outputDir, onProceed }: Props) {
           <button className="chip" onClick={handleClean} disabled={busy} title="Re-queue broken files and drop recordings no longer on disk">
             🧹 Tidy up
           </button>
+          {flags.cache_transparency !== false && (
+            <button
+              className="chip"
+              style={{ color: "var(--coral)" }}
+              onClick={handleClearAll}
+              disabled={busy}
+              title="Delete batch.db and its WAL sidecars — start completely over"
+            >
+              🗑 Clear cache
+            </button>
+          )}
         </div>
       </div>
 

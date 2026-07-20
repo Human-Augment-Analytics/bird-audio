@@ -14,6 +14,8 @@ export interface StartOpts {
 export interface StartResult {
   session_id: number;
   total_files: number;
+  /** Manifest rows dropped at start because the recording vanished from disk. */
+  pruned: number;
 }
 
 export interface Progress {

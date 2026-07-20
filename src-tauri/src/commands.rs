@@ -41,6 +41,9 @@ pub struct StartOpts {
 pub struct StartResult {
     pub session_id: i64,
     pub total_files: usize,
+    /// Manifest rows dropped at start because the recording is gone from disk.
+    /// Surfaced so the silent prune is visible to the researcher.
+    pub pruned: usize,
 }
 
 fn resolve_cwd(cwd: Option<String>) -> PathBuf {
@@ -200,13 +203,13 @@ pub fn start_session(
     store.add_files(sid, &paths).map_err(|e| e.to_string())?;
     // Drop any files that vanished from disk since a previous run so they can't
     // linger as `pending` and keep the session from ever finishing.
-    store.prune_missing(sid).map_err(|e| e.to_string())?;
+    let pruned = store.prune_missing(sid).map_err(|e| e.to_string())?;
     let total_files = store.list_files(sid).map_err(|e| e.to_string())?.len();
 
     *state.cancel.lock().unwrap() = Some(cancel);
     spawn_run(app, store, sid, cfg);
 
-    Ok(StartResult { session_id: sid, total_files })
+    Ok(StartResult { session_id: sid, total_files, pruned })
 }
 
 /// Re-run a session's failed files without re-picking the folder. With `paths`
@@ -233,7 +236,7 @@ pub fn retry_failed(
     *state.cancel.lock().unwrap() = Some(cancel);
     spawn_run(app, store, session_id, cfg);
 
-    Ok(StartResult { session_id, total_files })
+    Ok(StartResult { session_id, total_files, pruned: 0 })
 }
 
 #[tauri::command]
@@ -429,18 +432,25 @@ pub fn check_cache(output_dir: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn clear_cache(output_dir: String) -> Result<(), String> {
+pub fn clear_cache(output_dir: String) -> Result<Vec<String>, String> {
     // WAL mode keeps the write-ahead log and shared-memory index in sidecar
     // files; deleting only batch.db can leave committed data behind in -wal that
     // reopens later. Remove all three so "start over" is truly clean.
+    // Returns the file names actually removed so the UI can show that the
+    // sidecars went with the database instead of the user having to trust it.
     let base = db_path(&output_dir);
+    let mut removed = Vec::new();
     for suffix in ["", "-wal", "-shm"] {
         let p = PathBuf::from(format!("{}{}", base.to_string_lossy(), suffix));
         if p.exists() {
             std::fs::remove_file(&p).map_err(|e| format!("Failed to delete cache: {}", e))?;
+            removed.push(
+                p.file_name().map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned()),
+            );
         }
     }
-    Ok(())
+    Ok(removed)
 }
 
 #[derive(Debug, Serialize)]
@@ -525,7 +535,7 @@ pub fn get_review_session(output_dir: String) -> Result<Option<StartResult>, Str
         None => return Ok(None),
     };
     let total_files = store.list_files(sid).map_err(|e| e.to_string())?.len();
-    Ok(Some(StartResult { session_id: sid, total_files }))
+    Ok(Some(StartResult { session_id: sid, total_files, pruned: 0 }))
 }
 
 #[tauri::command]

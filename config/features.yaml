@@ -24,3 +24,12 @@ resume_runs: true
 
 # Show guidance for analyzing recordings stored in OneDrive.
 cloud_import: false
+
+# Make the cache's housekeeping visible: a "Clear cache" button that names the
+# files it removed (including the WAL sidecars), and a notice at the start of a
+# run when recordings that vanished from disk were dropped from the plan.
+cache_transparency: true
+
+# Per-recording retry (↻) on failed rows in the run's file list, alongside the
+# whole-session "Retry failed" button.
+row_retry: true

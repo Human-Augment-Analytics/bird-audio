@@ -11,8 +11,9 @@ export const countAudioFiles = (input: string) =>
   invoke<number>("count_audio_files", { input });
 export const checkCache = (outputDir: string) =>
   invoke<boolean>("check_cache", { outputDir });
+/** Deletes batch.db and its WAL sidecars; resolves with the names removed. */
 export const clearCache = (outputDir: string) =>
-  invoke<void>("clear_cache", { outputDir });
+  invoke<string[]>("clear_cache", { outputDir });
 export const cleanCache = (outputDir: string) =>
   invoke<{ reset: number; pruned: number }>("clean_cache", { outputDir });
 export const getCachedFiles = (outputDir: string) =>

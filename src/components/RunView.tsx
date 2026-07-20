@@ -29,6 +29,8 @@ interface Props {
   onExport: (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => void;
   onCancel: () => void;
   onRetryFailed: () => void;
+  /** Retry one failed recording. Omitted when the `row_retry` flag is off. */
+  onRetryFile?: (path: string) => void;
   outputDir: string;
   inputDir: string;
 }
@@ -67,7 +69,7 @@ const FILTERS: { key: "all" | "done" | "failed"; label: string }[] = [
   { key: "failed", label: "Failed" },
 ];
 
-export default function RunView({ start, progress, summary, rows, activity, throughput, onExport, onCancel, onRetryFailed, outputDir, inputDir }: Props) {
+export default function RunView({ start, progress, summary, rows, activity, throughput, onExport, onCancel, onRetryFailed, onRetryFile, outputDir, inputDir }: Props) {
   const [filter, setFilter] = useState<"all" | "done" | "failed">("all");
   const [metadataPath, setMetadataPath] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<string>("csv");
@@ -362,6 +364,16 @@ export default function RunView({ start, progress, summary, rows, activity, thro
                     <span className="trow__err" style={{ width: 200 }} title={r.error}>
                       {r.error}
                     </span>
+                  )}
+                  {done && r.status === "failed" && onRetryFile && (
+                    <button
+                      className="chip"
+                      style={{ color: "var(--coral)", padding: "1px 7px", fontSize: 11 }}
+                      title={`Retry just ${basename}`}
+                      onClick={(e) => { e.stopPropagation(); onRetryFile(r.path); }}
+                    >
+                      ↻
+                    </button>
                   )}
                 </div>
               );

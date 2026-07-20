@@ -30,8 +30,11 @@ export default function App() {
     localStorage.setItem(UI_MODE_KEY, m);
   };
 
+  const [flags, setFlags] = useState<Record<string, any>>({});
+
   useEffect(() => {
     getFeatureFlags().then((f) => {
+      setFlags(f || {});
       if (!uiModeIsUserSet) setUiModeState(f?.card_ui === true ? "card" : "full");
     }).catch(() => {});
     // Only meant to seed the default once, before the user has an opinion.
@@ -157,7 +160,13 @@ export default function App() {
     setSummary(null);
     setRows([]);
     setThroughput(0);
-    setNotice(null);
+    // The start-of-run prune is otherwise silent: say so when it drops rows, or
+    // the totals just quietly shrink between runs.
+    setNotice(
+      flags.cache_transparency !== false && result.pruned > 0
+        ? `${result.pruned} recording${result.pruned === 1 ? "" : "s"} no longer on disk ${result.pruned === 1 ? "was" : "were"} removed from the plan.`
+        : null
+    );
     setCancelled(false);
     setActivity([]);
     setResume(null);
@@ -182,6 +191,21 @@ export default function App() {
     tRef.current = null;
     try {
       const result = await retryFailed(opts, start.session_id);
+      setStart(result);
+    } catch (e) {
+      setNotice(`Retry failed: ${String(e)}`);
+    }
+  };
+
+  // Retry a single failed recording, leaving the rest of the session alone.
+  const handleRetryFile = async (path: string) => {
+    if (!start || !opts) return;
+    setSummary(null);
+    setCancelled(false);
+    setThroughput(0);
+    tRef.current = null;
+    try {
+      const result = await retryFailed(opts, start.session_id, [path]);
       setStart(result);
     } catch (e) {
       setNotice(`Retry failed: ${String(e)}`);
@@ -294,6 +318,7 @@ export default function App() {
             onExport={doExport}
             onCancel={handleCancel}
             onRetryFailed={handleRetryFailed}
+            onRetryFile={flags.row_retry !== false ? handleRetryFile : undefined}
             outputDir={opts?.outputDir || ""}
             inputDir={opts?.input || ""}
           />
