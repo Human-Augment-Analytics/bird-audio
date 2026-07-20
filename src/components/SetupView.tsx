@@ -204,7 +204,7 @@ export default function SetupView({ onStarted }: Props) {
                    {recommendedConcurrency !== null && featureFlags?.parallel_control !== false && (() => {
                      const cnum = concurrency.trim() === "" ? 0 : Number(concurrency);
                      return cnum > 0 && cnum > recommendedConcurrency ? (
-                       <div className="error-text">Warning: using {cnum} parallel tasks exceeds the recommended {recommendedConcurrency} for this machine ({logicalCores ?? 'unknown'} logical cores). This may fully saturate the system.</div>
+                       <div className="error-text" style={{ gridColumn: "span 3" }}>Warning: using {cnum} parallel tasks exceeds the recommended {recommendedConcurrency} for this machine ({logicalCores ?? 'unknown'} logical cores). This may fully saturate the system.</div>
                      ) : null;
                    })()}
                    <Field label="Timeout (s)"><input type="number" value={timeoutSecs} onChange={e => setTimeoutSecs(Number(e.target.value))} /></Field>
