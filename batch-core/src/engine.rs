@@ -39,6 +39,8 @@ pub struct Progress {
     pub pending: i64,
     pub in_progress: i64,
     pub last_file: Option<String>,
+    pub last_elapsed_ms: Option<i64>,
+    pub elapsed_ms_total: i64,
 }
 
 fn fail_or_requeue(store: &Arc<Mutex<Store>>, c: &Claimed, cfg: &EngineConfig, reason: &str) {
@@ -55,8 +57,10 @@ fn worker_loop(
     session_id: i64,
     cfg: Arc<EngineConfig>,
     progress: Option<Sender<Progress>>,
+    start: std::time::Instant,
 ) {
     let mut worker: Option<Worker> = None;
+    let mut last_elapsed_ms: Option<i64> = None;
     loop {
         if let Some(flag) = &cfg.cancel {
             if flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -108,6 +112,7 @@ fn worker_loop(
             Ok(WorkerMsg::Result {
                 id, n_events, n_complete, n_retained, elapsed_ms, events, ..
             }) if id == c.file_id as u64 => {
+                last_elapsed_ms = Some(elapsed_ms as i64);
                 let mut s = store.lock().unwrap();
                 s.record_success(
                     session_id,
@@ -139,6 +144,7 @@ fn worker_loop(
                 let s = store.lock().unwrap();
                 s.summary(session_id).expect("summary")
             };
+            let elapsed_total = start.elapsed().as_millis() as i64;
             let _ = tx.send(Progress {
                 total: snap.total,
                 done: snap.done,
@@ -146,6 +152,8 @@ fn worker_loop(
                 pending: snap.pending,
                 in_progress: snap.in_progress,
                 last_file: Some(c.path.clone()),
+                last_elapsed_ms: last_elapsed_ms,
+                elapsed_ms_total: elapsed_total,
             });
         }
     }
@@ -167,11 +175,12 @@ pub fn run_session(
     }
     let cfg = Arc::new(cfg);
     let mut handles = Vec::new();
+    let start = std::time::Instant::now();
     for _ in 0..cfg.concurrency.max(1) {
         let store = store.clone();
         let cfg = cfg.clone();
         let progress = progress.clone();
-        handles.push(thread::spawn(move || worker_loop(store, session_id, cfg, progress)));
+        handles.push(thread::spawn(move || worker_loop(store, session_id, cfg, progress, start)));
     }
     for h in handles {
         let _ = h.join();

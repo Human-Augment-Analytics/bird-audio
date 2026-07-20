@@ -110,14 +110,21 @@ pub fn start_session(
     } else {
         opts.concurrency
     };
+    // Read feature flags from project cwd and enforce parallel_control
+    let proj_dir = resolve_cwd(opts.cwd.clone());
+    let flags = read_feature_flags(&proj_dir);
+    let conc_final = match flags.get("parallel_control") {
+        Some(v) if v == &serde_json::Value::Bool(false) => resolve_concurrency(&opts.device, None),
+        _ => conc,
+    };
     let sid = match store.find_resumable(&roots_json).map_err(|e| e.to_string())? {
         Some(id) => id,
         None => store
-            .create_session(&NewSession {
+                .create_session(&NewSession {
                 input_roots: &roots_json,
                 output_dir: &opts.output_dir,
                 device: &opts.device,
-                concurrency: conc as i64,
+                    concurrency: conc_final as i64,
                 theta_a: opts.theta_a,
                 theta_b: opts.theta_b,
                 species_name: opts.species_name.as_deref(),
@@ -171,7 +178,7 @@ pub fn start_session(
         python: program,
         worker_args,
         cwd: Some(resolve_cwd(opts.cwd)),
-        concurrency: conc,
+        concurrency: conc_final,
         theta_a: opts.theta_a,
         theta_b: opts.theta_b,
         manifest_only: true,
@@ -262,6 +269,45 @@ pub struct HealthStatus {
     pub device: String,
     pub internal_device: String,
     pub details: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConcurrencyInfo {
+    pub logical: usize,
+    pub recommended: usize,
+}
+
+#[tauri::command]
+pub fn concurrency_suggestion(device: String) -> Result<ConcurrencyInfo, String> {
+    use batch_core::concurrency::resolve_concurrency;
+    let logical = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let recommended = resolve_concurrency(&device, None);
+    Ok(ConcurrencyInfo { logical, recommended })
+}
+
+fn read_feature_flags(cwd: &std::path::Path) -> serde_json::Value {
+    use std::fs;
+    let p = cwd.join("config/features.yaml");
+    if !p.exists() {
+        return serde_json::json!({ "parallel_control": true, "import_enabled": true, "advanced_settings": true });
+    }
+    match fs::read_to_string(&p) {
+        Ok(s) => match serde_yaml::from_str::<serde_yaml::Value>(&s) {
+            Ok(v) => {
+                // convert to serde_json::Value
+                let j = serde_json::to_value(v).unwrap_or(serde_json::json!({}));
+                j
+            }
+            Err(_) => serde_json::json!({ "parallel_control": true, "import_enabled": true, "advanced_settings": true }),
+        },
+        Err(_) => serde_json::json!({ "parallel_control": true, "import_enabled": true, "advanced_settings": true }),
+    }
+}
+
+#[tauri::command]
+pub fn get_feature_flags(cwd: Option<String>) -> Result<serde_json::Value, String> {
+    let dir = resolve_cwd(cwd);
+    Ok(read_feature_flags(&dir))
 }
 
 fn find_uv() -> std::path::PathBuf {

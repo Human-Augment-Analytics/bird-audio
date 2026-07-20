@@ -23,6 +23,8 @@ export interface Progress {
   pending: number;
   in_progress: number;
   last_file: string | null;
+  last_elapsed_ms?: number | null;
+  elapsed_ms_total?: number;
 }
 
 export interface Summary {

@@ -24,8 +24,10 @@ dev-dist
 *.sln
 *.sw?
 
-# Rust / Cargo (root workspace)
+# Rust / Cargo workspace
+# Ignore top-level and any crate `target/` directories
 /target
+**/target
 
 # Tauri
 src-tauri/target
@@ -44,6 +46,12 @@ __pycache__/
 env/
 venv/
 ENV/
+
+# Python caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
 
 # Models
 # Models are tracked in this repo for pipeline completeness

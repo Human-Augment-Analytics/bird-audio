@@ -51,6 +51,11 @@ export const onProgress = (cb: (p: Progress) => void): Promise<UnlistenFn> =>
 export const onDone = (cb: (s: Summary) => void): Promise<UnlistenFn> =>
   listen<Summary>("batch://done", (e) => cb(e.payload));
 
+export const getConcurrencySuggestion = (device: string) =>
+  invoke<{ logical: number; recommended: number }>("concurrency_suggestion", { device });
+
+export const getFeatureFlags = (cwd?: string) =>
+  invoke<Record<string, any>>("get_feature_flags", { cwd });
 export const listEvents = (outputDir: string, sessionId: number, path: string) =>
   invoke<EventRow[]>("list_events", { outputDir, sessionId, path });
 export const setEventReview = (
