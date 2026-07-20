@@ -139,7 +139,10 @@ pub fn start_session(
     if parts.is_empty() {
         return Err("worker_cmd is empty".into());
     }
-    let program = parts.remove(0);
+    let mut program = parts.remove(0);
+    if program == "uv" {
+        program = find_uv().to_string_lossy().into_owned();
+    }
     let mut worker_args = parts;
     worker_args.push("--device".into());
     worker_args.push(opts.device.clone());
