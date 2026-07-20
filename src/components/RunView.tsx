@@ -183,7 +183,7 @@ export default function RunView({ start, progress, summary, rows, activity, thro
       )}
 
       {activity.length > 0 && (
-        <div className="activity-log" style={{ display: "grid", gap: 3, maxHeight: 132, overflow: "auto", padding: "10px 12px", background: "rgba(255,255,255,0.015)", border: "1px solid var(--line)", borderRadius: 8 }}>
+        <div className="activity-log" style={{ display: "grid", gap: 6, maxHeight: 220, overflow: "auto", padding: "10px 12px", background: "rgba(255,255,255,0.015)", border: "1px solid var(--line)", borderRadius: 8 }}>
           <span className="eyebrow" style={{ marginBottom: 2 }}>Activity</span>
           {activity.map((f, i) => {
             const name = f.path.split("/").pop() || f.path;
@@ -195,10 +195,11 @@ export default function RunView({ start, progress, summary, rows, activity, thro
                 ? `error — retrying (attempt ${f.attempt}/${f.max_attempts})`
                 : `failed${f.error ? ` — ${f.error}` : ""}`;
             return (
-              <div key={`${f.path}-${i}`} className="mono" style={{ fontSize: 11, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                <span style={{ color, fontWeight: 700, marginRight: 6 }}>{mark}</span>
-                <span style={{ color: "var(--text)" }}>{name}</span>
-                <span style={{ color: "var(--text-faint)" }}> — {msg}</span>
+              <div key={`${f.path}-${i}`} className="mono" style={{ display: "flex", alignItems: "baseline", gap: 6, fontSize: 11.5, lineHeight: 1.45, color: "var(--text-dim)" }}>
+                <span style={{ color, fontWeight: 700, flexShrink: 0 }}>{mark}</span>
+                {/* Filename truncates first; the status message is what the user actually needs, so keep it whole. */}
+                <span style={{ color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 1, minWidth: 0 }} title={name}>{name}</span>
+                <span style={{ color: "var(--text-faint)", flexShrink: 0, whiteSpace: "nowrap" }}>— {msg}</span>
               </div>
             );
           })}
