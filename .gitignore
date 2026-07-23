@@ -23,6 +23,7 @@ dev-dist
 *.njsproj
 *.sln
 *.sw?
+.envrc
 
 # Rust / Cargo workspace
 # Ignore top-level and any crate `target/` directories

@@ -133,6 +133,13 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         <div className="progress__fill" style={{ width: `${pct}%` }} />
       </div>
 
+      {!done && (
+        <div className="sub" style={{ fontSize: 12.5 }}>
+          {doneN + failedN} of {total} recordings finished
+          {eta && etaTime ? <> · about {eta < 60 ? "a minute" : `${Math.round(eta / 60)} min`} left — should finish around {etaTime}</> : <> · estimating time remaining…</>}
+        </div>
+      )}
+
       <div className="stats">
         <Stat label="Processed" value={doneN} color="var(--jade)" />
         <Stat label="Failed" value={failedN} color="var(--coral)" />

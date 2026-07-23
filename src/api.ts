@@ -7,6 +7,8 @@ export const checkHealth = (cwd?: string) =>
   invoke<HealthStatus>("check_health", { cwd });
 export const prepareSystem = (cwd?: string) => 
   invoke<void>("prepare_system", { cwd });
+export const countAudioFiles = (input: string) =>
+  invoke<number>("count_audio_files", { input });
 export const checkCache = (outputDir: string) =>
   invoke<boolean>("check_cache", { outputDir });
 export const clearCache = (outputDir: string) =>
