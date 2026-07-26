@@ -309,6 +309,42 @@ including one that recovers the original path by round-tripping the generated ar
 It also correctly warned on its own generation: *"git tree was dirty at commit f272de3: the script's
 code state is not fully described by that commit."*
 
+### The end-to-end run, and what it exposed
+
+The generated script was then **executed end to end** — all 7 steps, exit 0, producing
+`reproduce.db`, `events.csv`, a valid 187-row `events.json`, `telemetry.csv`, the ecology summaries,
+the sensitivity grid, and the verification plan.
+
+**But it did not reproduce the original session.** At identical thresholds
+(θ_A = 0.0, θ_B = 0.530306), and with the manifest preflight *passing*:
+
+| | events | retained |
+|---|---|---|
+| original `data/batch.db` (recorded 2026-06-22) | 260 | 216 |
+| reproduction | 187 | 153 |
+
+This is a genuine limitation of the provenance design, and it is worth stating plainly because it
+would otherwise be an invisible false assurance:
+
+> **The manifest is built retrospectively from the current environment, not captured when the
+> session ran.** So the preflight compares "today's code" against "today's code" and always matches.
+> It can detect that *you* changed a model or a constant between generating and running the script.
+> It cannot detect that the *original run* used an older pipeline — which is exactly what happened
+> here, since `data/batch.db` predates subsequent consolidation changes.
+
+`verify_protocol` now emits this as a warning on every session that lacks a stored manifest:
+
+```
+session stored no run manifest: the preflight compares the rerun against the CURRENT code and
+constants, so it cannot detect that the original run used a different pipeline version. Event
+counts may differ from the recorded session even when the preflight passes.
+```
+
+`read_session_protocol` already reads a `run_manifest` column when present and the warning
+disappears once one exists, so **the fix is to write the manifest onto the session row at run
+start** — a small idempotent migration plus a write in the engine. That is the single highest-value
+remaining task, and until it lands, reproduction fidelity for historical sessions cannot be claimed.
+
 ### Closing the export hole this exposed
 
 The protocol export surfaced a real reproducibility gap: `batch-core`'s CLI could only write CSV,
