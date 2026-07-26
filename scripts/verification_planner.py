@@ -50,10 +50,24 @@ def _score_lookup(events: List[Dict[str, Any]]) -> Dict[Any, Dict[str, Any]]:
     return {e["id"]: e for e in events}
 
 
+def resolve_pace(args: argparse.Namespace) -> Dict[str, Any]:
+    """An explicit flag wins; otherwise use recorded telemetry, else the nominal default."""
+    if args.seconds_per_verification is not None:
+        return {"seconds_per_verification": float(args.seconds_per_verification),
+                "source": "flag", "n_decisions": None}
+    measured = V.measured_seconds_per_verification(args.db, args.session_id)
+    if measured is not None:
+        return measured
+    return {"seconds_per_verification": V.DEFAULT_SECONDS_PER_VERIFICATION,
+            "source": "assumed", "n_decisions": None}
+
+
 def build_report(events: List[Dict[str, Any]], args: argparse.Namespace) -> Dict[str, Any]:
     est = V.precision_estimate(events, args.threshold, confidence=args.confidence)
+    pace = resolve_pace(args)
     effort = V.additional_effort(
-        est, args.target_half_width, seconds_per_verification=args.seconds_per_verification
+        est, args.target_half_width,
+        seconds_per_verification=pace["seconds_per_verification"],
     )
     verdict = V.stopping_rule(est, args.target_half_width)
     queue_ids = V.plan_review_queue(
@@ -82,6 +96,7 @@ def build_report(events: List[Dict[str, Any]], args: argparse.Namespace) -> Dict
         "strategy": args.strategy,
         "budget": args.budget,
         "seed": args.seed,
+        "pace": pace,
         "precision": est.to_dict(),
         "effort": effort.to_dict(),
         "stopping_rule": verdict,
@@ -122,8 +137,15 @@ def print_report(report: Dict[str, Any]) -> None:
     print(f"Total verifications required        : {e['n_required']}")
     print(f"More verifications needed           : {e['n_additional']}"
           f"{'  (a full census of the pool)' if e['requires_census'] else ''}")
+    pace = report["pace"]
+    if pace["source"] == "measured":
+        pace_note = f"measured from {pace['n_decisions']} recorded decisions"
+    elif pace["source"] == "flag":
+        pace_note = "supplied on the command line"
+    else:
+        pace_note = "assumed - no review telemetry recorded yet"
     print(f"Estimated human time                : {e['estimated_minutes']:.1f} min "
-          f"at {e['seconds_per_verification']:.1f} s/clip")
+          f"at {e['seconds_per_verification']:.1f} s/clip ({pace_note})")
     print()
     verdict = report["stopping_rule"]
     print(f"Stopping rule                       : {'STOP' if verdict['stop'] else 'CONTINUE'}")
@@ -163,9 +185,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="desired +/- width of the precision interval")
     ap.add_argument("--strategy", default="uncertainty", choices=list(V.STRATEGIES))
     ap.add_argument("--budget", type=int, default=25, help="how many ids to queue up")
-    ap.add_argument("--seconds-per-verification", type=float,
-                    default=V.DEFAULT_SECONDS_PER_VERIFICATION,
-                    help="measured seconds a human spends per clip")
+    ap.add_argument("--seconds-per-verification", type=float, default=None,
+                    help="seconds a human spends per clip; default reads recorded "
+                         "review telemetry, falling back to "
+                         f"{V.DEFAULT_SECONDS_PER_VERIFICATION:g}s")
     ap.add_argument("--confidence", type=float, default=0.95)
     ap.add_argument("--theta-b", type=float, default=V.DEFAULT_THETA_B,
                     help="completeness operating point, used by the completeness strategy")

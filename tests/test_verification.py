@@ -363,3 +363,68 @@ def test_sweep_never_reports_a_point_without_an_interval():
             assert d["n_verified"] == 0
         else:
             assert d["ci_low"] <= d["point"] <= d["ci_high"]
+
+
+# --- measured pace from review telemetry -----------------------------------
+
+def _telemetry_db(tmp_path, rows, name="tel.db"):
+    import sqlite3
+    db = tmp_path / name
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE review_events (id INTEGER PRIMARY KEY, session_id INTEGER,"
+        " event_id INTEGER, file_id INTEGER, action TEXT, at_ms INTEGER,"
+        " dwell_ms INTEGER, meta TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO review_events (session_id, action, dwell_ms) VALUES (?,?,?)", rows
+    )
+    conn.commit()
+    conn.close()
+    return str(db)
+
+
+def test_measured_pace_is_median_of_decision_dwells(tmp_path):
+    rows = [(1, "confirm", 4000), (1, "reject", 6000), (1, "confirm", 5000),
+            (1, "confirm", 5000), (1, "reject", 10000), (1, "confirm", 5000)]
+    got = V.measured_seconds_per_verification(_telemetry_db(tmp_path, rows))
+    assert got["source"] == "measured"
+    assert got["n_decisions"] == 6
+    assert got["seconds_per_verification"] == pytest.approx(5.0)
+
+
+def test_measured_pace_excludes_idle_gaps(tmp_path):
+    """An overnight gap is a break, not a decision, and must not inflate the pace."""
+    rows = [(1, "confirm", 4000)] * 5 + [(1, "confirm", 9_984_000)]
+    got = V.measured_seconds_per_verification(_telemetry_db(tmp_path, rows))
+    assert got["n_decisions"] == 5
+    assert got["seconds_per_verification"] == pytest.approx(4.0)
+
+
+def test_measured_pace_ignores_navigation_actions(tmp_path):
+    rows = [(1, "confirm", 4000)] * 5 + [(1, "play", 60000), (1, "open_file", 90000)]
+    got = V.measured_seconds_per_verification(_telemetry_db(tmp_path, rows))
+    assert got["n_decisions"] == 5
+
+
+def test_measured_pace_none_when_too_few_decisions(tmp_path):
+    rows = [(1, "confirm", 4000), (1, "reject", 5000)]
+    assert V.measured_seconds_per_verification(_telemetry_db(tmp_path, rows)) is None
+
+
+def test_measured_pace_none_when_table_absent(tmp_path):
+    import sqlite3
+    db = tmp_path / "bare.db"
+    sqlite3.connect(db).close()
+    assert V.measured_seconds_per_verification(str(db)) is None
+
+
+def test_measured_pace_none_when_db_missing(tmp_path):
+    assert V.measured_seconds_per_verification(str(tmp_path / "nope.db")) is None
+
+
+def test_measured_pace_scopes_to_session(tmp_path):
+    rows = [(1, "confirm", 4000)] * 5 + [(2, "confirm", 20000)] * 5
+    got = V.measured_seconds_per_verification(_telemetry_db(tmp_path, rows), session_id=2)
+    assert got["n_decisions"] == 5
+    assert got["seconds_per_verification"] == pytest.approx(20.0)
