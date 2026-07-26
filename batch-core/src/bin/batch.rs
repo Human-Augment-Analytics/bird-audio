@@ -9,7 +9,7 @@ use std::time::Duration;
 use batch_core::concurrency::resolve_concurrency;
 use batch_core::engine::{run_session, EngineConfig, Progress};
 use batch_core::enumerate::enumerate_audio;
-use batch_core::export::{export_csv, export_telemetry_csv};
+use batch_core::export::{export_csv, export_json, export_telemetry_csv};
 use batch_core::store::{NewSession, Store};
 
 struct Args {
@@ -24,7 +24,11 @@ struct Args {
     timeout_secs: u64,
     max_attempts: i64,
     export_csv: Option<PathBuf>,
+    export_json: Option<PathBuf>,
     export_telemetry: Option<PathBuf>,
+    complete_only: bool,
+    confirmed_only: bool,
+    metadata: Option<PathBuf>,
 }
 
 fn usage_and_exit() -> ! {
@@ -32,7 +36,8 @@ fn usage_and_exit() -> ! {
         "usage: batch --input <folder> [--db batch.db] [--device cpu] [--concurrency 0] \
          [--worker-cmd \"uv run python scripts/ml_engine.py --worker\"] [--cwd DIR] \
          [--theta-a 0.0] [--theta-b 0.530306] [--timeout-secs 600] [--max-attempts 2] \
-         [--export-csv out.csv] [--export-telemetry telemetry.csv]"
+         [--export-csv out.csv] [--export-json out.json] [--export-telemetry telemetry.csv] \
+         [--complete-only] [--confirmed-only] [--metadata deployments.csv]"
     );
     std::process::exit(2);
 }
@@ -50,6 +55,10 @@ fn parse_args() -> Args {
         timeout_secs: 600,
         max_attempts: 2,
         export_csv: None,
+        export_json: None,
+        complete_only: false,
+        confirmed_only: false,
+        metadata: None,
         export_telemetry: None,
     };
     let mut it = std::env::args().skip(1);
@@ -67,7 +76,11 @@ fn parse_args() -> Args {
             "--timeout-secs" => a.timeout_secs = next().parse().unwrap_or_else(|_| usage_and_exit()),
             "--max-attempts" => a.max_attempts = next().parse().unwrap_or_else(|_| usage_and_exit()),
             "--export-csv" => a.export_csv = Some(PathBuf::from(next())),
+            "--export-json" => a.export_json = Some(PathBuf::from(next())),
             "--export-telemetry" => a.export_telemetry = Some(PathBuf::from(next())),
+            "--complete-only" => a.complete_only = true,
+            "--confirmed-only" => a.confirmed_only = true,
+            "--metadata" => a.metadata = Some(PathBuf::from(next())),
             _ => usage_and_exit(),
         }
     }
@@ -164,10 +177,20 @@ fn main() {
         sid, summary.done, summary.failed, summary.n_events, summary.n_complete, summary.n_retained
     );
 
+    let metadata = args.metadata.as_deref();
+
     if let Some(csv) = args.export_csv {
         let s = store.lock().unwrap();
-        let n = export_csv(&s, sid, &csv, false, false, None).expect("export csv");
+        let n = export_csv(&s, sid, &csv, args.complete_only, args.confirmed_only, metadata)
+            .expect("export csv");
         println!("Exported {} event rows to {}", n, csv.display());
+    }
+
+    if let Some(json) = args.export_json {
+        let s = store.lock().unwrap();
+        let n = export_json(&s, sid, &json, args.complete_only, args.confirmed_only, metadata)
+            .expect("export json");
+        println!("Exported {} event rows to {}", n, json.display());
     }
 
     if let Some(csv) = args.export_telemetry {

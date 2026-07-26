@@ -9,6 +9,13 @@ export interface StartOpts {
   thetaB: number;
   timeoutSecs: number;
   maxAttempts: number;
+  /** Analysis target. Omitted fields fall back to the Hume's Leaf Warbler defaults. */
+  speciesName?: string | null;
+  fMinHz?: number | null;
+  fMaxHz?: number | null;
+  localizer?: string | null;
+  classifier?: string | null;
+  classifierC?: string | null;
 }
 
 export interface StartResult {
