@@ -83,6 +83,32 @@ After a batch run, switch to **Review** to turn raw ML output into a verified da
 
 Decisions are saved to `batch.db` and accumulate across Review sessions — stop and resume curation any time.
 
+### Keyboard shortcuts
+
+Reviewing thousands of detections with the mouse is the slowest part of the workflow. Press **?**
+in Review mode to see the shortcuts, or use them directly:
+
+| Key | Action |
+|---|---|
+| `J` / `↓` | Next event |
+| `K` / `↑` | Previous event |
+| `C` | Confirm and advance |
+| `X` | Reject and advance |
+| `U` | Mark unreviewed |
+| `N` | Jump to the next unreviewed event (wraps, so skipped events are still reached) |
+| `?` | Toggle the shortcut help |
+
+Shortcuts are suppressed while you are typing in a text field. A `REVIEWED n/total` counter tracks
+progress through the current file.
+
+### Review effort is recorded
+
+Every decision, and navigation actions like opening a file or playing audio, are logged to a
+`review_events` table with timing. Gaps longer than two minutes are treated as breaks and excluded,
+so the resulting per-decision cost reflects actual review time. This is what lets
+`scripts/verification_planner.py` estimate remaining effort from *measured* seconds per decision
+rather than a guess. Export it with `batch --export-telemetry <path>` or the app's telemetry export.
+
 ---
 
 ## 4. In-App Sanity Check Views
