@@ -73,6 +73,19 @@ All commands are defined in `src-tauri/src/commands.rs` and registered in `main.
 | `update_event_bounds` | `(output_dir, event_id, t_start, t_end, f_low, f_high) → Result<()>` | Update time/frequency bounds of an event; recomputes `duration` and `center_freq`. |
 | `add_manual_event` | `(output_dir, session_id, path, t_start, t_end, f_low, f_high) → Result<i64>` | Insert a new event with `source='manual'`, `review_status='confirmed'`. Returns the new event id. |
 | `delete_event` | `(output_dir, event_id) → Result<()>` | Permanently delete an event row. |
+| `log_review_action` | `(output_dir, session_id, action, event_id?, file_id?, meta?) → Result<()>` | Record a non-mutating review action (`play` / `seek` / `open_file` / `search`) in `review_events`. The mutating commands above log themselves. |
+| `get_review_telemetry` | `(output_dir, session_id, idle_cutoff_ms?) → Result<ReviewTelemetrySummary>` | Aggregate review effort: action counts by type, total review time, and mean/median seconds per decision. |
+
+### Analysis and prototype commands
+
+| Command | Signature (Rust) | Description |
+|---|---|---|
+| `run_pcen` | `(audio_path, output_dir, offset, duration) → Result<String>` | Runs `scripts/pcen_preprocessor.py` and returns its stdout. |
+| `run_active_learning` | `(db_path, dataset_dir, min_stage_a_conf, session_id?) → Result<()>` | Builds a YOLO fine-tuning dataset from curated events via `scripts/active_learning.py`. |
+| `run_qbe_search` | `(db_path, query_id, feature_type, k) → Result<String>` | Query-by-example search via `scripts/query_by_example.py --json`; returns the matches as JSON. |
+
+All three shell out through the same `uv run` machinery as `check_health`, and surface the script's
+stderr in the error string on a non-zero exit.
 
 ### Frontend events (Tauri event bus)
 
@@ -142,6 +155,21 @@ cargo run -p batch-core --bin batch -- \
 ```
 
 The CLI shares the same `run_session` function from `batch-core/src/engine.rs` as the Tauri GUI. It does not support the Review/curation workflow (write curation annotations via the app).
+
+Export flags: `--export-csv`, `--export-json`, `--export-telemetry`, and the filters
+`--complete-only`, `--confirmed-only`, `--metadata <deployments.csv>`. These mirror what the GUI's
+`export_session` can produce, so a generated reproduction script can reproduce any GUI export —
+which is what Methods in Ecology and Evolution requires of a tool with a graphical interface.
+
+To emit a runnable reproduction of a completed session:
+
+```bash
+uv run python scripts/export_protocol.py --db output/batch.db --out output/protocol
+```
+
+This writes `reproduce.sh`, `protocol.json`, and a reference `manifest.json`. The script re-runs the
+pipeline at the recorded thresholds into a **fresh** database and refuses to proceed if the model
+digests or pipeline constants no longer match the recorded run.
 
 ## SQLite schema — events curation columns
 

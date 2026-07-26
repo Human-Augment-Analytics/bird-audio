@@ -81,17 +81,25 @@ def build_analysis(args):
     meta_table = eco.read_deployment_metadata(args.metadata) if args.metadata else {}
     records = eco.join_deployment_metadata(records, metadata=meta_table)
 
+    effort = eco.measure_effort_hours(file_paths, args.effort_hours) if args.measure_effort else None
+
     recorder_rows = eco.recorder_summary(
         records,
         effort_hours_per_file=args.effort_hours,
         file_paths=file_paths,
         retained_only=not args.all_events,
         metadata=eco.metadata_by_recorder(meta_table),
+        effort_by_path=effort["hours"] if effort else None,
     )
     band_rows = eco.band_summary(recorder_rows)
     models = eco.fit_elevation_models(recorder_rows, alpha=args.alpha)
     models["band_rate_ordering"] = eco.band_rate_ordering(band_rows)
     models["effort_hours_per_file"] = args.effort_hours
+    models["effort_source"] = (
+        {"mode": "measured", "n_measured": effort["n_measured"],
+         "n_defaulted": effort["n_defaulted"], "soundfile_available": effort["available"]}
+        if effort else {"mode": "assumed"}
+    )
     models["event_set"] = "all events" if args.all_events else "retained events"
     models["theta_a"] = args.theta_a
     models["theta_b"] = args.theta_b
@@ -105,8 +113,13 @@ def print_report(recorder_rows, band_rows, models):
     print("Band-level summary (means across recorders within band)")
     print(format_table(band_rows, BAND_COLUMNS))
     print()
-    print("Event set: {}   effort/file: {} h".format(
-        models["event_set"], models["effort_hours_per_file"]))
+    source = models.get("effort_source") or {"mode": "assumed"}
+    if source["mode"] == "measured":
+        effort_note = "measured from audio headers ({} read, {} fell back to {} h)".format(
+            source["n_measured"], source["n_defaulted"], models["effort_hours_per_file"])
+    else:
+        effort_note = "assumed {} h/file".format(models["effort_hours_per_file"])
+    print("Event set: {}   effort: {}".format(models["event_set"], effort_note))
     print("Recorders with a known elevation: {} of {}".format(
         models["n_recorders_with_elevation"], models["n_recorders_total"]))
     ordering = models.get("band_rate_ordering") or "-"
@@ -144,6 +157,9 @@ def main():
     ap.add_argument("--theta-b", type=float, default=None,
                     help="override theta_B; retention is recomputed from completeness_score")
     ap.add_argument("--out", default="output/ecology", help="output directory")
+    ap.add_argument("--measure-effort", action="store_true",
+                    help="read each file's true duration from its audio header instead of "
+                         "assuming --effort-hours; unreadable files fall back to it")
     ap.add_argument("--effort-hours", type=float, default=eco.DEFAULT_EFFORT_HOURS_PER_FILE,
                     help="recording effort per file in hours (default 0.25 = 15 min)")
     ap.add_argument("--alpha", type=float, default=eco.ALPHA)

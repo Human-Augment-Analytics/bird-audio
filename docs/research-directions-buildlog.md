@@ -61,6 +61,20 @@ slope −0.006/m and duration slope −0.00025 s/m) both planted effects were re
 correct sign and magnitude: quasi-Poisson slope −0.005806, 95% CI [−0.006260, −0.005352],
 p = 4.1e−17, dispersion 2.05; WLS duration slope −0.000276, R² = 0.834, p = 3.0e−09.
 
+**Measured survey effort.** Effort was originally assumed uniform at 0.25 h per file. That biases
+every rate whenever recordings differ in length — truncated files from a full SD card or a flat
+battery are routine in PAM, and the `files` table has no duration column to correct from.
+`--measure-effort` now reads each file's true duration from its audio header (a header-only
+`soundfile.info` read, effectively instant), falls back to the assumed value per unreadable file,
+and **reports the split** rather than hiding it:
+
+```
+Event set: retained events   effort: measured from audio headers (2 read, 0 fell back to 0.25 h)
+```
+
+On the real recordings the measured and assumed values agree exactly (both files are 900.0 s =
+0.25 h), which is the correct outcome and confirms the measurement path rather than contradicting it.
+
 **Fix applied on review:** `elevation_band` was derived from the recorder-ID prefix only, so a
 deployment whose recorder IDs are timestamps (`20250611_080000`) but whose sites are named by band
 (`PSL01`) reported every recorder as `Unassigned`. Added `resolve_band()` — declared column, then
@@ -304,8 +318,9 @@ events down to 153, exactly matching the pipeline's own reported complete count.
   from a synthetic 22-recorder database. `data/batch.db` has 2 files from 1 site-day. Nothing here
   says whether P1 or P2 actually hold — only that the machinery is correct.
 - **No negative binomial** (statsmodels absent, no dependency added).
-- **Effort is assumed uniform at 0.25 h/file**; the DB has no duration column to derive it from.
-  `--effort-hours` overrides globally, which is wrong if file lengths vary.
+- **Multi-root sessions** in the protocol export emit one run step per root but the export step
+  covers only the first; `verify_protocol` warns. Untested against real data (the real DB has one root).
+- The generated `reproduce.sh` has been syntax-checked but **never executed end to end**.
 - **No GUI run.** The new Tauri commands were tested through Rust and through their Python CLIs,
   not inside a running app window.
 - **`docs/architecture.md` and `docs/batch-app.md` were not updated** for the new table and commands.
