@@ -17,8 +17,7 @@ verified, it says so.
 ## After
 
 - `cargo test --workspace` — **60 passing, 0 failed** (45 batch-core + 6 integration + 9 app_lib)
-- `uv run pytest` — **157 passing, 0 failed** (153 from the three modules below, plus 4 added
-  for the band-resolution fix)
+- `uv run pytest` — **164 passing, 0 failed**
 - `npx tsc -b` — clean; `npm run build` — clean; `npm run lint` — no new errors from any new file
 
 ---
@@ -138,6 +137,22 @@ Stopping rule   : CONTINUE
 The interval is correctly asymmetric, and the 8 pre-existing *manual* confirmations were excluded
 from the 30.
 
+### Closing the loop: measured effort
+
+`measured_seconds_per_verification()` reads the review telemetry (§5) and returns the median
+seconds per *decision*, excluding navigation actions and any dwell above the idle cutoff. The
+planner uses it automatically; an explicit `--seconds-per-verification` flag still wins, and with
+too few recorded decisions it falls back to the nominal 8 s and **says so** rather than presenting
+an assumption as a measurement.
+
+This is what makes the effort estimate empirical. Verified across all three paths:
+
+```
+no telemetry   : 20.1 min at  8.0 s/clip (assumed - no review telemetry recorded yet)
+with telemetry :  5.4 min at 12.0 s/clip (measured from 6 recorded decisions)
+explicit flag  :  1.4 min at  3.0 s/clip (supplied on the command line)
+```
+
 ## 4. Run provenance (`birdpipe/provenance.py`, `scripts/run_manifest.py`)
 
 Serves both directions. Closes "motivates future consolidation into a standardized execution
@@ -222,9 +237,6 @@ margin-based active learning.
 - **No negative binomial** (statsmodels absent, no dependency added).
 - **Effort is assumed uniform at 0.25 h/file**; the DB has no duration column to derive it from.
   `--effort-hours` overrides globally, which is wrong if file lengths vary.
-- **The planner does not yet read measured seconds-per-verification from the telemetry table** —
-  it takes `--seconds-per-verification` as a flag. Wiring the measured value in is the obvious
-  next step and is what makes the effort estimate empirical rather than assumed.
 - **No GUI run.** The new Tauri commands were tested through Rust and through their Python CLIs,
   not inside a running app window.
 - **`docs/architecture.md` and `docs/batch-app.md` were not updated** for the new table and commands.

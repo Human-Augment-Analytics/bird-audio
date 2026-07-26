@@ -8,6 +8,7 @@ queues under several sampling strategies, and a stopping rule.
 from __future__ import annotations
 
 import math
+import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -20,6 +21,11 @@ DEFAULT_THETA_B = StageBParams().theta_b
 DEFAULT_SECONDS_PER_VERIFICATION = 8.0
 MIN_EVIDENCE = 10
 STRATEGIES = ("random", "stratified", "uncertainty", "completeness")
+
+# A dwell longer than this is a break, not a decision, and must not inflate the
+# measured cost per verification. Mirrors DEFAULT_IDLE_CUTOFF_MS in batch-core.
+DEFAULT_IDLE_CUTOFF_MS = 120_000
+DECISION_ACTIONS = ("confirm", "reject", "reset", "confirmed", "rejected", "unreviewed")
 
 _MAX_SAMPLE_SIZE = 10_000_000
 
@@ -233,6 +239,52 @@ class EffortEstimate:
             "estimated_minutes": self.estimated_minutes,
             "requires_census": self.requires_census,
         }
+
+
+def measured_seconds_per_verification(
+    db_path: str,
+    session_id: Optional[int] = None,
+    idle_cutoff_ms: int = DEFAULT_IDLE_CUTOFF_MS,
+    min_decisions: int = 5,
+) -> Optional[Dict[str, Any]]:
+    """Median seconds per decision from recorded review telemetry.
+
+    Returns None when the telemetry table is absent or holds too few decisions to
+    be worth trusting, so the caller falls back to a stated assumption rather than
+    presenting a guess as a measurement.
+    """
+    placeholders = ",".join("?" for _ in DECISION_ACTIONS)
+    sql = (
+        f"SELECT dwell_ms FROM review_events"
+        f" WHERE action IN ({placeholders})"
+        f" AND dwell_ms IS NOT NULL AND dwell_ms > 0 AND dwell_ms < ?"
+    )
+    params: List[Any] = [*DECISION_ACTIONS, int(idle_cutoff_ms)]
+    if session_id is not None:
+        sql += " AND session_id = ?"
+        params.append(int(session_id))
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        dwells = [row[0] for row in conn.execute(sql, params)]
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+    if len(dwells) < min_decisions:
+        return None
+    arr = np.asarray(dwells, dtype=float) / 1000.0
+    return {
+        "seconds_per_verification": float(np.median(arr)),
+        "mean_seconds": float(np.mean(arr)),
+        "n_decisions": int(arr.size),
+        "idle_cutoff_ms": int(idle_cutoff_ms),
+        "source": "measured",
+    }
 
 
 def additional_effort(
