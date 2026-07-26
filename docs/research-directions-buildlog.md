@@ -448,8 +448,16 @@ events down to 153, exactly matching the pipeline's own reported complete count.
 - **No negative binomial** (statsmodels absent, no dependency added).
 - **Multi-root sessions** in the protocol export emit one run step per root but the export step
   covers only the first; `verify_protocol` warns. Untested against real data (the real DB has one root).
-- The generated `reproduce.sh` has been syntax-checked but **never executed end to end**.
-- **No GUI run.** The new Tauri commands were tested through Rust and through their Python CLIs,
-  not inside a running app window.
-- **`docs/architecture.md` and `docs/batch-app.md` were not updated** for the new table and commands.
+- **No GUI run.** This is the largest untested surface. The new Tauri commands and the Verification
+  panel were verified through Rust tests, the TypeScript compile, and their Python CLIs — but no
+  Tauri window was ever launched, so nothing here has been *seen* working. Specifically unexercised:
+  the panel's rendering and collapse behaviour, the keyboard shortcuts inside the real app, and
+  clicking a queued event whose recording is not the one currently open (that case sets `selectedId`
+  but does not switch files, and is surfaced to the user as a note rather than handled).
+- **A resumed session keeps the manifest from its original run**, by design of the write-once rule.
+  That correctly records what the session started with, but leaves no record if a resume happens
+  under changed code.
+- **Every worker spawn builds its own manifest**, hashing ~77 MB of weights and shelling out to git.
+  Invisible at concurrency 1 inside model-load time; at high concurrency each worker pays it once.
 - `--sweep` in the planner uses a fixed 0.0–0.9 grid, not configurable from the command line.
+- **Windows path handling** for the app-supplied `dbPath` was not tested.
