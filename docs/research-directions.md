@@ -286,6 +286,16 @@ Reasoning:
 - The two directions share the same substrate: completeness-aware measurement, verified subsamples,
   and provenance. Nothing is wasted.
 
+**Status of the gates, as of this branch:** MEE's script-export requirement is **closed and verified
+end to end** — `scripts/export_protocol.py` emits a `reproduce.sh` that reproduced a session exactly
+(187/153 against 187/153) with its preflight checking against a manifest recorded when the session
+ran. The generality requirement is **closed in the product**, not just the code: the Analysis-target
+UI exposes species, frequency band, and per-stage models, and a narrowed band was verified to
+actually confine detections. RSEC's "unit tests plus a demonstration dataset a reviewer can run in
+minutes" is met by the 203-test Python suite, the 67-test Rust suite, and the two 15-minute
+recordings in `data/`. So both venues are now open; the remaining work is scientific, not
+architectural.
+
 **Do not** build a general-purpose bioacoustics workbench. That race is lost to BirdNET-Analyzer
 and Whombat. The defensible identity of this project is narrow and specific: *a measurement
 instrument for a call type, where completeness is modeled separately from identity, and where the
