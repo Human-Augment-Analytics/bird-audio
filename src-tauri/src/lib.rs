@@ -33,6 +33,7 @@ pub fn run() {
             active_learning_commands::run_pcen,
             active_learning_commands::run_active_learning,
             active_learning_commands::run_qbe_search,
+            active_learning_commands::run_verification_plan,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

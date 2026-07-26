@@ -80,6 +80,66 @@ export interface ExportedEvent {
   retained: boolean | null;
 }
 
+export type VerificationStrategy = "random" | "stratified" | "uncertainty" | "completeness";
+
+/** Where the seconds-per-verification figure came from. An assumed pace is not a measurement. */
+export interface VerificationPace {
+  seconds_per_verification: number;
+  source: "measured" | "flag" | "assumed";
+  n_decisions: number | null;
+  mean_seconds?: number;
+  idle_cutoff_ms?: number;
+}
+
+export interface VerificationPrecision {
+  threshold: number;
+  n_verified: number;
+  n_true: number;
+  /** null, never 0, when nothing above the threshold has been verified. */
+  point: number | null;
+  ci_low: number;
+  ci_high: number;
+  half_width: number;
+  n_above_threshold: number;
+  n_unreviewed: number;
+  confidence: number;
+}
+
+export interface VerificationEffort {
+  n_verified: number;
+  n_required: number;
+  n_additional: number;
+  n_available: number;
+  p_assumed: number;
+  target_half_width: number;
+  seconds_per_verification: number;
+  estimated_seconds: number;
+  estimated_minutes: number;
+  requires_census: boolean;
+}
+
+export interface VerificationQueueItem {
+  id: number;
+  stage_a_conf: number;
+  completeness_score: number | null;
+  file_id: number;
+}
+
+export interface VerificationPlan {
+  db: string;
+  session_id: number | null;
+  threshold: number;
+  theta_b: number;
+  strategy: VerificationStrategy;
+  budget: number;
+  seed: number;
+  pace: VerificationPace;
+  precision: VerificationPrecision;
+  effort: VerificationEffort;
+  stopping_rule: { stop: boolean; reason: string };
+  queue: VerificationQueueItem[];
+}
+
 export interface EventRow {
   id: number;
   file_id: number;

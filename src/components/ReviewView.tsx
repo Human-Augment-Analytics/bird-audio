@@ -5,6 +5,7 @@ import {
 } from "../api";
 import { AudioVisualizer } from "./AudioVisualizer";
 import { EventTable } from "./EventTable";
+import VerificationPanel from "./VerificationPanel";
 import { REVIEW_SHORTCUTS, useReviewShortcuts } from "../reviewShortcuts";
 
 export interface ReviewViewProps {
@@ -112,6 +113,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   }, [events]);
 
   const src = selectedPath ? audioSrc(selectedPath) : null;
+  const dbPath = `${dir.replace(/[/\\]+$/, "")}/batch.db`;
 
   const MAX_VISIBLE = 150;
 
@@ -213,6 +215,8 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
             </div>
           </div>
         )}
+        <VerificationPanel dbPath={dbPath} sessionId={sid} thetaA={opts.thetaA} thetaB={opts.thetaB}
+          onSelectEvent={handleSelectEvent} onLogAction={logAction} />
         {!selectedPath ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", fontFamily: "var(--serif)", fontStyle: "italic", fontSize: "1.05rem" }}>
             Select a completed recording to review its events.
