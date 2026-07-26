@@ -266,6 +266,18 @@ The health panel now re-checks whenever a model path changes.
 Verified: `npx tsc -b` clean, `npm run build` clean, and no new lint errors (the two reported in
 `SetupView.tsx` are pre-existing, at lines 44 and 81).
 
+**The dynamic band was verified to actually change the analysis**, not merely to be accepted as a
+parameter. Same recording, two runs:
+
+```
+default 4125-11625 Hz : 66 events, 53 complete ; f_low 4618-6898 Hz, f_high 8321-9636 Hz
+narrow  6000-9000  Hz : 68 events, 56 complete ; f_low 6508-7236 Hz, f_high 7812-8276 Hz
+```
+
+Under the narrowed band every detection falls inside 6000–9000 Hz, and the detection set differs
+because a different band produces a different spectrogram. This is the evidence behind the
+taxon-generality claim: the pipeline really is retargetable, not hard-wired to one call type.
+
 ## 9. Reproducible protocol export (`birdpipe/protocol.py`, `scripts/export_protocol.py`)
 
 **This is the MEE submission gate.** Their Applications guidelines will not review a GUI-only tool
