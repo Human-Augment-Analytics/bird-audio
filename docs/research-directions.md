@@ -179,6 +179,20 @@ the detector's threshold and completeness-curation choices — which no PAM pape
    occupancy or count model (Chambert, Miller & Nichols 2015; Chambert et al. 2018 MEE) using the
    verified subsample is the reviewer-proof version.
 
+### A finding that emerged from building this, and is worth a paragraph in the paper
+
+Running a generated reproduction script end to end produced **187 events / 153 retained** against
+the original session's **260 / 216** — at identical thresholds, with the provenance preflight
+*passing*. The cause is that the manifest was built retrospectively from the current environment
+rather than captured when the session ran, so it compared today's code against today's code.
+
+This generalises beyond this codebase. A reproducibility check that reconstructs provenance *after
+the fact* cannot detect that the original analysis used different code, and will report a clean bill
+of health while the numbers move. Given how much PAM analysis runs through pipelines that evolve
+between the run and the write-up, "we recorded the model version and the thresholds" is not
+sufficient, and saying so with a worked example is a genuine contribution to the reproducibility
+discussion that both MEE and RSEC are actively pushing.
+
 ### Risks
 
 - **The result may be null or non-monotonic.** The descriptive numbers already hint at this:
