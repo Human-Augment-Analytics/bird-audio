@@ -27,6 +27,8 @@ pub fn run() {
             commands::update_event_bounds,
             commands::add_manual_event,
             commands::delete_event,
+            commands::log_review_action,
+            commands::get_review_telemetry,
             commands::prepare_review,
             active_learning_commands::run_pcen,
             active_learning_commands::run_active_learning,

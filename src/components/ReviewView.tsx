@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EventRow, FileRow, StartOpts, StartResult } from "../types";
 import {
-  addManualEvent, audioSrc, deleteEvent, listEvents, prepareReview, setEventReview, updateEventBounds,
+  addManualEvent, audioSrc, deleteEvent, listEvents, logReviewAction, prepareReview, setEventReview, updateEventBounds,
 } from "../api";
 import { AudioVisualizer } from "./AudioVisualizer";
 import { EventTable } from "./EventTable";
+import { REVIEW_SHORTCUTS, useReviewShortcuts } from "../reviewShortcuts";
 
 export interface ReviewViewProps {
   start: StartResult;
@@ -23,6 +24,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const currentPathRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -55,8 +57,9 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   const selectFile = useCallback((path: string) => {
     if (path === selectedPath) return;
     setSelectedPath(path); setSelectedId(null); setEvents([]); setNotice(null);
+    void logReviewAction(dir, sid, "open_file", null, { path });
     fetchEvents(path, true);
-  }, [selectedPath, fetchEvents]);
+  }, [selectedPath, fetchEvents, dir, sid]);
 
   const currentStatus = useCallback(
     (id: number): "unreviewed" | "confirmed" | "rejected" =>
@@ -87,6 +90,26 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
     try { await setEventReview(dir, id, currentStatus(id), label, note); await refreshEvents(); }
     catch (e) { setNotice(`Label/note update failed: ${String(e)}`); }
   }, [dir, currentStatus, refreshEvents]);
+
+  const logAction = useCallback((action: string, meta?: Record<string, unknown>) => {
+    const eventId = typeof meta?.eventId === "number" ? meta.eventId : null;
+    void logReviewAction(dir, sid, action, eventId, meta);
+  }, [dir, sid]);
+
+  useReviewShortcuts({
+    events,
+    selectedId,
+    enabled: !!selectedPath && !loadingEvents,
+    onSelect: handleSelectEvent,
+    onDecide: handleSetReview,
+    onToggleHelp: () => setShowShortcuts((v) => !v),
+    onAction: logAction,
+  });
+
+  const reviewProgress = useMemo(() => {
+    const decided = events.filter((e) => e.review_status !== "unreviewed").length;
+    return { decided, total: events.length };
+  }, [events]);
 
   const src = selectedPath ? audioSrc(selectedPath) : null;
 
@@ -163,6 +186,31 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
           <div className="notice reveal" style={{ fontSize: 12 }}>
             {notice}
             <button onClick={() => setNotice(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer" }}>✕</button>
+          </div>
+        )}
+        {selectedPath && (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--text-faint)" }}>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>
+              REVIEWED {reviewProgress.decided}/{reviewProgress.total}
+            </span>
+            <button onClick={() => setShowShortcuts((v) => !v)}
+              style={{ marginLeft: "auto", background: "none", border: "1px solid var(--line)", borderRadius: 6,
+                padding: "2px 8px", color: "var(--text-dim)", cursor: "pointer", fontFamily: "var(--mono)", fontSize: 10.5 }}>
+              {showShortcuts ? "hide keys" : "? keys"}
+            </button>
+          </div>
+        )}
+        {showShortcuts && (
+          <div className="reveal" style={{ border: "1px solid var(--line)", borderRadius: "var(--radius)", background: "var(--surface)", padding: "10px 13px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "4px 18px" }}>
+              {REVIEW_SHORTCUTS.map((s) => (
+                <div key={s.keys} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11.5 }}>
+                  <kbd style={{ fontFamily: "var(--mono)", fontSize: 10.5, border: "1px solid var(--line)", borderRadius: 4,
+                    padding: "1px 6px", color: "var(--text)", background: "var(--bg-deep)", whiteSpace: "nowrap" }}>{s.keys}</kbd>
+                  <span style={{ color: "var(--text-dim)" }}>{s.description}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {!selectedPath ? (
