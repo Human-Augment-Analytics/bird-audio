@@ -106,6 +106,20 @@ class Protocol:
     include_analysis: bool = True
     schema_version: int = PROTOCOL_SCHEMA_VERSION
 
+    @property
+    def reference_manifest(self) -> dict[str, Any]:
+        """The baseline the preflight compares a rerun against.
+
+        A manifest recorded when the session ran is the only one that can detect
+        that the original analysis used different code. Rebuilding it at export
+        time compares today against today and always matches.
+        """
+        return self.session.recorded_manifest or self.manifest
+
+    @property
+    def reference_is_recorded(self) -> bool:
+        return self.session.recorded_manifest is not None
+
 
 def _as_float(value: Any, fallback: float) -> float:
     try:
@@ -322,7 +336,13 @@ def build_protocol(
         ),
         ProtocolStep(
             name="preflight-compare",
-            description="Stop unless model weights and constants match the recorded run",
+            description=(
+                "Stop unless model weights and constants match the manifest recorded when the "
+                "session ran"
+                if session.recorded_manifest
+                else "Compare against a manifest rebuilt at export time - this CANNOT detect that "
+                     "the original run used different code"
+            ),
             command=[*py, "scripts/run_manifest.py", "--compare", reference_manifest, rerun_manifest],
             optional=True,
             guard_path=reference_manifest,
@@ -500,6 +520,10 @@ def render_manifest_json(protocol: Protocol) -> str:
         "include_analysis": protocol.include_analysis,
         "session": asdict(protocol.session),
         "manifest": protocol.manifest,
+        "reference_manifest": protocol.reference_manifest,
+        "reference_manifest_source": (
+            "recorded_at_run_time" if protocol.reference_is_recorded else "rebuilt_at_export_time"
+        ),
         "steps": [asdict(step) for step in protocol.steps],
         "warnings": verify_protocol(protocol),
     }

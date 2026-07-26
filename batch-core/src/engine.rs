@@ -52,6 +52,23 @@ fn fail_or_requeue(store: &Arc<Mutex<Store>>, c: &Claimed, cfg: &EngineConfig, r
     }
 }
 
+/// Persist what the first worker to come up reported loading. Losing the manifest
+/// costs provenance, not results, so a storage failure is logged and the run goes on.
+fn record_manifest(store: &Arc<Mutex<Store>>, session_id: i64, manifest: Option<&serde_json::Value>) {
+    let Some(value) = manifest else { return };
+    let text = match serde_json::to_string(value) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("run manifest: failed to serialize worker manifest: {e}");
+            return;
+        }
+    };
+    let s = store.lock().unwrap();
+    if let Err(e) = s.set_run_manifest(session_id, &text) {
+        eprintln!("run manifest: failed to store for session {session_id}: {e}");
+    }
+}
+
 fn worker_loop(
     store: Arc<Mutex<Store>>,
     session_id: i64,
@@ -78,7 +95,10 @@ fn worker_loop(
 
         if worker.is_none() {
             match Worker::spawn(&cfg.python, &cfg.worker_args, cfg.cwd.as_deref()) {
-                Ok(w) => worker = Some(w),
+                Ok(w) => {
+                    record_manifest(&store, session_id, w.manifest.as_ref());
+                    worker = Some(w);
+                }
                 Err(_) => {
                     fail_or_requeue(&store, &c, &cfg, "worker spawn failed");
                     continue;

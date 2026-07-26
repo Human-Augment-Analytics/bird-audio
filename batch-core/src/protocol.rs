@@ -48,7 +48,12 @@ pub struct EventRecord {
 #[serde(tag = "type")]
 pub enum WorkerMsg {
     #[serde(rename = "ready")]
-    Ready { device: String },
+    Ready {
+        device: String,
+        /// Absent from older workers, and null when the worker could not build one.
+        #[serde(default)]
+        manifest: Option<serde_json::Value>,
+    },
     #[serde(rename = "result")]
     Result {
         id: u64,
@@ -115,10 +120,40 @@ mod tests {
     }
 
     #[test]
-    fn parses_ready() {
+    fn parses_ready_without_manifest() {
         let m = parse_msg(r#"{"type":"ready","device":"cpu"}"#).unwrap();
         match m {
-            WorkerMsg::Ready { device } => assert_eq!(device, "cpu"),
+            WorkerMsg::Ready { device, manifest } => {
+                assert_eq!(device, "cpu");
+                assert!(manifest.is_none());
+            }
+            _ => panic!("expected Ready"),
+        }
+    }
+
+    #[test]
+    fn parses_ready_with_manifest_round_trip() {
+        let line = r#"{"type":"ready","device":"mps","manifest":{"schema_version":1,"models":{"localizer":{"sha256":"abc"}},"constants":{"F_MIN_HZ":3000.0}}}"#;
+        let m = parse_msg(line).unwrap();
+        match m {
+            WorkerMsg::Ready { device, manifest } => {
+                assert_eq!(device, "mps");
+                let v = manifest.expect("manifest present");
+                assert_eq!(v["schema_version"], 1);
+                assert_eq!(v["models"]["localizer"]["sha256"], "abc");
+                let text = serde_json::to_string(&v).unwrap();
+                let back: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(back, v);
+            }
+            _ => panic!("expected Ready"),
+        }
+    }
+
+    #[test]
+    fn parses_ready_with_null_manifest() {
+        let m = parse_msg(r#"{"type":"ready","device":"cpu","manifest":null}"#).unwrap();
+        match m {
+            WorkerMsg::Ready { manifest, .. } => assert!(manifest.is_none()),
             _ => panic!("expected Ready"),
         }
     }

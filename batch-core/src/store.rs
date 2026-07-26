@@ -198,6 +198,19 @@ fn ensure_curation_columns(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Idempotent migration: add the run manifest column to `sessions` if not already present.
+fn ensure_run_manifest_column(conn: &Connection) -> rusqlite::Result<()> {
+    let existing: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+        let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        names.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if !existing.iter().any(|n| n == "run_manifest") {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN run_manifest TEXT")?;
+    }
+    Ok(())
+}
+
 /// Idempotent migration: add the review telemetry table if not already present.
 fn ensure_review_telemetry(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
@@ -244,6 +257,7 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA)?;
         ensure_curation_columns(&conn)?;
+        ensure_run_manifest_column(&conn)?;
         ensure_review_telemetry(&conn)?;
         Ok(Store { conn })
     }
@@ -252,6 +266,7 @@ impl Store {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
         ensure_curation_columns(&conn)?;
+        ensure_run_manifest_column(&conn)?;
         ensure_review_telemetry(&conn)?;
         Ok(Store { conn })
     }
@@ -621,6 +636,31 @@ impl Store {
         })
     }
 
+    /// Record the provenance manifest the worker captured when it loaded the models.
+    /// Write-once: workers respawn after a crash and a pool runs several of them, so
+    /// the manifest of what the session actually started with must not be overwritten.
+    /// Returns true when this call was the one that stored it.
+    pub fn set_run_manifest(&self, session_id: i64, manifest_json: &str) -> rusqlite::Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE sessions SET run_manifest=?2 WHERE id=?1 AND run_manifest IS NULL",
+            params![session_id, manifest_json],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// The stored manifest JSON for a session, if one was captured.
+    pub fn run_manifest(&self, session_id: i64) -> rusqlite::Result<Option<String>> {
+        let row: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT run_manifest FROM sessions WHERE id=?1",
+                params![session_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(row.flatten())
+    }
+
     pub fn set_session_status(&self, session_id: i64, status: &str) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE sessions SET status=?2 WHERE id=?1",
@@ -888,6 +928,58 @@ mod tests {
         for col in &["review_status", "source", "label", "note", "reviewed_at"] {
             assert!(existing.contains(&col.to_string()), "missing column: {col}");
         }
+    }
+
+    #[test]
+    fn run_manifest_migration_is_idempotent() {
+        let s = mem();
+        ensure_run_manifest_column(&s.conn).unwrap();
+        ensure_run_manifest_column(&s.conn).unwrap();
+        let cols: Vec<String> = {
+            let mut stmt = s.conn.prepare("PRAGMA table_info(sessions)").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(1)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(cols.iter().filter(|n| *n == "run_manifest").count(), 1);
+    }
+
+    #[test]
+    fn set_run_manifest_stores_json_verbatim() {
+        let s = mem();
+        let sid = new_session(&s);
+        assert_eq!(s.run_manifest(sid).unwrap(), None);
+        let manifest = serde_json::json!({
+            "schema_version": 1,
+            "models": {"localizer": {"sha256": "abc", "bytes": 10}},
+            "constants": {"F_MIN_HZ": 3000.0},
+        });
+        let text = serde_json::to_string(&manifest).unwrap();
+        assert!(s.set_run_manifest(sid, &text).unwrap());
+        let stored = s.run_manifest(sid).unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(parsed, manifest);
+    }
+
+    #[test]
+    fn set_run_manifest_is_write_once() {
+        let s = mem();
+        let sid = new_session(&s);
+        assert!(s.set_run_manifest(sid, r#"{"first":true}"#).unwrap());
+        assert!(!s.set_run_manifest(sid, r#"{"second":true}"#).unwrap());
+        assert_eq!(s.run_manifest(sid).unwrap().as_deref(), Some(r#"{"first":true}"#));
+    }
+
+    #[test]
+    fn run_manifest_is_per_session() {
+        let s = mem();
+        let a = new_session(&s);
+        let b = s.create_session(&NewSession {
+            input_roots: "[\"/other\"]", output_dir: "/out", device: "cpu",
+            concurrency: 1, theta_a: 0.0, theta_b: 0.53, species_name: None,
+        }).unwrap();
+        s.set_run_manifest(a, r#"{"a":1}"#).unwrap();
+        assert_eq!(s.run_manifest(b).unwrap(), None);
+        assert!(s.set_run_manifest(b, r#"{"b":2}"#).unwrap());
+        assert_eq!(s.run_manifest(a).unwrap().as_deref(), Some(r#"{"a":1}"#));
     }
 
     #[test]

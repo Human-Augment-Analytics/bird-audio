@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     script_path.chmod(0o755)
     protocol_path = out_dir / "protocol.json"
     protocol_path.write_text(render_manifest_json(protocol))
-    manifest_path = write_manifest(out_dir / "manifest.json", protocol.manifest)
+    manifest_path = write_manifest(out_dir / "manifest.json", protocol.reference_manifest)
 
     warnings = verify_protocol(protocol)
 

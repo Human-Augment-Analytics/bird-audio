@@ -136,3 +136,31 @@ def test_build_manifest_has_required_sections():
     for section in ("schema_version", "generated_at", "git", "environment", "models", "constants"):
         assert section in m
     assert m["constants"]["SAMPLE_RATE"] == C.SAMPLE_RATE
+
+
+def test_diff_ignores_descriptive_sections_by_default():
+    """A worker-captured manifest has no session block; those diffs are not signal."""
+    a = _manifest()
+    b = copy.deepcopy(a)
+    b["session"] = {"id": 1, "device": "mps", "n_events": 187}
+    b["extra"] = {"f_min_hz": 6000}
+    assert provenance.diff_manifests(a, b) == []
+    noisy = provenance.diff_manifests(a, b, ignore_volatile=False)
+    assert any(d["field"].startswith("session.") for d in noisy)
+
+
+def test_descriptive_sections_never_affect_the_reproducibility_verdict():
+    a = _manifest()
+    b = copy.deepcopy(a)
+    b["session"] = {"device": "cpu"}
+    assert provenance.is_reproducible(provenance.diff_manifests(a, b)) is True
+
+
+def test_weight_change_still_surfaces_alongside_descriptive_drift():
+    a = _manifest()
+    b = copy.deepcopy(a)
+    b["session"] = {"device": "cpu"}
+    b["models"]["localizer"]["sha256"] = "changed"
+    diffs = provenance.diff_manifests(a, b)
+    assert [d["field"] for d in diffs] == ["models.localizer.sha256"]
+    assert provenance.is_reproducible(diffs) is False
