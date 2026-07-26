@@ -312,7 +312,7 @@ See `docs/research-directions-buildlog.md` for the implementation and smoke-test
 | Effort-normalized recorder/band summaries + elevation models (P1, P2) | A | The untested Introduction predictions |
 | θ_A × θ_B sensitivity sweep with stability verdict | A | "sensitivity checks needed" (§8.1) |
 | Run provenance manifest + reproducibility diff | A, B | "motivates ... a standardized execution protocol" (§8.1) |
-| Verification-effort planner (Wilson CIs, sample-size, review queue, stopping rule) | B | Unclaimed white space |
+| Verification-effort planner + in-app Verification panel | B | Unclaimed white space; no tool plans effort or says when to stop |
 | Review telemetry (per-action timing, idle cutoff, export) | B | Verification effort was unmeasurable |
 | Keyboard-driven review + progress indicator | B | No shortcuts existed; throughput was floor-limited by the mouse |
 | PCEN / active-learning / QBE commands implemented | usability | Three `Err("Not implemented")` stubs |

@@ -1,7 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile, ExportedEvent, EventRow } from "./types";
+import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile, ExportedEvent, EventRow, VerificationPlan, VerificationStrategy } from "./types";
 
 export const checkHealth = (
   cwd?: string,
@@ -91,6 +91,22 @@ export const logReviewAction = (
     outputDir, sessionId, action, eventId,
     meta: meta ? JSON.stringify(meta) : null,
   }).catch(() => undefined);
+
+export const runVerificationPlan = async (
+  dbPath: string,
+  threshold: number,
+  targetHalfWidth: number,
+  strategy: VerificationStrategy,
+  budget: number,
+  thetaB: number,
+  sessionId?: number | null
+): Promise<VerificationPlan> => {
+  const raw = await invoke<string>("run_verification_plan", {
+    dbPath, threshold, targetHalfWidth, strategy, budget, thetaB,
+    sessionId: sessionId ?? null,
+  });
+  return JSON.parse(raw) as VerificationPlan;
+};
 
 export const getReviewTelemetry = (outputDir: string, sessionId: number) =>
   invoke<Record<string, unknown>>("get_review_telemetry", { outputDir, sessionId });

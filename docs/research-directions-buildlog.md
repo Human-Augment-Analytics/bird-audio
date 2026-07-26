@@ -16,7 +16,7 @@ verified, it says so.
 
 ## After
 
-- `cargo test --workspace` — **67 passing, 0 failed**
+- `cargo test --workspace` — **69 passing, 0 failed**
 - `uv run pytest` — **203 passing, 0 failed**
 - `npx tsc -b` — clean; `npm run build` — clean; `npm run lint` — no new errors from any new file
 
@@ -150,6 +150,32 @@ Stopping rule   : CONTINUE
 
 The interval is correctly asymmetric, and the 8 pre-existing *manual* confirmations were excluded
 from the 30.
+
+### In the app, not just the CLI
+
+The planner is the instrument Direction B's study depends on, so it now has a **Verification panel**
+in Review mode (`src/components/VerificationPanel.tsx`), backed by a `run_verification_plan` Tauri
+command that shells out through the same `uv run` machinery as the other Python-backed commands.
+It shows the precision interval, the remaining verifications and estimated time, the stopping-rule
+verdict, and the next queue — each queued event clickable to select it. Requesting a plan and
+picking from the queue are logged as telemetry, so the study can measure whether planned review
+actually beats reviewing by confidence rank.
+
+Two display rules are enforced because getting them wrong would misreport the science:
+**precision renders as "unknown, not zero" when nothing is verified** (never `0%`), and the pace is
+always labelled with its provenance — measured, supplied, or assumed.
+
+All three branches were exercised against real databases:
+
+```
+cold start : precision.point = None   pace = assumed              stopping_rule = CONTINUE
+warm start : precision.point = 0.833 CI [0.681, 0.921]
+             pace = measured (n_decisions = 6)                    stopping_rule = STOP
+             "Target met: 36 verified give a 95% half-width of 0.1201 (target 0.2000)"
+```
+
+The panel itself was **not exercised in a running Tauri window** — correctness here rests on the
+Rust tests, the TypeScript compile, and the verified JSON contract, not on having seen it render.
 
 ### Closing the loop: measured effort
 
