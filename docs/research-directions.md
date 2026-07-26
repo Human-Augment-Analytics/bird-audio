@@ -291,7 +291,16 @@ See `docs/research-directions-buildlog.md` for the implementation and smoke-test
 
 ---
 
-## 6. Open questions for the humans
+## 6. What this document does not cover
+
+Detailed venue-requirement research (MEE Applications author guidelines and acceptance criteria,
+CHI subcommittee selection and the current contribution rubric) was still in progress when this
+was written and is **not** reflected here. The strategic analysis above does not depend on it —
+it rests on the manuscript's own contents and the competitive landscape, both of which are
+verified — but the specific submission mechanics for each venue still need to be checked before
+committing to a target.
+
+## 7. Open questions for the humans
 
 1. Is the existing manuscript already submitted, or still editable? The recommendation changes
    depending on whether the ecology can go *into* it or must be a second paper.
