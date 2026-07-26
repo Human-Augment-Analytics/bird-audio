@@ -227,6 +227,75 @@ These ship because they make the tool usable — but per the landscape survey th
 publishable novelty. BirdNET-Analyzer already has embedding search and perch-hoplite already has
 margin-based active learning.
 
+## 8. Analysis-target UI (`SetupView.tsx`, `src/types.ts`, `src/api.ts`)
+
+Serves the **MEE generality requirement**: "Papers describing methods that apply only to a single
+taxon or ecosystem are unlikely to meet these criteria."
+
+The backend has supported dynamic species name, frequency band, and per-session model paths since
+July 2026 — `StartOpts` in `src-tauri/src/commands.rs` carries `localizer`, `classifier`,
+`classifier_c`, `f_min_hz`, `f_max_hz`, `species_name`, and forwards them to the worker. But the
+TypeScript `StartOpts` did not declare those fields and no UI exposed them, so from a user's point
+of view the tool was hard-wired to one species. The generality claim was true in the code and false
+in the product.
+
+Added an "Analysis target" disclosure: species/call type, frequency band low/high, and file pickers
+for the Stage A, Stage B, and Stage C models, each with a Reset. **Blank means "use the pipeline
+default"** — the UI sends `null` rather than guessing a value, so unmodified sessions behave exactly
+as before. Band bounds are validated (low must be below high) before the session starts.
+
+Also wired `check_health` to receive the chosen model paths. The Rust command already accepted and
+validated `localizer`/`classifier`/`classifier_c`, but the frontend only ever passed `cwd` — so
+selecting a custom model would report the *bundled* models as healthy and then fail at run time.
+The health panel now re-checks whenever a model path changes.
+
+Verified: `npx tsc -b` clean, `npm run build` clean, and no new lint errors (the two reported in
+`SetupView.tsx` are pre-existing, at lines 44 and 81).
+
+## 9. Reproducible protocol export (`birdpipe/protocol.py`, `scripts/export_protocol.py`)
+
+**This is the MEE submission gate.** Their Applications guidelines will not review a GUI-only tool
+"unless [it is] also able to export executable scripts that allow for reproducibility of their
+graphical, statistical, or analytical outputs."
+
+Given a completed session, `export_protocol.py` emits `reproduce.sh`, `protocol.json`, and a
+reference `manifest.json`. The script re-runs the pipeline at the recorded thresholds and device,
+re-exports, and runs the ecological analysis, sensitivity sweep, and verification plan — with a
+preflight step that recomputes the provenance manifest and **stops unless model digests and paper
+constants match the recorded run**.
+
+Design decisions worth knowing:
+
+- The rerun writes to a **fresh** `reproduce.db`, never the source database — re-running into
+  `data/batch.db` would mutate the very evidence the protocol documents.
+- Shebang is `#!/usr/bin/env bash` rather than `#!/bin/sh`, because `set -euo pipefail` was required
+  and `pipefail` does not exist in dash; a `/bin/sh` shebang would abort on line one for a Linux
+  reviewer. The body is otherwise POSIX and passes `sh -n`.
+- Optional steps are guarded so a missing input skips rather than aborting.
+- Multi-root sessions are flagged by `verify_protocol`, not silently mishandled.
+
+**Verified** against the real `data/batch.db`: 7 steps generated, `sh -n` and `bash -n` both exit 0,
+and — the test that matters most — a run with an output directory containing both a space and an
+apostrophe still passes `sh -n`, because every path goes through `shlex.quote`. 24 unit tests,
+including one that recovers the original path by round-tripping the generated argv through
+`shlex.split`. The generated script was syntax-checked but never executed end to end.
+
+It also correctly warned on its own generation: *"git tree was dirty at commit f272de3: the script's
+code state is not fully described by that commit."*
+
+### Closing the export hole this exposed
+
+The protocol export surfaced a real reproducibility gap: `batch-core`'s CLI could only write CSV,
+while `export_json` and the `complete_only` / `confirmed_only` / metadata-join filters were reachable
+**only through the Tauri command layer**. A generated script therefore could not reproduce a GUI JSON
+or filtered export — which is precisely what MEE asks for.
+
+Added `--export-json`, `--complete-only`, `--confirmed-only`, and `--metadata` to
+`batch-core/src/bin/batch.rs`, reusing the existing `export_json` function rather than duplicating it.
+
+**Verified** on real data: JSON export produced 153 valid rows, and `--complete-only` filtered 187
+events down to 153, exactly matching the pipeline's own reported complete count.
+
 ---
 
 ## Not done / honest gaps

@@ -288,6 +288,9 @@ See `docs/research-directions-buildlog.md` for the implementation and smoke-test
 | Review telemetry (per-action timing, idle cutoff, export) | B | Verification effort was unmeasurable |
 | Keyboard-driven review + progress indicator | B | No shortcuts existed; throughput was floor-limited by the mouse |
 | PCEN / active-learning / QBE commands implemented | usability | Three `Err("Not implemented")` stubs |
+| Reproducible protocol export (`reproduce.sh` + provenance preflight) | **MEE gate** | GUIs are unreviewable at MEE without executable script export |
+| `--export-json` / `--complete-only` / `--confirmed-only` / `--metadata` on the CLI | **MEE gate** | GUI-only export paths a script could not reproduce |
+| Analysis-target UI (species, frequency band, per-stage model pickers) | **MEE generality rule** | Single-taxon methods "unlikely to meet these criteria" |
 
 ---
 

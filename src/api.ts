@@ -3,8 +3,16 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile, ExportedEvent, EventRow } from "./types";
 
-export const checkHealth = (cwd?: string) => 
-  invoke<HealthStatus>("check_health", { cwd });
+export const checkHealth = (
+  cwd?: string,
+  models?: { localizer?: string | null; classifier?: string | null; classifierC?: string | null }
+) =>
+  invoke<HealthStatus>("check_health", {
+    cwd,
+    localizer: models?.localizer ?? null,
+    classifier: models?.classifier ?? null,
+    classifierC: models?.classifierC ?? null,
+  });
 export const prepareSystem = (cwd?: string) => 
   invoke<void>("prepare_system", { cwd });
 export const checkCache = (outputDir: string) =>

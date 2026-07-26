@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { checkHealth, pickFolder, prepareSystem, startSession, checkCache, getConcurrencySuggestion, getFeatureFlags } from "../api";
+import { checkHealth, pickFile, pickFolder, prepareSystem, startSession, checkCache, getConcurrencySuggestion, getFeatureFlags } from "../api";
 import type { StartOpts, StartResult, HealthStatus } from "../types";
 import ManageCache from "./ManageCache";
 
@@ -26,6 +26,15 @@ export default function SetupView({ onStarted }: Props) {
   const [thetaB, setThetaB] = useState(0.530306); // Quality
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showTarget, setShowTarget] = useState(false);
+
+  // Analysis target. Blank means "use the pipeline default" — never send a guess.
+  const [speciesName, setSpeciesName] = useState("");
+  const [fMinHz, setFMinHz] = useState("");
+  const [fMaxHz, setFMaxHz] = useState("");
+  const [localizer, setLocalizer] = useState("");
+  const [classifier, setClassifier] = useState("");
+  const [classifierC, setClassifierC] = useState("");
   
   // Advanced (Hidden)
   const [device, setDevice] = useState("cpu");
@@ -42,13 +51,17 @@ export default function SetupView({ onStarted }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    checkHealth(cwd || undefined).then(h => {
+    checkHealth(cwd || undefined, {
+      localizer: localizer.trim() || null,
+      classifier: classifier.trim() || null,
+      classifierC: classifierC.trim() || null,
+    }).then(h => {
       setHealth(h);
       if (h?.internal_device) {
         setDevice(h.internal_device);
       }
     }).catch(() => setHealth(null));
-  }, [cwd]);
+  }, [cwd, localizer, classifier, classifierC]);
 
   useEffect(() => {
     // Fetch concurrency suggestion for the selected processor
@@ -77,7 +90,11 @@ export default function SetupView({ onStarted }: Props) {
     setBusy(true);
     try {
       await prepareSystem(cwd || undefined);
-      const h = await checkHealth(cwd || undefined);
+      const h = await checkHealth(cwd || undefined, {
+        localizer: localizer.trim() || null,
+        classifier: classifier.trim() || null,
+        classifierC: classifierC.trim() || null,
+      });
       setHealth(h);
       if (h?.internal_device) {
         setDevice(h.internal_device);
@@ -89,8 +106,21 @@ export default function SetupView({ onStarted }: Props) {
     }
   };
 
+  const optionalNumber = (raw: string): number | null => {
+    const trimmed = raw.trim();
+    if (trimmed === "") return null;
+    const value = Number(trimmed);
+    return Number.isFinite(value) ? value : null;
+  };
+
   const start = async () => {
     if (!input) { setError("Please select a recording folder."); return; }
+    const fMin = optionalNumber(fMinHz);
+    const fMax = optionalNumber(fMaxHz);
+    if (fMin !== null && fMax !== null && fMin >= fMax) {
+      setError("Frequency band is empty: the low bound must be below the high bound.");
+      return;
+    }
     setBusy(true);
     const concurrencyNum = concurrency.trim() === "" ? 0 : Number(concurrency);
     const opts: StartOpts = {
@@ -104,6 +134,12 @@ export default function SetupView({ onStarted }: Props) {
       thetaB,
       timeoutSecs,
       maxAttempts,
+      speciesName: speciesName.trim() || null,
+      fMinHz: fMin,
+      fMaxHz: fMax,
+      localizer: localizer.trim() || null,
+      classifier: classifier.trim() || null,
+      classifierC: classifierC.trim() || null,
     };
     try {
       const result = await startSession(opts);
@@ -164,6 +200,51 @@ export default function SetupView({ onStarted }: Props) {
         <Field label={<><span className="section-num">3</span>Quality filter</>} hint="higher = stricter">
           <input type="number" step="0.01" value={thetaB} onChange={e => setThetaB(Number(e.target.value))} />
         </Field>
+      </div>
+
+      <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+        <button className="disclosure" aria-expanded={showTarget} onClick={() => setShowTarget(!showTarget)}>
+          <span className="chev">{showTarget ? "▼" : "▶"}</span> Analysis target
+        </button>
+        {showTarget && (
+          <div className="internals">
+            <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 10 }}>
+              Leave blank to analyse the Hume's Leaf Warbler buzz with the bundled models.
+              Override these to run the same pipeline on a different species or call type.
+            </div>
+            <Field label="Species / call type" hint="recorded with the session">
+              <input value={speciesName} placeholder="Hume's Leaf Warbler"
+                onChange={e => setSpeciesName(e.target.value)} />
+            </Field>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Band low (Hz)" hint="default 4125">
+                <input type="number" value={fMinHz} placeholder="4125"
+                  onChange={e => setFMinHz(e.target.value)} />
+              </Field>
+              <Field label="Band high (Hz)" hint="default 11625">
+                <input type="number" value={fMaxHz} placeholder="11625"
+                  onChange={e => setFMaxHz(e.target.value)} />
+              </Field>
+            </div>
+            {([
+              ["Stage A detector", localizer, setLocalizer, "models/buzz_localizer.pt"],
+              ["Stage B completeness", classifier, setClassifier, "models/classifier.pt"],
+              ["Stage C classifier", classifierC, setClassifierC, "(none)"],
+            ] as const).map(([label, value, setter, placeholder]) => (
+              <Field key={label} label={label}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={{ flex: 1 }} value={value} placeholder={placeholder}
+                    onChange={e => setter(e.target.value)} />
+                  <button onClick={async () => {
+                    const f = await pickFile([{ name: "Model weights", extensions: ["pt", "pth", "onnx"] }]);
+                    if (f) setter(f);
+                  }}>Browse…</button>
+                  {value && <button onClick={() => setter("")}>Reset</button>}
+                </div>
+              </Field>
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16 }}>
