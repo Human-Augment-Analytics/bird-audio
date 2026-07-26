@@ -230,7 +230,7 @@ def read_session_protocol(
 
 
 def _batch_command(
-    root: str, rerun_db: str, session: SessionProtocol, export: tuple[str, str] | None
+    root: str, rerun_db: str, session: SessionProtocol, export: tuple[str, str, str] | None
 ) -> list[str]:
     cmd = [
         "cargo", "run", "-p", "batch-core", "--bin", "batch", "--",
@@ -243,7 +243,11 @@ def _batch_command(
     if session.concurrency > 0:
         cmd += ["--concurrency", str(session.concurrency)]
     if export is not None:
-        cmd += ["--export-csv", export[0], "--export-telemetry", export[1]]
+        cmd += [
+            "--export-csv", export[0],
+            "--export-json", export[1],
+            "--export-telemetry", export[2],
+        ]
     return cmd
 
 
@@ -285,6 +289,7 @@ def build_protocol(
     reference_manifest = f"{out}/manifest.json"
     rerun_manifest = f"{out}/rerun_manifest.json"
     events_csv = f"{out}/events.csv"
+    events_json = f"{out}/events.json"
     telemetry_csv = f"{out}/telemetry.csv"
     py = list(python_cmd)
 
@@ -323,11 +328,10 @@ def build_protocol(
         steps.append(
             ProtocolStep(
                 name="export",
-                description=(
-                    "Resume the completed session and write the event and telemetry CSVs "
-                    "(JSON export is GUI-only; batch-core's CLI emits CSV)"
+                description="Resume the completed session and write the event CSV, JSON and telemetry CSV",
+                command=_batch_command(
+                    roots[0], rerun, session, export=(events_csv, events_json, telemetry_csv)
                 ),
-                command=_batch_command(roots[0], rerun, session, export=(events_csv, telemetry_csv)),
             )
         )
 
