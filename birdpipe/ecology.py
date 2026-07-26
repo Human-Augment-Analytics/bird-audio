@@ -388,6 +388,45 @@ def metadata_by_recorder(
 # summaries
 # --------------------------------------------------------------------------
 
+def measure_effort_hours(
+    paths: Iterable[str],
+    default_hours: float = DEFAULT_EFFORT_HOURS_PER_FILE,
+) -> Dict[str, object]:
+    """Per-file survey effort read from audio headers rather than assumed.
+
+    A uniform per-file assumption biases every rate whenever recordings differ in
+    length — truncated files from a full SD card or a flat battery are common in
+    passive acoustic monitoring. Files that cannot be read fall back to
+    `default_hours` and are counted in `n_defaulted` so the caller can report it.
+    """
+    try:
+        import soundfile as sf
+    except ImportError:
+        return {
+            "hours": {p: float(default_hours) for p in paths},
+            "n_measured": 0,
+            "n_defaulted": None,
+            "available": False,
+        }
+
+    hours: Dict[str, float] = {}
+    measured = 0
+    defaulted = 0
+    for path in paths:
+        try:
+            hours[path] = float(sf.info(path).duration) / 3600.0
+            measured += 1
+        except (RuntimeError, OSError):
+            hours[path] = float(default_hours)
+            defaulted += 1
+    return {
+        "hours": hours,
+        "n_measured": measured,
+        "n_defaulted": defaulted,
+        "available": True,
+    }
+
+
 def recorder_summary(
     records: Iterable[Dict],
     effort_hours_per_file: float = DEFAULT_EFFORT_HOURS_PER_FILE,
@@ -395,6 +434,7 @@ def recorder_summary(
     retained_only: bool = True,
     prefix_map: Optional[Mapping[str, str]] = None,
     metadata: Optional[Mapping[str, Dict]] = None,
+    effort_by_path: Optional[Mapping[str, float]] = None,
 ) -> List[Dict]:
     """One row per recorder, with the effort-normalized rate the manuscript lacks.
 
@@ -427,8 +467,14 @@ def recorder_summary(
     rows: List[Dict] = []
     for rid in recorder_ids:
         evs = events_by_recorder.get(rid, [])
-        n_files = len(files_by_recorder.get(rid, ()))
-        effort = n_files * float(effort_hours_per_file)
+        recorder_files = files_by_recorder.get(rid, ())
+        n_files = len(recorder_files)
+        if effort_by_path:
+            effort = sum(
+                float(effort_by_path.get(p, effort_hours_per_file)) for p in recorder_files
+            )
+        else:
+            effort = n_files * float(effort_hours_per_file)
         durations = [e["duration"] for e in evs if e.get("duration") is not None]
         freqs = [e["center_freq"] for e in evs if e.get("center_freq") is not None]
 

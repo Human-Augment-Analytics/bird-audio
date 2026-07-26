@@ -431,3 +431,44 @@ def test_band_rate_ordering_ranks_by_rate():
     rows = build_rows(recorders, [40, 44, 80, 84, 8, 12])
     ordering = eco.band_rate_ordering(eco.band_summary(rows))
     assert ordering == "Medium>Low>High"
+
+
+# --- measured survey effort -------------------------------------------------
+
+def test_measure_effort_defaults_for_unreadable_files(tmp_path):
+    missing = str(tmp_path / "gone.wav")
+    got = eco.measure_effort_hours([missing], default_hours=0.25)
+    assert got["hours"][missing] == pytest.approx(0.25)
+    if got["available"]:
+        assert got["n_defaulted"] == 1
+        assert got["n_measured"] == 0
+
+
+def test_recorder_summary_uses_per_file_effort():
+    """A recorder whose files are half-length must not be credited full effort."""
+    records = [
+        {"path": "/d/PSL01_a.wav", "retained": 1, "duration": 1.0, "center_freq": 7000.0},
+        {"path": "/d/PSL01_b.wav", "retained": 1, "duration": 1.0, "center_freq": 7000.0},
+    ]
+    paths = ["/d/PSL01_a.wav", "/d/PSL01_b.wav"]
+
+    uniform = eco.recorder_summary(records, effort_hours_per_file=0.25, file_paths=paths)
+    assert uniform[0]["effort_hours"] == pytest.approx(0.5)
+    assert uniform[0]["rate_per_hour"] == pytest.approx(4.0)
+
+    measured = eco.recorder_summary(
+        records, effort_hours_per_file=0.25, file_paths=paths,
+        effort_by_path={"/d/PSL01_a.wav": 0.25, "/d/PSL01_b.wav": 0.125},
+    )
+    assert measured[0]["effort_hours"] == pytest.approx(0.375)
+    assert measured[0]["rate_per_hour"] == pytest.approx(2 / 0.375)
+
+
+def test_recorder_summary_falls_back_for_paths_missing_from_effort_map():
+    records = [{"path": "/d/PSL01_a.wav", "retained": 1, "duration": 1.0, "center_freq": 7000.0}]
+    rows = eco.recorder_summary(
+        records, effort_hours_per_file=0.25,
+        file_paths=["/d/PSL01_a.wav", "/d/PSL01_b.wav"],
+        effort_by_path={"/d/PSL01_a.wav": 0.1},
+    )
+    assert rows[0]["effort_hours"] == pytest.approx(0.35)

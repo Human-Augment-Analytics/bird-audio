@@ -207,6 +207,16 @@ buzz is it?"**, and `retained` is the intersection.
     `reviewed_at` (ISO timestamp set on every `set_event_review` call).
   - Manual events inserted by `add_manual_event` start with
     `source='manual'`, `review_status='confirmed'`, and no ML scores.
+- **review_events** — one row per review action, added by the idempotent
+  `ensure_review_telemetry` migration. Records *what a decision cost*, which the
+  curation columns above do not: `action` (`confirm`/`reject`/`reset`/`edit_bounds`/
+  `add_manual`/`delete`/`play`/`seek`/`open_file`/`search`), `at_ms`, `dwell_ms`
+  (time since the previous row in the same session), and an optional `meta` JSON
+  blob. Aggregates discard any dwell above an idle cutoff (default 120 s) so a
+  break is not counted as review time, and per-decision statistics consider only
+  `confirm`/`reject`/`reset` so navigation does not dilute them.
+  Logging is **best-effort**: a failed telemetry insert never fails the curation
+  operation that triggered it.
 
 ## 8. Concurrency, retries, cancellation
 
@@ -227,4 +237,20 @@ buzz is it?"**, and `retained` is the intersection.
 - `confirmed_only` — restricts to `review_status = 'confirmed'` (human-curated events only; includes manual events).
 
 Both flags are accepted by `export_session` in `src-tauri/src/commands.rs` and
-forwarded to `export_csv` / `export_json`.
+forwarded to `export_csv` / `export_json`. `export_session(fmt: "telemetry")` and the
+CLI's `--export-telemetry` write the `review_events` table joined to event and file
+info; rows that are not event-scoped (such as `open_file`) are preserved via a LEFT JOIN.
+
+## 10. Reproducibility
+
+Three layers, all in `birdpipe/`:
+
+- **`provenance.py`** — a run manifest pinning model SHA-256 digests, every Table A.6/A.8
+  constant, tracked package versions, git state, and the session config. `--compare`
+  exits non-zero when weights or constants differ; environment drift alone is reported
+  but does not mark a run irreproducible.
+- **`protocol.py`** — turns a completed session into a runnable `reproduce.sh` that
+  re-runs the pipeline at the recorded thresholds into a fresh database, with a
+  preflight that stops unless digests and constants match. Every path is `shlex.quote`d.
+- **`ecology.py` / `verification.py`** — the downstream analyses the script invokes, so a
+  reproduction covers the ecological conclusion, not just the detections.
