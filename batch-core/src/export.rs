@@ -551,6 +551,87 @@ pub fn export_raven(
     Ok(rows.len())
 }
 
+const SELECT_TELEMETRY: &str = "SELECT r.id, r.session_id, r.at_ms, r.action, r.dwell_ms, \
+     r.event_id, r.file_id, f.path, e.t_start, e.t_end, e.review_status, e.source, r.meta \
+     FROM review_events r \
+     LEFT JOIN events e ON e.id=r.event_id \
+     LEFT JOIN files f ON f.id=COALESCE(r.file_id, e.file_id) \
+     WHERE r.session_id=?1 \
+     ORDER BY r.at_ms, r.id";
+
+struct TelemetryRow {
+    id: i64,
+    session_id: i64,
+    at_ms: i64,
+    action: String,
+    dwell_ms: Option<i64>,
+    event_id: Option<i64>,
+    file_id: Option<i64>,
+    path: Option<String>,
+    t_start: Option<f64>,
+    t_end: Option<f64>,
+    review_status: Option<String>,
+    source: Option<String>,
+    meta: Option<String>,
+}
+
+fn collect_telemetry(store: &Store, session_id: i64) -> rusqlite::Result<Vec<TelemetryRow>> {
+    let mut stmt = store.conn.prepare(SELECT_TELEMETRY)?;
+    let rows = stmt.query_map(params![session_id], |r| {
+        Ok(TelemetryRow {
+            id: r.get(0)?,
+            session_id: r.get(1)?,
+            at_ms: r.get(2)?,
+            action: r.get(3)?,
+            dwell_ms: r.get(4)?,
+            event_id: r.get(5)?,
+            file_id: r.get(6)?,
+            path: r.get(7)?,
+            t_start: r.get(8)?,
+            t_end: r.get(9)?,
+            review_status: r.get(10)?,
+            source: r.get(11)?,
+            meta: r.get(12)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Write the session's `review_events` joined to event and file context as CSV.
+pub fn export_telemetry_csv(
+    store: &Store,
+    session_id: i64,
+    path: &Path,
+) -> Result<usize, Box<dyn Error>> {
+    let rows = collect_telemetry(store, session_id)?;
+    let mut f = File::create(path)?;
+    writeln!(
+        f,
+        "id,session_id,at_ms,action,dwell_ms,event_id,file_id,path,t_start,t_end,review_status,source,meta"
+    )?;
+    let num = |v: Option<f64>| v.map(|x| x.to_string()).unwrap_or_default();
+    for r in &rows {
+        writeln!(
+            f,
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            r.id,
+            r.session_id,
+            r.at_ms,
+            csv_escape(&r.action),
+            r.dwell_ms.map(|v| v.to_string()).unwrap_or_default(),
+            r.event_id.map(|v| v.to_string()).unwrap_or_default(),
+            r.file_id.map(|v| v.to_string()).unwrap_or_default(),
+            csv_escape(r.path.as_deref().unwrap_or("")),
+            num(r.t_start),
+            num(r.t_end),
+            csv_escape(r.review_status.as_deref().unwrap_or("")),
+            csv_escape(r.source.as_deref().unwrap_or("")),
+            csv_escape(r.meta.as_deref().unwrap_or("")),
+        )?;
+    }
+    Ok(rows.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,6 +731,35 @@ mod tests {
         let p = std::env::temp_dir().join(format!("bc_conf_{}.json", std::process::id()));
         let n = export_json(&s, sid, &p, false, true, None).unwrap();
         assert_eq!(n, 1);
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn telemetry_export_writes_joined_rows() {
+        use crate::store::NewReviewEvent;
+        let (s, sid) = store_with_events();
+        let eid: i64 = s.conn.query_row(
+            "SELECT id FROM events WHERE session_id=?1 ORDER BY t_start LIMIT 1",
+            rusqlite::params![sid], |r| r.get(0)).unwrap();
+        s.set_event_review(eid, "confirmed", None, None).unwrap();
+        s.log_review_event_at(&NewReviewEvent {
+            session_id: sid, event_id: None, file_id: None, action: "open_file", meta: None }, 1_000).unwrap();
+        s.log_review_event_at(&NewReviewEvent {
+            session_id: sid, event_id: Some(eid), file_id: None, action: "confirm",
+            meta: Some("{\"status\":\"confirmed\"}") }, 4_000).unwrap();
+
+        let p = std::env::temp_dir().join(format!("bc_telem_{}.csv", std::process::id()));
+        let n = export_telemetry_csv(&s, sid, &p).unwrap();
+        assert_eq!(n, 2);
+        let body = std::fs::read_to_string(&p).unwrap();
+        let lines: Vec<&str> = body.trim().lines().collect();
+        assert_eq!(lines.len(), 3); // header + 2 rows
+        assert!(lines[0].starts_with("id,session_id,at_ms,action,dwell_ms"));
+        assert!(lines[1].contains("open_file"));
+        assert!(lines[2].contains("confirm"));
+        assert!(lines[2].contains("PSL2_20250611_080000.wav")); // joined file path
+        assert!(lines[2].contains("confirmed")); // joined review_status
+        assert!(lines[2].contains("3000")); // dwell_ms
         std::fs::remove_file(&p).ok();
     }
 

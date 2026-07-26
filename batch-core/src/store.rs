@@ -1,6 +1,8 @@
 //! SQLite-backed work queue + checkpoint. The DB IS the durable state.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -81,6 +83,34 @@ pub struct EventRow {
     pub stage_c_label: Option<String>,
     pub stage_c_score: Option<f64>,
 }
+
+/// Fields needed to log one reviewer action. `dwell_ms` is derived, not supplied.
+pub struct NewReviewEvent<'a> {
+    pub session_id: i64,
+    pub event_id: Option<i64>,
+    pub file_id: Option<i64>,
+    pub action: &'a str,
+    pub meta: Option<&'a str>,
+}
+
+/// Aggregate verification-effort stats for a session.
+#[derive(Debug, serde::Serialize)]
+pub struct ReviewTelemetrySummary {
+    pub total_actions: i64,
+    pub actions_by_type: BTreeMap<String, i64>,
+    pub idle_cutoff_ms: i64,
+    pub total_review_ms: i64,
+    pub n_decisions: i64,
+    pub distinct_events_decided: i64,
+    pub mean_seconds_per_decision: f64,
+    pub median_seconds_per_decision: f64,
+}
+
+/// A gap this long or longer is the reviewer being away, not reviewing.
+pub const DEFAULT_IDLE_CUTOFF_MS: i64 = 120_000;
+
+/// The actions that settle an event's `review_status`; everything else is navigation.
+const DECISION_FILTER: &str = "action IN ('confirm','reject','reset')";
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions(
@@ -168,12 +198,53 @@ fn ensure_curation_columns(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Idempotent migration: add the review telemetry table if not already present.
+fn ensure_review_telemetry(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS review_events(
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL,
+  event_id INTEGER,
+  file_id INTEGER,
+  action TEXT NOT NULL,
+  at_ms INTEGER NOT NULL,
+  dwell_ms INTEGER,
+  meta TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_review_events_session ON review_events(session_id, at_ms);
+CREATE INDEX IF NOT EXISTS idx_review_events_event ON review_events(event_id);
+"#,
+    )
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn median_of(mut values: Vec<f64>) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
+    }
+}
+
 impl Store {
     pub fn open(path: &Path) -> rusqlite::Result<Store> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA)?;
         ensure_curation_columns(&conn)?;
+        ensure_review_telemetry(&conn)?;
         Ok(Store { conn })
     }
 
@@ -181,6 +252,7 @@ impl Store {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
         ensure_curation_columns(&conn)?;
+        ensure_review_telemetry(&conn)?;
         Ok(Store { conn })
     }
 
@@ -442,6 +514,111 @@ impl Store {
     pub fn delete_event(&self, event_id: i64) -> rusqlite::Result<()> {
         self.conn.execute("DELETE FROM events WHERE id=?1", params![event_id])?;
         Ok(())
+    }
+
+    /// The (session_id, file_id) an event belongs to, for telemetry attribution.
+    pub fn event_scope(&self, event_id: i64) -> rusqlite::Result<Option<(i64, i64)>> {
+        self.conn
+            .query_row(
+                "SELECT session_id, file_id FROM events WHERE id=?1",
+                params![event_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// Record one reviewer action, stamped with the wall-clock time of the call.
+    pub fn log_review_event(&self, ev: &NewReviewEvent) -> rusqlite::Result<i64> {
+        self.log_review_event_at(ev, now_ms())
+    }
+
+    /// Same as `log_review_event` with an explicit timestamp (tests, replay).
+    pub fn log_review_event_at(&self, ev: &NewReviewEvent, at_ms: i64) -> rusqlite::Result<i64> {
+        let prev_at_ms: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT at_ms FROM review_events WHERE session_id=?1 ORDER BY at_ms DESC, id DESC LIMIT 1",
+                params![ev.session_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let dwell_ms = prev_at_ms.map(|prev| (at_ms - prev).max(0));
+        self.conn.execute(
+            "INSERT INTO review_events(session_id, event_id, file_id, action, at_ms, dwell_ms, meta)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![ev.session_id, ev.event_id, ev.file_id, ev.action, at_ms, dwell_ms, ev.meta],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Verification-effort stats for a session, using the default idle cutoff.
+    pub fn review_telemetry_summary(&self, session_id: i64) -> rusqlite::Result<ReviewTelemetrySummary> {
+        self.review_telemetry_summary_with_cutoff(session_id, DEFAULT_IDLE_CUTOFF_MS)
+    }
+
+    /// Dwells at or above `idle_cutoff_ms` are treated as time away and excluded
+    /// from every duration statistic.
+    pub fn review_telemetry_summary_with_cutoff(
+        &self,
+        session_id: i64,
+        idle_cutoff_ms: i64,
+    ) -> rusqlite::Result<ReviewTelemetrySummary> {
+        let actions_by_type: BTreeMap<String, i64> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT action, COUNT(*) FROM review_events WHERE session_id=?1 GROUP BY action ORDER BY action",
+            )?;
+            let rows = stmt.query_map(params![session_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let total_actions: i64 = actions_by_type.values().sum();
+
+        let total_review_ms: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(dwell_ms), 0) FROM review_events
+             WHERE session_id=?1 AND dwell_ms IS NOT NULL AND dwell_ms < ?2",
+            params![session_id, idle_cutoff_ms],
+            |r| r.get(0),
+        )?;
+
+        let n_decisions: i64 = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM review_events WHERE session_id=?1 AND {DECISION_FILTER}"),
+            params![session_id],
+            |r| r.get(0),
+        )?;
+        let distinct_events_decided: i64 = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(DISTINCT event_id) FROM review_events
+                 WHERE session_id=?1 AND event_id IS NOT NULL AND {DECISION_FILTER}"
+            ),
+            params![session_id],
+            |r| r.get(0),
+        )?;
+
+        let decision_dwells: Vec<f64> = {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT dwell_ms FROM review_events
+                 WHERE session_id=?1 AND dwell_ms IS NOT NULL AND dwell_ms < ?2 AND {DECISION_FILTER}"
+            ))?;
+            let rows = stmt.query_map(params![session_id, idle_cutoff_ms], |r| {
+                r.get::<_, i64>(0).map(|ms| ms as f64 / 1000.0)
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let mean_seconds_per_decision = if decision_dwells.is_empty() {
+            0.0
+        } else {
+            decision_dwells.iter().sum::<f64>() / decision_dwells.len() as f64
+        };
+
+        Ok(ReviewTelemetrySummary {
+            total_actions,
+            actions_by_type,
+            idle_cutoff_ms,
+            total_review_ms,
+            n_decisions,
+            distinct_events_decided,
+            mean_seconds_per_decision,
+            median_seconds_per_decision: median_of(decision_dwells),
+        })
     }
 
     pub fn set_session_status(&self, session_id: i64, status: &str) -> rusqlite::Result<()> {
@@ -768,6 +945,111 @@ mod tests {
         let after = s.list_events(sid, "/data/x.wav").unwrap();
         assert_eq!(after.len(), 1);
         assert!(after.iter().all(|r| r.id != eid));
+    }
+
+    fn log_at(s: &Store, sid: i64, action: &str, event_id: Option<i64>, at_ms: i64) {
+        s.log_review_event_at(
+            &NewReviewEvent { session_id: sid, event_id, file_id: None, action, meta: None },
+            at_ms,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn review_telemetry_migration_is_idempotent() {
+        let s = mem();
+        ensure_review_telemetry(&s.conn).unwrap();
+        ensure_review_telemetry(&s.conn).unwrap();
+        let cols: Vec<String> = {
+            let mut stmt = s.conn.prepare("PRAGMA table_info(review_events)").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(1)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        for col in &["id", "session_id", "event_id", "file_id", "action", "at_ms", "dwell_ms", "meta"] {
+            assert!(cols.contains(&col.to_string()), "missing column: {col}");
+        }
+        // A row logged before the re-run survives it.
+        let sid = new_session(&s);
+        log_at(&s, sid, "play", None, 1_000);
+        ensure_review_telemetry(&s.conn).unwrap();
+        let n: i64 = s.conn.query_row("SELECT COUNT(*) FROM review_events", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn dwell_ms_is_null_on_first_row_then_gap_to_previous() {
+        let s = mem();
+        let sid = new_session(&s);
+        log_at(&s, sid, "open_file", None, 10_000);
+        log_at(&s, sid, "play", None, 12_500);
+        log_at(&s, sid, "confirm", Some(7), 15_000);
+        let dwells: Vec<Option<i64>> = {
+            let mut stmt = s.conn.prepare("SELECT dwell_ms FROM review_events ORDER BY id").unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(dwells, vec![None, Some(2_500), Some(2_500)]);
+    }
+
+    #[test]
+    fn dwell_ms_is_per_session() {
+        let s = mem();
+        let a = new_session(&s);
+        let b = s.create_session(&NewSession {
+            input_roots: "[\"/other\"]", output_dir: "/out", device: "cpu",
+            concurrency: 1, theta_a: 0.0, theta_b: 0.53, species_name: None,
+        }).unwrap();
+        log_at(&s, a, "play", None, 1_000);
+        log_at(&s, b, "play", None, 9_000);
+        let dwell_b: Option<i64> = s.conn.query_row(
+            "SELECT dwell_ms FROM review_events WHERE session_id=?1", params![b], |r| r.get(0)).unwrap();
+        assert_eq!(dwell_b, None);
+    }
+
+    #[test]
+    fn idle_cutoff_excludes_long_gaps_from_review_time() {
+        let s = mem();
+        let sid = new_session(&s);
+        log_at(&s, sid, "open_file", None, 0);
+        log_at(&s, sid, "confirm", Some(1), 4_000);
+        // reviewer walks away for an hour, then decides again
+        log_at(&s, sid, "confirm", Some(2), 3_604_000);
+        log_at(&s, sid, "reject", Some(3), 3_610_000);
+
+        let sum = s.review_telemetry_summary(sid).unwrap();
+        assert_eq!(sum.total_actions, 4);
+        assert_eq!(sum.actions_by_type.get("confirm"), Some(&2));
+        assert_eq!(sum.actions_by_type.get("open_file"), Some(&1));
+        assert_eq!(sum.idle_cutoff_ms, DEFAULT_IDLE_CUTOFF_MS);
+        assert_eq!(sum.total_review_ms, 10_000); // 4s + 6s, the 1h gap dropped
+        assert_eq!(sum.n_decisions, 3);
+        assert_eq!(sum.distinct_events_decided, 3);
+        assert!((sum.mean_seconds_per_decision - 5.0).abs() < 1e-9); // (4 + 6) / 2
+        assert!((sum.median_seconds_per_decision - 5.0).abs() < 1e-9);
+
+        // A cutoff above the gap counts it as review time.
+        let wide = s.review_telemetry_summary_with_cutoff(sid, 7_200_000).unwrap();
+        assert_eq!(wide.total_review_ms, 3_610_000);
+    }
+
+    #[test]
+    fn review_telemetry_summary_is_empty_for_untouched_session() {
+        let s = mem();
+        let sid = new_session(&s);
+        let sum = s.review_telemetry_summary(sid).unwrap();
+        assert_eq!(sum.total_actions, 0);
+        assert_eq!(sum.total_review_ms, 0);
+        assert_eq!(sum.distinct_events_decided, 0);
+        assert_eq!(sum.mean_seconds_per_decision, 0.0);
+        assert_eq!(sum.median_seconds_per_decision, 0.0);
+    }
+
+    #[test]
+    fn event_scope_resolves_session_and_file() {
+        let mut s = mem();
+        let sid = new_session(&s);
+        let file_id = make_events_for_file(&mut s, sid);
+        let eid = s.list_events(sid, "/data/x.wav").unwrap()[0].id;
+        assert_eq!(s.event_scope(eid).unwrap(), Some((sid, file_id)));
+        assert_eq!(s.event_scope(999_999).unwrap(), None);
     }
 
     #[test]

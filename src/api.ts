@@ -73,4 +73,17 @@ export const deleteEvent = (outputDir: string, eventId: number) =>
   invoke<void>("delete_event", { outputDir, eventId });
 export const prepareReview = (outputDir: string, sessionId: number) =>
   invoke<void>("prepare_review", { outputDir, sessionId });
+
+/** Telemetry is best-effort: a logging failure must never interrupt review. */
+export const logReviewAction = (
+  outputDir: string, sessionId: number, action: string,
+  eventId?: number | null, meta?: Record<string, unknown> | null
+): Promise<void> =>
+  invoke<void>("log_review_action", {
+    outputDir, sessionId, action, eventId,
+    meta: meta ? JSON.stringify(meta) : null,
+  }).catch(() => undefined);
+
+export const getReviewTelemetry = (outputDir: string, sessionId: number) =>
+  invoke<Record<string, unknown>>("get_review_telemetry", { outputDir, sessionId });
 export const audioSrc = (path: string): string => convertFileSrc(path);

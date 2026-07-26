@@ -60,4 +60,7 @@ ENV/
 data/
 test_output/
 
+# Analysis artifacts written by scripts/ (manifests, summaries, sweeps, embedding caches)
+output/
+
 

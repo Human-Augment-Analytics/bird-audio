@@ -13,8 +13,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use batch_core::concurrency::resolve_concurrency;
 use batch_core::engine::{run_session, EngineConfig};
 use batch_core::enumerate::enumerate_audio;
-use batch_core::export::{export_csv, export_json, export_warbler, export_raven};
-use batch_core::store::{EventRow, FileRow, NewSession, Store, Summary};
+use batch_core::export::{export_csv, export_json, export_telemetry_csv, export_warbler, export_raven};
+use batch_core::store::{
+    EventRow, FileRow, NewReviewEvent, NewSession, ReviewTelemetrySummary, Store, Summary,
+};
 
 use crate::state::AppState;
 
@@ -257,6 +259,7 @@ pub fn export_session(
     let meta_ref = meta_p.as_deref();
     let n = match fmt.as_str() {
         "json" => export_json(&store, session_id, &p, complete_only, confirmed_only, meta_ref),
+        "telemetry" => export_telemetry_csv(&store, session_id, &p),
         "warbler" => export_warbler(&store, session_id, &p, complete_only, confirmed_only),
         "raven" => export_raven(&store, session_id, &p, complete_only, confirmed_only),
         _ => export_csv(&store, session_id, &p, complete_only, confirmed_only, meta_ref),
@@ -564,28 +567,139 @@ pub fn list_events(output_dir: String, session_id: i64, path: String) -> Result<
     store.list_events(session_id, &path).map_err(|e| e.to_string())
 }
 
+/// Telemetry is an instrument, not part of the contract: a failed insert is
+/// reported to the log and the curation call still succeeds.
+fn log_telemetry(store: &Store, ev: &NewReviewEvent) {
+    if let Err(e) = store.log_review_event(ev) {
+        eprintln!("review telemetry: failed to log '{}': {}", ev.action, e);
+    }
+}
+
+/// Telemetry needs the event's session and file; a missing event is not fatal.
+fn event_scope(store: &Store, event_id: i64) -> Option<(i64, i64)> {
+    match store.event_scope(event_id) {
+        Ok(scope) => scope,
+        Err(e) => {
+            eprintln!("review telemetry: failed to resolve event {event_id}: {e}");
+            None
+        }
+    }
+}
+
+fn review_action_for(status: &str) -> &'static str {
+    match status {
+        "confirmed" => "confirm",
+        "rejected" => "reject",
+        _ => "reset",
+    }
+}
+
 #[tauri::command]
 pub fn set_event_review(output_dir: String, event_id: i64, status: String, label: Option<String>, note: Option<String>) -> Result<(), String> {
     let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
-    store.set_event_review(event_id, &status, label.as_deref(), note.as_deref()).map_err(|e| e.to_string())
+    let scope = event_scope(&store, event_id);
+    store.set_event_review(event_id, &status, label.as_deref(), note.as_deref()).map_err(|e| e.to_string())?;
+    if let Some((session_id, file_id)) = scope {
+        let meta = serde_json::json!({ "status": status, "label": label }).to_string();
+        log_telemetry(&store, &NewReviewEvent {
+            session_id,
+            event_id: Some(event_id),
+            file_id: Some(file_id),
+            action: review_action_for(&status),
+            meta: Some(&meta),
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub fn update_event_bounds(output_dir: String, event_id: i64, t_start: f64, t_end: f64, f_low: f64, f_high: f64) -> Result<(), String> {
     let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
-    store.update_event_bounds(event_id, t_start, t_end, f_low, f_high).map_err(|e| e.to_string())
+    let scope = event_scope(&store, event_id);
+    store.update_event_bounds(event_id, t_start, t_end, f_low, f_high).map_err(|e| e.to_string())?;
+    if let Some((session_id, file_id)) = scope {
+        let meta = serde_json::json!({
+            "t_start": t_start, "t_end": t_end, "f_low": f_low, "f_high": f_high
+        }).to_string();
+        log_telemetry(&store, &NewReviewEvent {
+            session_id,
+            event_id: Some(event_id),
+            file_id: Some(file_id),
+            action: "edit_bounds",
+            meta: Some(&meta),
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub fn add_manual_event(output_dir: String, session_id: i64, path: String, t_start: f64, t_end: f64, f_low: f64, f_high: f64) -> Result<i64, String> {
     let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
-    store.add_manual_event(session_id, &path, t_start, t_end, f_low, f_high).map_err(|e| e.to_string())
+    let new_id = store.add_manual_event(session_id, &path, t_start, t_end, f_low, f_high).map_err(|e| e.to_string())?;
+    let meta = serde_json::json!({
+        "path": path, "t_start": t_start, "t_end": t_end, "f_low": f_low, "f_high": f_high
+    }).to_string();
+    log_telemetry(&store, &NewReviewEvent {
+        session_id,
+        event_id: Some(new_id),
+        file_id: event_scope(&store, new_id).map(|(_, file_id)| file_id),
+        action: "add_manual",
+        meta: Some(&meta),
+    });
+    Ok(new_id)
 }
 
 #[tauri::command]
 pub fn delete_event(output_dir: String, event_id: i64) -> Result<(), String> {
     let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
-    store.delete_event(event_id).map_err(|e| e.to_string())
+    let scope = event_scope(&store, event_id);
+    store.delete_event(event_id).map_err(|e| e.to_string())?;
+    if let Some((session_id, file_id)) = scope {
+        log_telemetry(&store, &NewReviewEvent {
+            session_id,
+            event_id: Some(event_id),
+            file_id: Some(file_id),
+            action: "delete",
+            meta: None,
+        });
+    }
+    Ok(())
+}
+
+/// Log a non-mutating reviewer action (play / seek / open_file / search).
+#[tauri::command]
+pub fn log_review_action(
+    output_dir: String,
+    session_id: i64,
+    action: String,
+    event_id: Option<i64>,
+    file_id: Option<i64>,
+    meta: Option<String>,
+) -> Result<(), String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    let file_id = file_id.or_else(|| event_id.and_then(|id| event_scope(&store, id)).map(|(_, f)| f));
+    log_telemetry(&store, &NewReviewEvent {
+        session_id,
+        event_id,
+        file_id,
+        action: &action,
+        meta: meta.as_deref(),
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_review_telemetry(
+    output_dir: String,
+    session_id: i64,
+    idle_cutoff_ms: Option<i64>,
+) -> Result<ReviewTelemetrySummary, String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    match idle_cutoff_ms {
+        Some(cutoff) => store.review_telemetry_summary_with_cutoff(session_id, cutoff),
+        None => store.review_telemetry_summary(session_id),
+    }
+    .map_err(|e| e.to_string())
 }
 
 /// Grant the asset-protocol scope for a session's input roots so the review UI
@@ -611,5 +725,68 @@ mod tests {
         let resolved = resolve_cwd(None);
         assert!(resolved.join("pyproject.toml").exists(), "Resolved path {:?} does not contain pyproject.toml", resolved);
         assert!(resolved.join("models").exists(), "Resolved path {:?} does not contain models/", resolved);
+    }
+
+    /// Returns (output_dir, session_id, event_id) for a one-file, one-event db.
+    fn temp_session(tag: &str) -> (String, i64, i64) {
+        let dir = std::env::temp_dir().join(format!("bbg_{}_{}", tag, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::remove_file(db_path(&dir.to_string_lossy())).ok();
+        let store = Store::open(&db_path(&dir.to_string_lossy())).unwrap();
+        let sid = store.create_session(&NewSession {
+            input_roots: "[\"/d\"]", output_dir: "/o", device: "cpu",
+            concurrency: 1, theta_a: 0.0, theta_b: 0.53, species_name: None,
+        }).unwrap();
+        store.add_files(sid, &[PathBuf::from("/d/a.wav")]).unwrap();
+        let eid = store.add_manual_event(sid, "/d/a.wav", 1.0, 2.0, 4000.0, 8000.0).unwrap();
+        (dir.to_string_lossy().into_owned(), sid, eid)
+    }
+
+    #[test]
+    fn set_event_review_logs_telemetry() {
+        let (out, sid, eid) = temp_session("telem_ok");
+        set_event_review(out.clone(), eid, "confirmed".into(), Some("HLW".into()), None).unwrap();
+        let summary = get_review_telemetry(out.clone(), sid, None).unwrap();
+        assert_eq!(summary.total_actions, 1);
+        assert_eq!(summary.actions_by_type.get("confirm"), Some(&1));
+        assert_eq!(summary.distinct_events_decided, 1);
+        std::fs::remove_dir_all(&out).ok();
+    }
+
+    #[test]
+    fn set_event_review_succeeds_when_telemetry_insert_fails() {
+        let (out, sid, eid) = temp_session("telem_broken");
+        {
+            let store = Store::open(&db_path(&out)).unwrap();
+            // A schema the indexes still accept but INSERT cannot satisfy.
+            store.conn.execute_batch(
+                "DROP TABLE review_events;
+                 CREATE TABLE review_events(id INTEGER PRIMARY KEY, session_id INTEGER,
+                     event_id INTEGER, at_ms INTEGER);",
+            ).unwrap();
+        }
+        set_event_review(out.clone(), eid, "rejected".into(), None, None).unwrap();
+        let store = Store::open(&db_path(&out)).unwrap();
+        let status: String = store.conn.query_row(
+            "SELECT review_status FROM events WHERE id=?1", rusqlite::params![eid], |r| r.get(0)).unwrap();
+        assert_eq!(status, "rejected");
+        let logged: i64 = store.conn.query_row("SELECT COUNT(*) FROM review_events", [], |r| r.get(0)).unwrap();
+        assert_eq!(logged, 0);
+        let _ = sid;
+        drop(store);
+        std::fs::remove_dir_all(&out).ok();
+    }
+
+    #[test]
+    fn log_review_action_records_non_mutating_actions() {
+        let (out, sid, eid) = temp_session("telem_actions");
+        log_review_action(out.clone(), sid, "open_file".into(), None, None, None).unwrap();
+        log_review_action(out.clone(), sid, "play".into(), Some(eid), None,
+            Some("{\"t\":1.5}".into())).unwrap();
+        let summary = get_review_telemetry(out.clone(), sid, None).unwrap();
+        assert_eq!(summary.total_actions, 2);
+        assert_eq!(summary.actions_by_type.get("play"), Some(&1));
+        assert_eq!(summary.n_decisions, 0);
+        std::fs::remove_dir_all(&out).ok();
     }
 }
