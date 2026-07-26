@@ -186,6 +186,10 @@ the original session's **260 / 216** — at identical thresholds, with the prove
 *passing*. The cause is that the manifest was built retrospectively from the current environment
 rather than captured when the session ran, so it compared today's code against today's code.
 
+Once the manifest was captured *by the worker at run time* and used as the preflight baseline, the
+same flow reproduced the session exactly — 187/153 against 187/153, with the preflight reporting
+"Manifests are identical." The before/after contrast is the evidence.
+
 This generalises beyond this codebase. A reproducibility check that reconstructs provenance *after
 the fact* cannot detect that the original analysis used different code, and will report a clean bill
 of health while the numbers move. Given how much PAM analysis runs through pipelines that evolve

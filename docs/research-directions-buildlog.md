@@ -367,6 +367,31 @@ new session : "Stop unless model weights and constants match the manifest record
                session ran"
 ```
 
+### Capstone: the loop closes
+
+A session run *after* manifest capture, exported and then reproduced through its own generated
+script, end to end:
+
+```
+Session 1 complete: 2 ok, 0 failed, 187 events (153 complete, 153 retained)
+manifest stored: 2517 bytes
+export_protocol: No warnings: inputs, models and git state are all present.
+  step 2 — "Stop unless model weights and constants match the manifest recorded when the session ran"
+
+$ bash reproduce.sh        SCRIPT_EXIT=0
+Manifests are identical (ignoring timestamps).
+Session 1 complete: 2 ok, 0 failed, 187 events (153 complete, 153 retained)
+Exported 187 event rows to events.csv / events.json
+
+original    187 events / 153 retained
+reproduced  187 events / 153 retained
+```
+
+The preflight now passes against the manifest **recorded when the session ran**, not one rebuilt
+from today's environment, and the reproduction matches the original exactly. Compare this with the
+pre-fix run at the top of this section, which silently produced 187/153 against an original 260/216
+while reporting success. That contrast is the whole point.
+
 Comparing a worker-captured manifest against a fresh rebuild initially produced 16 spurious diffs,
 all in the `session` block — a worker records no session block because the session row is not yet
 populated. Descriptive sections (`session.*`, `extra.*`) are now excluded from the diff, since
