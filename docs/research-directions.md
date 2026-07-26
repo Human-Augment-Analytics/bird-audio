@@ -291,14 +291,82 @@ See `docs/research-directions-buildlog.md` for the implementation and smoke-test
 
 ---
 
-## 6. What this document does not cover
+## 6. Venue mechanics — including one clause that gates the architecture
 
-Detailed venue-requirement research (MEE Applications author guidelines and acceptance criteria,
-CHI subcommittee selection and the current contribution rubric) was still in progress when this
-was written and is **not** reflected here. The strategic analysis above does not depend on it —
-it rests on the manuscript's own contents and the competitive landscape, both of which are
-verified — but the specific submission mechanics for each venue still need to be checked before
-committing to a target.
+### Read this before writing anything: MEE's GUI rule
+
+Methods in Ecology and Evolution Applications guidelines, verbatim:
+
+> "**Packages that allow for execution via point-and-click menus (e.g., Shiny Apps in R or Python)
+> or graphical user interfaces (GUIs) will be reviewed only if they are also able to export
+> executable scripts that allow for reproducibility of their graphical, statistical, or analytical
+> outputs.**"
+
+A Tauri desktop app with no scriptable path **is not reviewable at MEE**. This is an architecture
+requirement, not a writing problem. The repo is partway there — `batch-core/src/bin/batch.rs` is a
+real headless CLI and the new analysis tools are all CLIs — but the GUI does not currently *emit* a
+script that reproduces what it just did. Closing that gap is the single highest-leverage build task
+remaining, and it composes well with the provenance manifest already built.
+
+Second binding MEE rule, and it is a problem for a Hume's-Leaf-Warbler-specific tool:
+
+> "Papers describing methods that apply only to a single taxon or ecosystem are unlikely to meet
+> these criteria."
+
+Frame as taxon-agnostic PAM tooling. The pipeline already supports dynamic species/model/frequency
+configuration; that work is currently invisible because no UI exposes it.
+
+### The precedent
+
+**Martínez Balvanera et al. (2024), *Whombat: An open-source audio annotation tool for machine
+learning assisted bioacoustics*, MEE, 10.1111/2041-210x.14468** — an open-source GUI for ML-assisted
+human-in-the-loop bioacoustic annotation, published as an MEE Applications paper. That is this
+project's shape, in the strongest ecology methods venue. MEE's current appetite on this territory is
+demonstrably open: Kitzes (2025) on integrating AI models into bioacoustics workflows
+(10.1111/2041-210x.70133), Turlington (2025) on exploratory analysis of unknown sound types
+(10.1111/2041-210x.70134), Cretois (2026) on the TABMON PAM network (10.1111/2041-210x.70308).
+
+### Ranking
+
+| # | Venue / type | Words | Standing | Verdict |
+|---|---|---|---|---|
+| 1 | **MEE — Applications** | 4,000 | IF 5.7, 25% accept, $2,600 (free if not OA) | **Primary.** Whombat is the precedent. ⚠️ Gated on script export |
+| 2 | **RSEC — Methods and Tools** | 4,000 | IF 5.2, 19% accept, 6-day first decision, $3,950 | **Best fit for a GUI app** — no GUI clause; scope explicitly names acoustic recorders |
+| 3 | Ecological Informatics | ? | strong technical reviewers | Best reviewer match; ⚠️ policies unverified, ScienceDirect blocked every access attempt |
+| 4 | Frontiers Ecol & Evol — Technology and Code | **12,000** | IF 3.2, Scopus+WoS | If length is the binding constraint; accepts a prestige discount |
+| — | Ecological Solutions and Evidence | 3,000–4,000 | IF 3.3, 66% accept | Only if reframed as a practitioner workflow paper; no software article type |
+| — | JOSS / SoftwareX | short | — | Companion artifact DOI, never the lead |
+| — | Frontiers in Bird Science | — | ⚠️ likely no Scopus/WoS | Skip |
+| — | Journal of Ecoacoustics | — | — | **Dead** — zero papers 2024–2026 |
+
+**Remote Sensing in Ecology and Conservation is the surprise.** Its scope defines remote sensing to
+include "data acquisition by hand-held and fixed ground-based sensors, such as camera traps and
+**acoustic recorders**," it has a purpose-built Methods and Tools type, and it has **no GUI-exclusion
+clause**. Its code bar is the strictest surveyed and stated as a floor: "Code, including AI-generated
+code must be published alongside unit tests of critical functionality, and demonstration datasets
+must be provided that enable reviewers to quickly run code… we consider these best practices to now
+be minimum standards." The 103→164 test suite and a small demo dataset satisfy this directly. RSEC
+also wants an explicit comparison-to-existing-tools section — which is exactly §1 of this document.
+
+One more near-precedent worth knowing: **Dubus (2025), *APLOSE: A web-based annotation platform for
+underwater passive acoustic monitoring*, SoftwareX** (10.1016/j.softx.2025.102055).
+
+### Build requirements that gate submission
+
+1. **Script export from the GUI** — without it MEE is closed. Highest priority.
+2. **A small demonstration dataset a reviewer can run in minutes** — RSEC states this as a minimum.
+3. **Public repo with real commit history.**
+4. **A comparison-to-existing-tools section** — required by RSEC, and the weakest part of most tool
+   papers. §1 above is the draft.
+5. **Expose the existing dynamic species/frequency configuration in the UI**, so the taxon-generality
+   claim is true in the product and not just in the code.
+
+### Still unverified
+
+Ecological Informatics' entire author-facing policy set (scope, article types, word limits, code
+policy, APC) — ScienceDirect defeated every automated access route; open the Guide for Authors
+manually. Also unconfirmed: current APC fee tables for MEE and RSEC, Bioacoustics' code/data policy,
+and Frontiers in Bird Science's Scopus/WoS status.
 
 ## 7. Open questions for the humans
 
