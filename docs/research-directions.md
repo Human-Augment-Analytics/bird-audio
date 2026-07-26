@@ -11,7 +11,29 @@ does, and a survey of the competing tool landscape as of mid-2026.
 
 ## 0. Where the project actually stands
 
-### The manuscript is half-finished, and the missing half is the ecology
+### Who owns what (established 2026-07-26, and it changes the recommendation)
+
+The in-repo manuscript is **not ours**. It is a collaborator's draft. We are writing a *different*
+paper that builds on it. That splits the project cleanly:
+
+| Asset | Owner | Consequence for our paper |
+|---|---|---|
+| Two-stage method, consolidation algorithm, θ_A/θ_B | Their manuscript | Cite, never claim |
+| `models/buzz_localizer.pt`, `models/classifier.pt` | Theirs (committed 2026-06-11, black boxes to us) | Cite; need permission to redistribute |
+| 2,673 h corpus, 30 sites, expert annotations, α = 0.92 | Theirs | **Not in this repo.** `data/` holds two 15-minute recordings |
+| This application, `birdpipe/`, `batch-core/`, `src-tauri/` | Ours (139 of 163 commits) | Our contribution |
+| Verification planning, provenance/reproducibility, review telemetry, curation UI | Ours (this branch) | Our claim |
+
+Two hard constraints follow, and neither is a coding problem:
+
+1. **The draft is not citable yet.** Its title block still reads `Author list to finalize` and
+   `Institution Name, Address, City, Postal Code, State, Country`. Nothing that depends on citing
+   it can be submitted until it is at least a preprint with a DOI. Our paper's release is therefore
+   coupled to theirs.
+2. **We do not hold the data that Direction A needs.** Everything in this branch that does
+   ecological inference was validated on a synthetic gradient because the real corpus is not here.
+
+### The collaborator's manuscript is half-finished, and the missing half is the ecology
 
 The in-repo manuscript, *"Event-Level Spectrogram Object Detection and Curation for Avian
 Acoustic Analysis"* (Ecological Informatics format), is **methodologically complete and
@@ -272,19 +294,37 @@ than the standard practice of reviewing by confidence rank or at random.
 
 ## 4. Recommendation
 
-**Do Direction A first, and build Direction B's instrument now so the option stays open.**
+**Lead with Direction B, which we can execute alone. Ask for the Direction A data today, because
+that ask has the longest lead time and is not ours to schedule.**
+
+This reverses the earlier draft of this section, which recommended Direction A first. That
+recommendation assumed the manuscript and its corpus were ours to extend. They are not.
 
 Reasoning:
 
-- Direction A is 80% written. The manuscript's methods, dataset, annotations, and baselines are
-  done. What is missing — effort normalization, a recorder-level model, threshold sensitivity — is
-  a few hundred lines of analysis code and one honest statistics pass, not another field season.
-- Direction A has a deadline advantage: the existing draft is stale (`Author list to finalize`,
-  Acknowledgements "To be completed") and every month it sits, BirdNET/Perch move.
-- Direction B depends on recruiting expert participants, which cannot be compressed. But its
-  instrument — review telemetry — must be running *before* any study, and costs little to add now.
-- The two directions share the same substrate: completeness-aware measurement, verified subsamples,
-  and provenance. Nothing is wasted.
+- **Direction A is not blocked on code — it is blocked on someone else's data.** We built the
+  analysis machinery (effort normalization, the recorder-level model, the threshold sweep) and it
+  works, but `data/` holds two recordings from one site-day. The 2,673 h corpus, the site elevations,
+  the deployment schedules, and the recorder-hours all sit with the collaborator. No amount of
+  engineering on this branch moves that.
+- **Direction A is also an authorship negotiation, not just a data request.** Their draft explicitly
+  disclaims ecological inference three times. Doing that inference on their data is a companion
+  paper that needs their consent, their co-authorship, and an agreed order of publication.
+- **Direction B is fully in our control.** The tool is ours. Their contribution enters as two model
+  files we load as black boxes and cite. Verification-effort planning, provenance-checked
+  reproducibility, and completeness-aware curation are all ours and all unclaimed by the landscape.
+- **Direction B's long pole is participant recruitment**, which cannot be compressed — so starting
+  it now and negotiating data access in parallel is the schedule that finishes both soonest.
+
+**The novelty line we must hold.** Because the pipeline is theirs, our paper cannot claim the
+two-stage architecture, the consolidation algorithm, or the detector's performance. Reviewers will
+ask what is new beyond their paper, and the answer has to be strictly the layer above the models:
+planning how much human verification a result needs, knowing when to stop, and being able to prove
+a rerun reproduces. That layer is what this branch built.
+
+**Sequencing risk.** Our submission cannot precede their preprint without either citing an
+unsubmitted manuscript (not allowed) or describing their method self-containedly (which scoops
+them). Get their DOI timeline before committing to any deadline.
 
 **Status of the gates, as of this branch:** MEE's script-export requirement is **closed and verified
 end to end** — `scripts/export_protocol.py` emits a `reproduce.sh` that reproduced a session exactly
@@ -401,10 +441,17 @@ and Frontiers in Bird Science's Scopus/WoS status.
 
 ## 7. Open questions for the humans
 
-1. Is the existing manuscript already submitted, or still editable? The recommendation changes
-   depending on whether the ecology can go *into* it or must be a second paper.
-2. Who are the potential expert reviewers for a Direction B study, and how many hours can they give?
-3. Can someone pull the IJCAI 2023 human-in-the-loop annotation paper?
-4. Is the 2024 season's data processed and available, or only 2025?
-5. Does the elevation gradient have covariates recorded (vegetation, wind, temperature)? Without
+Ordered by lead time — the first three are on someone else's calendar, so ask now.
+
+1. **When does the collaborator's manuscript become a citable preprint?** Our submission date is
+   downstream of theirs. Ask for the target venue and the intended arXiv/bioRxiv date.
+2. **Will they share the corpus, and on what terms?** Direction A needs the audio, the per-site
+   elevations, and the recorder deployment schedule (start/end timestamps per recorder, so effort
+   in recorder-hours is measured rather than assumed). Settle co-authorship in the same conversation.
+3. **Do we have permission to redistribute `buzz_localizer.pt` and `classifier.pt`?** A tool paper
+   whose models cannot be shipped is much weaker, and MEE/RSEC reviewers will try to run it.
+4. Who are the potential expert reviewers for a Direction B study, and how many hours can they give?
+5. Can someone pull the IJCAI 2023 human-in-the-loop annotation paper?
+6. Is the 2024 season processed and available, or only 2025?
+7. Does the elevation gradient have covariates recorded (vegetation, wind, temperature)? Without
    them, the detectability confound in Direction A is hard to answer.
