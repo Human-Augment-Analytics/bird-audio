@@ -345,3 +345,38 @@ def test_unparseable_recorded_manifest_is_treated_as_absent(tmp_path, audio_root
     conn.close()
 
     assert build(tmp_path, db).session.recorded_manifest is None
+
+
+def test_reference_manifest_prefers_the_recorded_one(tmp_path, audio_root):
+    """Only a run-time manifest can detect that the original used different code."""
+    db = make_db(tmp_path, [str(audio_root)])
+    conn = sqlite3.connect(db)
+    conn.execute("ALTER TABLE sessions ADD COLUMN run_manifest TEXT")
+    recorded = {"models": {"localizer": {"sha256": "recorded"}}, "constants": {"x": 1}}
+    conn.execute("UPDATE sessions SET run_manifest = ? WHERE id = 1", (json.dumps(recorded),))
+    conn.commit()
+    conn.close()
+
+    proto = build(tmp_path, db)
+    assert proto.reference_is_recorded is True
+    assert proto.reference_manifest == recorded
+    assert proto.reference_manifest != proto.manifest
+
+
+def test_reference_manifest_falls_back_to_the_rebuilt_one(tmp_path, audio_root):
+    db = make_db(tmp_path, [str(audio_root)])
+    proto = build(tmp_path, db)
+    assert proto.reference_is_recorded is False
+    assert proto.reference_manifest is proto.manifest
+
+
+def test_manifest_json_records_which_baseline_was_used(tmp_path, audio_root):
+    db = make_db(tmp_path, [str(audio_root)])
+    payload = json.loads(P.render_manifest_json(build(tmp_path, db)))
+    assert payload["reference_manifest_source"] == "rebuilt_at_export_time"
+
+
+def test_compare_step_says_when_the_baseline_cannot_detect_code_drift(tmp_path, audio_root):
+    db = make_db(tmp_path, [str(audio_root)])
+    step = next(s for s in build(tmp_path, db).steps if s.name == "preflight-compare")
+    assert "CANNOT detect" in step.description

@@ -13,6 +13,8 @@ pub struct Worker {
     stdin: ChildStdin,
     rx: Receiver<String>,
     pub device: String,
+    /// Provenance the worker captured while loading its models; None for older workers.
+    pub manifest: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -61,6 +63,7 @@ impl Worker {
             stdin,
             rx,
             device: String::new(),
+            manifest: None,
         };
 
         let start = Instant::now();
@@ -74,8 +77,9 @@ impl Worker {
                         continue; // Skip library logs
                     }
                     match parse_msg(&line) {
-                        Ok(WorkerMsg::Ready { device }) => {
+                        Ok(WorkerMsg::Ready { device, manifest }) => {
                             w.device = device;
+                            w.manifest = manifest;
                             break;
                         }
                         Ok(other) => {

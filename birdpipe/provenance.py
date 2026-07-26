@@ -201,6 +201,11 @@ def read_manifest(path: str | Path) -> dict[str, Any]:
 # Fields that legitimately differ between two runs of the same analysis.
 _VOLATILE_KEYS = frozenset({"generated_at", "session.started_at", "session.finished_at"})
 
+# Sections that describe a run without determining its behaviour. A manifest captured
+# by the worker has no session block at all, so comparing these field-by-field buries
+# the sections that matter under noise.
+_NON_DETERMINING_PREFIXES = ("session.", "extra.")
+
 
 def _flatten_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
@@ -224,7 +229,9 @@ def diff_manifests(
 
     diffs = []
     for key in keys:
-        if ignore_volatile and key in _VOLATILE_KEYS:
+        if ignore_volatile and (
+            key in _VOLATILE_KEYS or key.startswith(_NON_DETERMINING_PREFIXES)
+        ):
             continue
         left, right = flat_a.get(key), flat_b.get(key)
         if left != right:

@@ -5,6 +5,17 @@ import json
 import sys
 import traceback
 
+from birdpipe import provenance
+
+# Pipeline attributes that override a paper constant or name a model, so the manifest
+# has to carry the value actually in use rather than the default.
+_MODEL_PATH_ATTRS = (
+    ("localizer", "localizer_path"),
+    ("classifier", "classifier_path"),
+    ("classifier_c", "classifier_c_path"),
+)
+_EXTRA_ATTRS = ("f_min_hz", "f_max_hz", "species_name", "conf")
+
 
 def _emit(out_stream, obj) -> None:
     out_stream.write(json.dumps(obj) + "\n")
@@ -13,12 +24,33 @@ def _emit(out_stream, obj) -> None:
         flush()
 
 
+def build_run_manifest(pipeline) -> dict:
+    """Provenance for the models this process actually loaded, for the `ready` line."""
+    model_paths = {}
+    for role, attr in _MODEL_PATH_ATTRS:
+        path = getattr(pipeline, attr, None)
+        if path:
+            model_paths[role] = str(path)
+    extra = {"device": str(getattr(pipeline, "device", "")) or None}
+    for attr in _EXTRA_ATTRS:
+        value = getattr(pipeline, attr, None)
+        if value is not None:
+            extra[attr] = value
+    return provenance.build_manifest(model_paths=model_paths or None, extra=extra)
+
+
 def run_worker(pipeline, in_stream=None, out_stream=None) -> None:
     """Loop over newline-delimited JSON jobs. One bad file never stops the loop."""
     in_stream = in_stream if in_stream is not None else sys.stdin
     out_stream = out_stream if out_stream is not None else sys.stdout
 
-    _emit(out_stream, {"type": "ready", "device": str(pipeline.device)})
+    ready = {"type": "ready", "device": str(pipeline.device)}
+    try:
+        ready["manifest"] = build_run_manifest(pipeline)
+    except Exception as exc:  # noqa: BLE001 - provenance must never block a run
+        ready["manifest"] = None
+        print(f"warning: run manifest unavailable: {exc}", file=sys.stderr)
+    _emit(out_stream, ready)
 
     for line in in_stream:
         line = line.strip()

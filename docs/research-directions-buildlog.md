@@ -16,8 +16,8 @@ verified, it says so.
 
 ## After
 
-- `cargo test --workspace` — **60 passing, 0 failed** (45 batch-core + 6 integration + 9 app_lib)
-- `uv run pytest` — **164 passing, 0 failed**
+- `cargo test --workspace` — **67 passing, 0 failed**
+- `uv run pytest` — **203 passing, 0 failed**
 - `npx tsc -b` — clean; `npm run build` — clean; `npm run lint` — no new errors from any new file
 
 ---
@@ -340,10 +340,39 @@ constants, so it cannot detect that the original run used a different pipeline v
 counts may differ from the recorded session even when the preflight passes.
 ```
 
-`read_session_protocol` already reads a `run_manifest` column when present and the warning
-disappears once one exists, so **the fix is to write the manifest onto the session row at run
-start** — a small idempotent migration plus a write in the engine. That is the single highest-value
-remaining task, and until it lands, reproduction fidelity for historical sessions cannot be claimed.
+### The fix, and the second trap inside it
+
+**Run-time capture now exists.** The Python worker — the only process that knows which weights it
+actually loaded — builds a manifest and ships it on its `ready` line, carrying the real model paths
+plus the effective device, band, and species. The Rust engine stores it on the session row through
+an idempotent `ensure_run_manifest_column` migration, **write-once**: workers respawn after crashes
+and a pool has several, so the first manifest wins and a later respawn cannot overwrite the record
+of what the session started with. Manifest construction can never prevent a worker from starting
+(a failure degrades to `manifest: null` plus a stderr warning), and a storage failure is logged and
+ignored — a provenance problem must not kill a multi-hour batch.
+
+Verified end to end: a fresh run stored a 2,516-byte manifest carrying the localizer digest
+`edb569d7…37de`, `extra.device=mps`, and the git commit.
+
+**The second trap:** capturing the manifest silences the warning, but the preflight was still
+comparing against a manifest *rebuilt at export time* — so the warning would have disappeared while
+the check remained today-vs-today. That is the same false assurance one level deeper, and it would
+have been easy to ship. The reference manifest is now the **recorded** one whenever a session has
+it, and the compare step's own description states which baseline it is using:
+
+```
+old session : "Compare against a manifest rebuilt at export time - this CANNOT detect that the
+               original run used different code"
+new session : "Stop unless model weights and constants match the manifest recorded when the
+               session ran"
+```
+
+Comparing a worker-captured manifest against a fresh rebuild initially produced 16 spurious diffs,
+all in the `session` block — a worker records no session block because the session row is not yet
+populated. Descriptive sections (`session.*`, `extra.*`) are now excluded from the diff, since
+neither determines pipeline behaviour, while a weight or constant change still surfaces. The same
+comparison now reports *"Manifests are identical"*, which is a real reproducibility signal rather
+than noise.
 
 ### Closing the export hole this exposed
 

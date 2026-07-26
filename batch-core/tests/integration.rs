@@ -59,6 +59,18 @@ fn runs_all_files_to_done() {
 }
 
 #[test]
+fn worker_manifest_is_stored_once_for_the_session() {
+    let (store, sid) = session_with(&["/jobs/a.wav", "/jobs/CRASH.wav", "/jobs/b.wav"]);
+    // Several workers, plus a respawn after the crash: exactly one manifest must survive.
+    run_session(store.clone(), sid, cfg(2, 10_000, 2), None);
+    let stored = store.lock().unwrap().run_manifest(sid).unwrap().expect("manifest stored");
+    let parsed: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["extra"]["device"], "cpu");
+    assert!(parsed["extra"]["worker_pid"].is_number());
+}
+
+#[test]
 fn worker_reported_bad_file_is_marked_failed() {
     let (store, sid) = session_with(&["/jobs/ok.wav", "/jobs/BOOM.wav"]);
     let summary = run_session(store, sid, cfg(1, 10_000, 2), None);

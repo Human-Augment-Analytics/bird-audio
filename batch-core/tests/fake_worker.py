@@ -5,10 +5,19 @@ Emits a ready line, then per job: a result, an error (input contains BOOM),
 hangs forever (input contains HANG), or crashes (input contains CRASH).
 """
 import json
+import os
 import sys
 import time
 
-print(json.dumps({"type": "ready", "device": "cpu"}), flush=True)
+MANIFEST = {
+    "schema_version": 1,
+    "models": {"localizer": {"path": "models/fake.pt", "sha256": "0" * 64, "bytes": 1}},
+    "constants": {"F_MIN_HZ": 3000.0},
+    "environment": {"python": "fake"},
+    "extra": {"device": "cpu", "worker_pid": os.getpid()},
+}
+
+print(json.dumps({"type": "ready", "device": "cpu", "manifest": MANIFEST}), flush=True)
 
 for line in sys.stdin:
     line = line.strip()
