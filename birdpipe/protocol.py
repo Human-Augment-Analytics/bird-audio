@@ -64,6 +64,21 @@ class SessionProtocol:
     n_events: int = 0
     n_complete: int = 0
     n_retained: int = 0
+    # A manifest captured when the session ran. Absent for every session created
+    # before run-time manifest capture exists, which is why reproduction fidelity
+    # cannot yet be asserted for historical runs.
+    recorded_manifest: dict | None = None
+
+
+def _parse_recorded_manifest(raw: object) -> dict | None:
+    """Tolerates the column being absent, NULL, or holding unparseable text."""
+    if not raw or not isinstance(raw, (str, bytes)):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 @dataclass(frozen=True)
@@ -218,6 +233,7 @@ def read_session_protocol(
             n_events=n_events,
             n_complete=n_complete,
             n_retained=n_retained,
+            recorded_manifest=_parse_recorded_manifest(rec.get("run_manifest")),
         )
     except sqlite3.Error:
         return None
@@ -494,6 +510,18 @@ def verify_protocol(protocol: Protocol) -> list[str]:
     """Human-readable reasons the protocol may not reproduce as written."""
     warnings: list[str] = []
     session = protocol.session
+
+    # The manifest describes the environment at *export* time, not at the time the
+    # session ran, so the preflight compares a rerun against today's code and cannot
+    # detect that the original run used an older pipeline. Until sessions store a
+    # manifest of their own, this caveat applies to every protocol.
+    if not session.recorded_manifest:
+        warnings.append(
+            "session stored no run manifest: the preflight compares the rerun against the "
+            "CURRENT code and constants, so it cannot detect that the original run used a "
+            "different pipeline version. Event counts may differ from the recorded session "
+            "even when the preflight passes."
+        )
 
     for role, info in (protocol.manifest.get("models") or {}).items():
         if not isinstance(info, dict) or info.get("sha256") is None:

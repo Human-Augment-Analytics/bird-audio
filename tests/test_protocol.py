@@ -306,3 +306,42 @@ def test_cli_missing_session_exits_nonzero(tmp_path, audio_root, capsys):
 
     db = make_db(tmp_path, [str(audio_root)])
     assert cli.main(["--db", str(db), "--out", str(tmp_path / "o"), "--session-id", "99"]) == 2
+
+
+# --- reproduction-fidelity warning ------------------------------------------
+
+def test_session_without_recorded_manifest_warns_about_fidelity(tmp_path, audio_root):
+    """The retrospective manifest cannot prove the original run used today's code."""
+    db = make_db(tmp_path, [str(audio_root)])
+    proto = build(tmp_path, db)
+    assert proto.session.recorded_manifest is None
+    warnings = P.verify_protocol(proto)
+    assert any("stored no run manifest" in w for w in warnings)
+    assert any("different pipeline version" in w for w in warnings)
+
+
+def test_recorded_manifest_is_read_when_present(tmp_path, audio_root):
+    db = make_db(tmp_path, [str(audio_root)])
+    conn = sqlite3.connect(db)
+    conn.execute("ALTER TABLE sessions ADD COLUMN run_manifest TEXT")
+    conn.execute(
+        "UPDATE sessions SET run_manifest = ? WHERE id = 1",
+        (json.dumps({"constants": {"stage_b.theta_b": 0.530306}}),),
+    )
+    conn.commit()
+    conn.close()
+
+    proto = build(tmp_path, db)
+    assert proto.session.recorded_manifest == {"constants": {"stage_b.theta_b": 0.530306}}
+    assert not any("stored no run manifest" in w for w in P.verify_protocol(proto))
+
+
+def test_unparseable_recorded_manifest_is_treated_as_absent(tmp_path, audio_root):
+    db = make_db(tmp_path, [str(audio_root)])
+    conn = sqlite3.connect(db)
+    conn.execute("ALTER TABLE sessions ADD COLUMN run_manifest TEXT")
+    conn.execute("UPDATE sessions SET run_manifest = 'not json' WHERE id = 1")
+    conn.commit()
+    conn.close()
+
+    assert build(tmp_path, db).session.recorded_manifest is None
