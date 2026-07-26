@@ -85,6 +85,42 @@ After a batch run, switch to Review mode to curate the ML detections:
 - Delete false positives entirely.
 - Use the confirmed-only export to output only your verified detections.
 
+## Analysis & reproducibility tools
+
+Command-line tools that turn a completed batch into analysis-ready results. All read the
+`batch.db` produced by a run.
+
+```bash
+# Effort-normalized recorder/band summaries, and formal tests of the elevation predictions
+uv run python scripts/ecological_analysis.py --db output/batch.db --metadata deployments.csv \
+  --out output/ecology --measure-effort
+
+# Does the ecological conclusion survive the detector's threshold choices?
+uv run python scripts/threshold_sensitivity.py --db output/batch.db --out output/sensitivity
+
+# How many more detections must a human verify to pin precision to +/-0.05, and which ones?
+uv run python scripts/verification_planner.py --db output/batch.db --threshold 0.5 \
+  --target-half-width 0.05 --strategy uncertainty --budget 50
+
+# Pin model digests, pipeline constants, environment and git state; --compare diffs two runs
+uv run python scripts/run_manifest.py --db output/batch.db --out output/manifest.json
+
+# Emit a runnable reproduce.sh for a recorded session
+uv run python scripts/export_protocol.py --db output/batch.db --out output/protocol
+```
+
+`ecological_analysis.py` refuses to fit a model below three recorders and reserves
+"NOT SUPPORTED" for a significant effect in the *opposite* direction — non-significance is
+reported as INCONCLUSIVE, never as evidence of no effect. `verification_planner.py` reports
+precision with a Wilson interval and returns `None`, not `0.0`, when nothing has been verified yet.
+
+### Analysing a different species
+
+The pipeline is not hard-wired to the Hume's Leaf Warbler. Under **Analysis target** in the
+Setup screen you can set the species/call name, the analysis frequency band, and the Stage A/B/C
+model paths; the headless worker takes the same values as `--f-min-hz`, `--f-max-hz`,
+`--localizer`, `--classifier`, `--classifier-c`. Leave a field blank to keep the bundled default.
+
 ## Output Structure
 
 All state is stored in `<output_dir>/batch.db` (SQLite). The database is the durable checkpoint: runs are resumable and idempotent — done files are skipped on re-run, and events accumulate curation annotations across Review sessions.
