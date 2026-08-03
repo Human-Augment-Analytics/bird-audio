@@ -3,6 +3,15 @@ import { checkHealth, pickFile, pickFolder, prepareSystem, startSession, checkCa
 import type { StartOpts, StartResult, HealthStatus } from "../types";
 import ManageCache from "./ManageCache";
 
+const SURAL_PRESETS = [
+  { label: 'Sural 2025 Low Elevation (PSL1–PSL9)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/2025/Low' },
+  { label: 'Sural 2025 Mid Elevation (PSM2–PSM10)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/2025/Mid' },
+  { label: 'Sural 2025 High Elevation (PSH1–PSH10)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/2025/High' },
+  { label: 'Sural 2024 High Elevation (PSH Root)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/High_elevation' },
+  { label: 'Sural 2024 Low Elevation (PSL Root)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/Low_elevation' },
+  { label: 'Sural 2024 Mid Elevation (PSM Root)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/Mid_elevation' },
+];
+
 interface Props {
   onStarted: (result: StartResult, opts: StartOpts) => void;
 }
@@ -181,6 +190,23 @@ export default function SetupView({ onStarted }: Props) {
         <div style={{ display: "flex", gap: 8 }}>
           <input style={{ flex: 1 }} value={input} readOnly placeholder="Browse to a folder of field recordings…" />
           <button onClick={async () => { const f = await pickFolder(); if(f) setInput(f); }}>Browse…</button>
+        </div>
+        <div style={{ marginTop: '8px' }}>
+          <label style={{ fontSize: '0.85rem', color: 'var(--text-faint)' }}>Quick Sural Dataset Preset:</label>
+          <select
+            className="select-input"
+            style={{ marginTop: '4px', width: '100%' }}
+            onChange={(e) => {
+              if (e.target.value) {
+                setInput(e.target.value);
+              }
+            }}
+          >
+            <option value="">Select a Sural AudioMoth deployment folder...</option>
+            {SURAL_PRESETS.map((p) => (
+              <option key={p.path} value={p.path}>{p.label}</option>
+            ))}
+          </select>
         </div>
         {hasCache && (
           <ManageCache
