@@ -3,7 +3,7 @@ import WaveSurfer from 'wavesurfer.js';
 import Spectrogram from 'wavesurfer.js/dist/plugins/spectrogram.esm.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
-import { Play, Pause, ZoomIn, ZoomOut, Volume2, VolumeX } from 'lucide-react';
+import { Play, Pause, ZoomIn, ZoomOut, Volume2, VolumeX, Plus } from 'lucide-react';
 import type { EventRow } from '../types';
 
 const FREQ_MIN = 0;
@@ -246,6 +246,25 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
           <button onClick={togglePlay} className="primary" style={{ display: 'flex', alignItems: 'center',
             gap: '0.5rem', minWidth: 96, justifyContent: 'center' }}>
             {isPlaying ? <Pause size={16} /> : <Play size={16} />}{isPlaying ? 'Pause' : 'Play'}
+          </button>
+          <button
+            onClick={() => {
+              const specEl = specRef.current || containerRef.current;
+              if (specEl) {
+                specEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                specEl.style.outline = '2px solid var(--amber)';
+                setTimeout(() => { specEl.style.outline = 'none'; }, 1800);
+              }
+            }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+              background: 'var(--surface-2)', color: 'var(--amber)', fontWeight: 600,
+              fontSize: '0.78rem', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.75rem',
+              cursor: 'pointer', border: '1px solid var(--amber)'
+            }}
+            title="Click and drag on the spectrogram to draw a new event bounding box"
+          >
+            <Plus size={15} /> Draw Bounding Box
           </button>
           <span style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums', letterSpacing: '0.02em' }}>
             {formatTime(currentTime)} <span style={{ color: 'var(--text-faint)' }}>/</span> {formatTime(duration)}
