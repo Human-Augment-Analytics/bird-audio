@@ -71,9 +71,12 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   useEffect(() => { onUpdateBoundsRef.current = onUpdateBounds; }, [onUpdateBounds]);
   useEffect(() => { onAddEventRef.current = onAddEvent; }, [onAddEvent]);
 
+  const [scrollLeft, setScrollLeft] = useState(0);
+
   useEffect(() => {
     if (!src) return;
     setWsReady(false);
+    setScrollLeft(0);
     if (!containerRef.current || !specRef.current || !timelineRef.current) return;
     if (wavesurfer.current) {
       wavesurfer.current.destroy();
@@ -103,7 +106,8 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     ws.on('play', () => setIsPlaying(true));
     ws.on('pause', () => setIsPlaying(false));
     ws.on('timeupdate', (time) => setCurrentTime(time));
-    ws.on('ready', (dur) => { setDuration(dur); setCurrentTime(0); setWsReady(true); });
+    ws.on('scroll', (px) => setScrollLeft(px));
+    ws.on('ready', (dur) => { setDuration(dur); setCurrentTime(0); setScrollLeft(ws.getScroll()); setWsReady(true); });
 
     wsRegions.enableDragSelection({ color: 'rgba(244,162,58,0.22)' });
     wsRegions.on('region-created', (region: any) => {
@@ -230,8 +234,15 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   useEffect(() => {
     if (selectedId === null || !wavesurfer.current || !wsReady) return;
     const ev = events.find((e) => e.id === selectedId);
-    if (ev) wavesurfer.current.setTime(ev.t_start);
-  }, [selectedId, events, wsReady]);
+    if (ev) {
+      wavesurfer.current.setTime(ev.t_start);
+      const specContainer = specRef.current;
+      const containerWidth = specContainer ? specContainer.clientWidth : 800;
+      const targetScroll = Math.max(0, ev.t_start * zoom - containerWidth / 2);
+      wavesurfer.current.setScroll(targetScroll);
+      setScrollLeft(targetScroll);
+    }
+  }, [selectedId, events, wsReady, zoom]);
 
   useEffect(() => { if (wavesurfer.current && wsReady) wavesurfer.current.zoom(zoom); }, [zoom, wsReady]);
   useEffect(() => { if (wavesurfer.current && wsReady) wavesurfer.current.setPlaybackRate(playbackRate); }, [playbackRate, wsReady]);
@@ -457,11 +468,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
             const isSelected = ev.id === selectedId;
             const border = borderColorForStatus(ev.review_status);
             const color = regionColorForStatus(ev.review_status, isSelected);
-            const canvasEl = specRef.current?.querySelector('canvas');
-            const scrollParent = canvasEl?.parentElement;
-            const curScroll = scrollParent ? scrollParent.scrollLeft : 0;
-            
-            const left = ev.t_start * zoom - curScroll;
+            const left = ev.t_start * zoom - scrollLeft;
             const width = (ev.t_end - ev.t_start) * zoom;
             const top = 180 * (1 - (ev.f_high / FREQ_MAX));
             const height = 180 * ((ev.f_high - ev.f_low) / FREQ_MAX);
