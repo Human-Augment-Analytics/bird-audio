@@ -53,6 +53,11 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const [duration, setDuration] = useState(0);
   const [wsReady, setWsReady] = useState(false);
 
+  // 2D Spectrogram Bounding Box Drag State
+  const [isDrawMode, setIsDrawMode] = useState(false);
+  const [drawStart, setDrawStart] = useState<{ x: number; y: number; t: number; f: number } | null>(null);
+  const [drawCurrent, setDrawCurrent] = useState<{ x: number; y: number; t: number; f: number } | null>(null);
+
   const eventsRef = useRef<EventRow[]>(events);
   useEffect(() => { eventsRef.current = events; }, [events]);
   const onSelectEventRef = useRef(onSelectEvent);
@@ -208,9 +213,6 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     suppressNewRegion.current = false;
   }, [events, selectedId, wsReady]);
 
-  // The effects below call wavesurfer methods that require decoded audio
-  // (zoom/setTime throw "No audio loaded" if invoked before the 'ready' event).
-  // Gate them all on wsReady; each re-applies its value once the track is ready.
   useEffect(() => {
     if (selectedId === null || !wavesurfer.current || !wsReady) return;
     const ev = events.find((e) => e.id === selectedId);
@@ -227,6 +229,55 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     return `${m.toString().padStart(2, '0')}:${s.padStart(4, '0')}`;
   };
 
+  // Helper to map Spectrogram Mouse Event to (Time, Frequency)
+  const getCanvasCoords = (e: React.MouseEvent<HTMLDivElement>) => {
+    const specContainer = specRef.current;
+    if (!specContainer) return null;
+    const canvas = specContainer.querySelector('canvas');
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const scrollParent = canvas.parentElement;
+    const sLeft = scrollParent ? scrollParent.scrollLeft : 0;
+    
+    const x = e.clientX - rect.left;
+    const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+    
+    const totalX = x + sLeft;
+    const t = Math.max(0, totalX / zoom);
+    const fRatio = 1 - (y / rect.height);
+    const f = Math.max(FREQ_MIN, Math.min(FREQ_MAX, FREQ_MIN + fRatio * (FREQ_MAX - FREQ_MIN)));
+    return { x, y, t, f, rect };
+  };
+
+  const handleSpecMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const coords = getCanvasCoords(e);
+    if (!coords) return;
+    setDrawStart(coords);
+    setDrawCurrent(coords);
+  };
+
+  const handleSpecMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!drawStart) return;
+    const coords = getCanvasCoords(e);
+    if (coords) setDrawCurrent(coords);
+  };
+
+  const handleSpecMouseUp = () => {
+    if (drawStart && drawCurrent) {
+      const tStart = Math.min(drawStart.t, drawCurrent.t);
+      const tEnd = Math.max(drawStart.t, drawCurrent.t);
+      const fLow = Math.min(drawStart.f, drawCurrent.f);
+      const fHigh = Math.max(drawStart.f, drawCurrent.f);
+
+      // Only add if time width > 0.05s or frequency height > 100Hz
+      if (Math.abs(tEnd - tStart) > 0.05) {
+        onAddEventRef.current?.({ t_start: tStart, t_end: tEnd, f_low: fLow, f_high: fHigh });
+      }
+    }
+    setDrawStart(null);
+    setDrawCurrent(null);
+  };
+
   if (!src) {
     return (
       <div style={{ height: 320, display: 'flex', flexDirection: 'column', alignItems: 'center',
@@ -235,6 +286,27 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         <p style={{ color: 'var(--text-dim)', fontSize: '1rem', fontWeight: 500 }}>Select a file to review</p>
       </div>
     );
+  }
+
+  // Draw Box Preview Calculation
+  let previewStyle: React.CSSProperties | null = null;
+  if (drawStart && drawCurrent) {
+    const x1 = Math.min(drawStart.x, drawCurrent.x);
+    const x2 = Math.max(drawStart.x, drawCurrent.x);
+    const y1 = Math.min(drawStart.y, drawCurrent.y);
+    const y2 = Math.max(drawStart.y, drawCurrent.y);
+    previewStyle = {
+      position: 'absolute',
+      left: x1,
+      top: y1,
+      width: Math.max(4, x2 - x1),
+      height: Math.max(4, y2 - y1),
+      border: '2px dashed var(--amber)',
+      backgroundColor: 'rgba(244,162,58,0.25)',
+      boxShadow: '0 0 12px rgba(244,162,58,0.5)',
+      pointerEvents: 'none',
+      zIndex: 20,
+    };
   }
 
   return (
@@ -248,23 +320,20 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
             {isPlaying ? <Pause size={16} /> : <Play size={16} />}{isPlaying ? 'Pause' : 'Play'}
           </button>
           <button
-            onClick={() => {
-              const specEl = specRef.current || containerRef.current;
-              if (specEl) {
-                specEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                specEl.style.outline = '2px solid var(--amber)';
-                setTimeout(() => { specEl.style.outline = 'none'; }, 1800);
-              }
-            }}
+            onClick={() => setIsDrawMode((v) => !v)}
             style={{
               display: 'flex', alignItems: 'center', gap: '0.4rem',
-              background: 'var(--surface-2)', color: 'var(--amber)', fontWeight: 600,
+              background: isDrawMode ? 'var(--amber)' : 'var(--surface-2)',
+              color: isDrawMode ? '#000' : 'var(--amber)',
+              fontWeight: 600,
               fontSize: '0.78rem', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.75rem',
-              cursor: 'pointer', border: '1px solid var(--amber)'
+              cursor: 'pointer', border: '1px solid var(--amber)',
+              boxShadow: isDrawMode ? '0 0 12px rgba(244,162,58,0.5)' : 'none',
+              transition: 'all 0.15s ease'
             }}
-            title="Click and drag on the spectrogram to draw a new event bounding box"
+            title="Toggle interactive 2D bounding box drawing directly on the spectrogram"
           >
-            <Plus size={15} /> Draw Bounding Box
+            <Plus size={15} /> {isDrawMode ? 'Drawing Mode Active' : '+ Draw Bounding Box'}
           </button>
           <span style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums', letterSpacing: '0.02em' }}>
             {formatTime(currentTime)} <span style={{ color: 'var(--text-faint)' }}>/</span> {formatTime(duration)}
@@ -289,7 +358,77 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, backgroundColor: 'var(--bg-deep)',
         padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)', overflow: 'hidden' }}>
-        <div ref={specRef} style={{ width: '100%', overflow: 'hidden', backgroundColor: 'var(--bg-deep)' }} />
+        <div
+          style={{ position: 'relative', width: '100%', overflow: 'hidden', cursor: isDrawMode ? 'crosshair' : 'default' }}
+          onMouseDown={handleSpecMouseDown}
+          onMouseMove={handleSpecMouseMove}
+          onMouseUp={handleSpecMouseUp}
+        >
+          <div ref={specRef} style={{ width: '100%', overflow: 'hidden', backgroundColor: 'var(--bg-deep)' }} />
+          {previewStyle && <div style={previewStyle} />}
+          
+          {/* Render 2D Bounding Box Overlay for Events directly on the Spectrogram */}
+          {events.map((ev) => {
+            const isSelected = ev.id === selectedId;
+            const border = borderColorForStatus(ev.review_status);
+            const color = regionColorForStatus(ev.review_status, isSelected);
+            const canvasEl = specRef.current?.querySelector('canvas');
+            const scrollParent = canvasEl?.parentElement;
+            const curScroll = scrollParent ? scrollParent.scrollLeft : 0;
+            
+            const left = ev.t_start * zoom - curScroll;
+            const width = (ev.t_end - ev.t_start) * zoom;
+            const top = 180 * (1 - (ev.f_high / FREQ_MAX));
+            const height = 180 * ((ev.f_high - ev.f_low) / FREQ_MAX);
+
+            if (left + width < 0 || left > 2000) return null; // Outside viewport
+
+            return (
+              <div
+                key={`spec-box-${ev.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectEvent?.(ev.id);
+                }}
+                style={{
+                  position: 'absolute',
+                  left,
+                  top,
+                  width: Math.max(6, width),
+                  height: Math.max(6, height),
+                  border: `2px solid ${border}`,
+                  backgroundColor: color,
+                  boxShadow: isSelected ? `0 0 14px ${border}` : 'none',
+                  borderRadius: 3,
+                  cursor: 'pointer',
+                  zIndex: isSelected ? 15 : 10,
+                  transition: 'border-color 0.15s ease, background-color 0.15s ease',
+                }}
+                title={`Event ${ev.id}: ${(ev.t_end - ev.t_start).toFixed(2)}s | ${Math.round(ev.f_low)}Hz - ${Math.round(ev.f_high)}Hz`}
+              >
+                {isSelected && (
+                  <span style={{
+                    position: 'absolute',
+                    top: -18,
+                    left: 0,
+                    background: border,
+                    color: '#000',
+                    fontWeight: 700,
+                    fontSize: '9px',
+                    fontFamily: 'var(--mono)',
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
+                    pointerEvents: 'none'
+                  }}>
+                    #{ev.id} {ev.label || `${Math.round(ev.f_low)}–${Math.round(ev.f_high)}Hz`}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
         <div ref={containerRef} style={{ width: '100%', backgroundColor: 'var(--bg-deep)' }} />
         <div ref={timelineRef} style={{ width: '100%', marginTop: 4 }} />
       </div>
@@ -303,7 +442,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
               {label}
             </span>
           ))}
-        <span style={{ marginLeft: 'auto', color: 'var(--text-faint)', fontStyle: 'italic' }}>Drag the spectrogram to mark a new event · drag region edges to adjust.</span>
+        <span style={{ marginLeft: 'auto', color: 'var(--amber)', fontWeight: 500, fontStyle: 'italic' }}>
+          ⚡ Click "+ Draw Bounding Box" or click & drag directly on the spectrogram image to draw 2D time/frequency bounding boxes.
+        </span>
       </div>
     </div>
   );
