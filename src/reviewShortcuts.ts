@@ -15,6 +15,9 @@ export const REVIEW_SHORTCUTS: ShortcutBinding[] = [
   { keys: "X", description: "Reject and advance" },
   { keys: "U", description: "Mark unreviewed" },
   { keys: "N", description: "Jump to next unreviewed" },
+  { keys: "Cmd + Z", description: "Undo box action" },
+  { keys: "Cmd + Shift + Z / Cmd + Y", description: "Redo box action" },
+  { keys: "Delete / Backspace", description: "Delete selected bounding box" },
   { keys: "?", description: "Toggle this help" },
 ];
 
