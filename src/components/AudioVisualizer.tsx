@@ -267,14 +267,18 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     if (isDrawMode) {
       setDrawStart(coords);
       setDrawCurrent(coords);
-    } else {
-      const canvas = specRef.current?.querySelector('canvas');
-      const scrollParent = canvas?.parentElement;
-      if (scrollParent) {
-        setPanStart({ x: e.clientX, scrollLeft: scrollParent.scrollLeft });
-      }
+    } else if (wavesurfer.current) {
+      const currentScroll = wavesurfer.current.getScroll();
+      setPanStart({ x: e.clientX, scrollLeft: currentScroll });
     }
     setIsDragging(true);
+  };
+
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (!wavesurfer.current) return;
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    const currentScroll = wavesurfer.current.getScroll();
+    wavesurfer.current.setScroll(Math.max(0, currentScroll + delta));
   };
 
   useEffect(() => {
@@ -284,13 +288,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       if (isDrawModeRef.current && drawStart) {
         const coords = getCanvasCoordsFromClient(ev.clientX, ev.clientY);
         if (coords) setDrawCurrent(coords);
-      } else if (!isDrawModeRef.current && panStart) {
-        const canvas = specRef.current?.querySelector('canvas');
-        const scrollParent = canvas?.parentElement;
-        if (scrollParent) {
-          const dx = ev.clientX - panStart.x;
-          scrollParent.scrollLeft = panStart.scrollLeft - dx;
-        }
+      } else if (!isDrawModeRef.current && panStart && wavesurfer.current) {
+        const dx = ev.clientX - panStart.x;
+        const newScroll = Math.max(0, panStart.scrollLeft - dx);
+        wavesurfer.current.setScroll(newScroll);
       }
     };
 
@@ -408,7 +409,38 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
             userSelect: 'none',
           }}
           onMouseDown={handleSpecMouseDown}
+          onWheel={handleWheel}
         >
+          {!wsReady && (
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              minHeight: 180,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 12,
+              backgroundColor: 'rgba(15, 14, 18, 0.88)',
+              backdropFilter: 'blur(6px)',
+              zIndex: 50,
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--line)'
+            }}>
+              <div className="loading-spinner" style={{ width: 28, height: 28 }} />
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--amber)', letterSpacing: '0.08em', fontWeight: 600 }}>
+                  GENERATING FFT SPECTROGRAM…
+                </span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', color: 'var(--text-faint)' }}>
+                  Decoding Audio Waveform Track
+                </span>
+              </div>
+            </div>
+          )}
           <div ref={specRef} style={{ width: '100%', overflow: 'hidden', backgroundColor: 'var(--bg-deep)' }} />
           {previewStyle && <div style={previewStyle} />}
           
