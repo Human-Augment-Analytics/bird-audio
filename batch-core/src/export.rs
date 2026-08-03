@@ -230,6 +230,52 @@ fn find_session_datetime(path: &str) -> Option<String> {
     None
 }
 
+#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PathMetadata {
+    pub recorder_id: Option<String>,
+    pub elevation_band: Option<String>,
+    pub recording_datetime: Option<String>,
+}
+
+pub fn parse_path_metadata(path: &str) -> PathMetadata {
+    use regex::Regex;
+    let rec_re = Regex::new(r"(?i)(PSL\d+|PSM\d+|PSH\d+|H\d+)").unwrap();
+    let dt_re = Regex::new(r"(20\d{6})[_-]?([0-2]\d[0-5]\d[0-5]\d)").unwrap();
+
+    let recorder_id = rec_re.find(path).map(|m| m.as_str().to_uppercase());
+    let elevation_band = recorder_id.as_ref().and_then(|rid| {
+        if rid.starts_with("PSL") {
+            Some("Low".to_string())
+        } else if rid.starts_with("PSM") {
+            Some("Medium".to_string())
+        } else if rid.starts_with("PSH") || rid.starts_with('H') {
+            Some("High".to_string())
+        } else {
+            None
+        }
+    });
+
+    let recording_datetime = dt_re.captures(path).and_then(|cap| {
+        let date_str = &cap[1];
+        let time_str = &cap[2];
+        if date_str.len() == 8 && time_str.len() == 6 {
+            Some(format!(
+                "{}-{}-{}T{}:{}:{}",
+                &date_str[0..4], &date_str[4..6], &date_str[6..8],
+                &time_str[0..2], &time_str[2..4], &time_str[4..6]
+            ))
+        } else {
+            None
+        }
+    });
+
+    PathMetadata {
+        recorder_id,
+        elevation_band,
+        recording_datetime,
+    }
+}
+
 fn median(mut values: Vec<f64>) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -805,5 +851,14 @@ mod tests {
         std::fs::remove_file(&meta_p).ok();
         std::fs::remove_file(&out_p).ok();
         std::fs::remove_file(&summary_p).ok();
+    }
+
+    #[test]
+    fn test_audiomoth_path_metadata_parsing() {
+        let path = "/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/2025/Low/PSL1/PSL1_20250619_080000.WAV";
+        let meta = parse_path_metadata(path);
+        assert_eq!(meta.recorder_id, Some("PSL1".to_string()));
+        assert_eq!(meta.elevation_band, Some("Low".to_string()));
+        assert_eq!(meta.recording_datetime, Some("2025-06-19T08:00:00".to_string()));
     }
 }
