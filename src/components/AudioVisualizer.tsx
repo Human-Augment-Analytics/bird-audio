@@ -244,6 +244,14 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     }
   }, [selectedId, events, wsReady, zoom]);
 
+  useEffect(() => {
+    if (!specRef.current) return;
+    const wrapper = specRef.current.querySelector('.spectrogram') || (specRef.current.firstElementChild as HTMLElement | null);
+    if (wrapper) {
+      wrapper.scrollLeft = scrollLeft;
+    }
+  }, [scrollLeft]);
+
   useEffect(() => { if (wavesurfer.current && wsReady) wavesurfer.current.zoom(zoom); }, [zoom, wsReady]);
   useEffect(() => { if (wavesurfer.current && wsReady) wavesurfer.current.setPlaybackRate(playbackRate); }, [playbackRate, wsReady]);
   useEffect(() => { if (wavesurfer.current && wsReady) wavesurfer.current.setMuted(isMuted); }, [isMuted, wsReady]);
