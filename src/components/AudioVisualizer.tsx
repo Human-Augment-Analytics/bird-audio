@@ -3,7 +3,7 @@ import WaveSurfer from 'wavesurfer.js';
 import Spectrogram from 'wavesurfer.js/dist/plugins/spectrogram.esm.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
-import { Play, Pause, ZoomIn, ZoomOut, Volume2, VolumeX, Plus } from 'lucide-react';
+import { Play, Pause, ZoomIn, ZoomOut, Volume2, VolumeX, Plus, X } from 'lucide-react';
 import type { EventRow } from '../types';
 
 const FREQ_MIN = 0;
@@ -32,10 +32,11 @@ interface AudioVisualizerProps {
   onSelectEvent?: (id: number) => void;
   onUpdateBounds?: (id: number, t_start: number, t_end: number, f_low: number, f_high: number) => void;
   onAddEvent?: (e: { t_start: number; t_end: number; f_low: number; f_high: number }) => void;
+  onDeleteEvent?: (id: number) => void;
 }
 
 export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
-  src, events, selectedId, onSelectEvent, onUpdateBounds, onAddEvent,
+  src, events, selectedId, onSelectEvent, onUpdateBounds, onAddEvent, onDeleteEvent,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const specRef = useRef<HTMLDivElement>(null);
@@ -414,23 +415,51 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
                 title={`Event ${ev.id}: ${(ev.t_end - ev.t_start).toFixed(2)}s | ${Math.round(ev.f_low)}Hz - ${Math.round(ev.f_high)}Hz`}
               >
                 {isSelected && (
-                  <span style={{
-                    position: 'absolute',
-                    top: -18,
-                    left: 0,
-                    background: border,
-                    color: '#000',
-                    fontWeight: 700,
-                    fontSize: '9px',
-                    fontFamily: 'var(--mono)',
-                    padding: '1px 5px',
-                    borderRadius: 3,
-                    whiteSpace: 'nowrap',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
-                    pointerEvents: 'none'
-                  }}>
-                    #{ev.id} {ev.label || `${Math.round(ev.f_low)}–${Math.round(ev.f_high)}Hz`}
-                  </span>
+                  <>
+                    <span style={{
+                      position: 'absolute',
+                      top: -18,
+                      left: 0,
+                      background: border,
+                      color: '#000',
+                      fontWeight: 700,
+                      fontSize: '9px',
+                      fontFamily: 'var(--mono)',
+                      padding: '1px 5px',
+                      borderRadius: 3,
+                      whiteSpace: 'nowrap',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
+                      pointerEvents: 'none'
+                    }}>
+                      #{ev.id} {ev.label || `${Math.round(ev.f_low)}–${Math.round(ev.f_high)}Hz`}
+                    </span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteEvent?.(ev.id);
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: -8,
+                        right: -8,
+                        width: 18,
+                        height: 18,
+                        borderRadius: '50%',
+                        background: 'var(--coral)',
+                        color: '#fff',
+                        border: '1px solid #fff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+                        zIndex: 25,
+                      }}
+                      title="Delete this bounding box (Cmd+Z to undo)"
+                    >
+                      <X size={12} />
+                    </button>
+                  </>
                 )}
               </div>
             );

@@ -67,6 +67,9 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
       events.find((e) => e.id === id)?.review_status ?? "unreviewed",
     [events]);
 
+  const [history, setHistory] = useState<Array<{ type: 'ADD' | 'DELETE'; eventId?: number; path: string; bounds?: { tStart: number; tEnd: number; fLow: number; fHigh: number }; eventRow?: EventRow }>>([]);
+  const [redoStack, setRedoStack] = useState<Array<{ type: 'ADD' | 'DELETE'; eventId?: number; path: string; bounds?: { tStart: number; tEnd: number; fLow: number; fHigh: number }; eventRow?: EventRow }>>([]);
+
   const handleSelectEvent = useCallback((id: number) => setSelectedId(id), []);
   const handleSetReview = useCallback(async (id: number, status: "confirmed" | "rejected" | "unreviewed") => {
     try { await setEventReview(dir, id, status); await refreshEvents(); }
@@ -79,18 +82,100 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   const handleAddEvent = useCallback(async (e: { t_start: number; t_end: number; f_low: number; f_high: number }) => {
     if (!selectedPath) return;
     try {
-      const newId = await addManualEvent(dir, sid, selectedPath, { tStart: e.t_start, tEnd: e.t_end, fLow: e.f_low, fHigh: e.f_high });
+      const bounds = { tStart: e.t_start, tEnd: e.t_end, fLow: e.f_low, fHigh: e.f_high };
+      const newId = await addManualEvent(dir, sid, selectedPath, bounds);
       await refreshEvents(); setSelectedId(newId);
+      setHistory((h) => [...h, { type: 'ADD', eventId: newId, path: selectedPath, bounds }]);
+      setRedoStack([]);
+      setNotice("Added new event bounding box.");
     } catch (err) { setNotice(`Add event failed: ${String(err)}`); }
   }, [dir, sid, selectedPath, refreshEvents]);
   const handleDelete = useCallback(async (id: number) => {
-    try { await deleteEvent(dir, id); if (selectedId === id) setSelectedId(null); await refreshEvents(); }
-    catch (e) { setNotice(`Delete failed: ${String(e)}`); }
-  }, [dir, selectedId, refreshEvents]);
+    try {
+      const ev = events.find((item) => item.id === id);
+      await deleteEvent(dir, id);
+      if (selectedId === id) setSelectedId(null);
+      await refreshEvents();
+      if (ev && selectedPath) {
+        setHistory((h) => [...h, { type: 'DELETE', eventId: id, path: selectedPath, eventRow: ev }]);
+        setRedoStack([]);
+      }
+      setNotice(`Deleted bounding box #${id}.`);
+    } catch (e) { setNotice(`Delete failed: ${String(e)}`); }
+  }, [dir, selectedId, events, selectedPath, refreshEvents]);
   const handleEditLabelNote = useCallback(async (id: number, label: string, note: string) => {
     try { await setEventReview(dir, id, currentStatus(id), label, note); await refreshEvents(); }
     catch (e) { setNotice(`Label/note update failed: ${String(e)}`); }
   }, [dir, currentStatus, refreshEvents]);
+
+  const handleUndo = useCallback(async () => {
+    if (history.length === 0) return;
+    const lastAction = history[history.length - 1];
+    setHistory((h) => h.slice(0, -1));
+    setRedoStack((r) => [...r, lastAction]);
+
+    if (lastAction.type === 'ADD' && lastAction.eventId) {
+      await deleteEvent(dir, lastAction.eventId);
+      if (selectedId === lastAction.eventId) setSelectedId(null);
+      await refreshEvents();
+      setNotice("Undo: Removed added bounding box.");
+    } else if (lastAction.type === 'DELETE' && lastAction.eventRow) {
+      const ev = lastAction.eventRow;
+      const restoredId = await addManualEvent(dir, sid, lastAction.path, {
+        tStart: ev.t_start, tEnd: ev.t_end, fLow: ev.f_low, fHigh: ev.f_high
+      });
+      await refreshEvents();
+      setSelectedId(restoredId);
+      setNotice("Undo: Restored deleted bounding box.");
+    }
+  }, [history, dir, sid, selectedId, refreshEvents]);
+
+  const handleRedo = useCallback(async () => {
+    if (redoStack.length === 0) return;
+    const lastRedo = redoStack[redoStack.length - 1];
+    setRedoStack((r) => r.slice(0, -1));
+    setHistory((h) => [...h, lastRedo]);
+
+    if (lastRedo.type === 'ADD' && lastRedo.bounds) {
+      const restoredId = await addManualEvent(dir, sid, lastRedo.path, lastRedo.bounds);
+      await refreshEvents();
+      setSelectedId(restoredId);
+      setNotice("Redo: Re-created bounding box.");
+    } else if (lastRedo.type === 'DELETE' && lastRedo.eventId) {
+      await deleteEvent(dir, lastRedo.eventId);
+      if (selectedId === lastRedo.eventId) setSelectedId(null);
+      await refreshEvents();
+      setNotice("Redo: Deleted bounding box.");
+    }
+  }, [redoStack, dir, sid, selectedId, refreshEvents]);
+
+  useEffect(() => {
+    const handleKeyDown = (ev: KeyboardEvent) => {
+      const isText = ev.target instanceof HTMLElement &&
+        (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA" || ev.target.isContentEditable);
+      if (isText) return;
+
+      const isCmdOrCtrl = ev.metaKey || ev.ctrlKey;
+      if (isCmdOrCtrl && ev.key.toLowerCase() === 'z') {
+        ev.preventDefault();
+        if (ev.shiftKey) {
+          void handleRedo();
+        } else {
+          void handleUndo();
+        }
+      } else if (isCmdOrCtrl && ev.key.toLowerCase() === 'y') {
+        ev.preventDefault();
+        void handleRedo();
+      } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
+        if (selectedId !== null) {
+          ev.preventDefault();
+          void handleDelete(selectedId);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleUndo, handleRedo, handleDelete, selectedId]);
 
   const logAction = useCallback((action: string, meta?: Record<string, unknown>) => {
     const eventId = typeof meta?.eventId === "number" ? meta.eventId : null;
@@ -195,6 +280,32 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
             <span style={{ fontVariantNumeric: "tabular-nums" }}>
               REVIEWED {reviewProgress.decided}/{reviewProgress.total}
             </span>
+            <button
+              onClick={handleUndo}
+              disabled={history.length === 0}
+              style={{
+                background: 'none', border: '1px solid var(--line)', borderRadius: 6,
+                padding: '2px 8px', color: history.length > 0 ? 'var(--amber)' : 'var(--text-faint)',
+                cursor: history.length > 0 ? 'pointer' : 'default', fontFamily: 'var(--mono)', fontSize: 10.5,
+                opacity: history.length > 0 ? 1 : 0.4
+              }}
+              title="Undo last bounding box action (Cmd+Z)"
+            >
+              ↩ Undo ({history.length})
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={redoStack.length === 0}
+              style={{
+                background: 'none', border: '1px solid var(--line)', borderRadius: 6,
+                padding: '2px 8px', color: redoStack.length > 0 ? 'var(--amber)' : 'var(--text-faint)',
+                cursor: redoStack.length > 0 ? 'pointer' : 'default', fontFamily: 'var(--mono)', fontSize: 10.5,
+                opacity: redoStack.length > 0 ? 1 : 0.4
+              }}
+              title="Redo bounding box action (Cmd+Shift+Z / Cmd+Y)"
+            >
+              ↪ Redo ({redoStack.length})
+            </button>
             <button onClick={() => setShowShortcuts((v) => !v)}
               style={{ marginLeft: "auto", background: "none", border: "1px solid var(--line)", borderRadius: 6,
                 padding: "2px 8px", color: "var(--text-dim)", cursor: "pointer", fontFamily: "var(--mono)", fontSize: 10.5 }}>
@@ -230,7 +341,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
           <>
             <div className="reveal" style={{ animationDelay: "40ms" }}>
               <AudioVisualizer src={src} events={events} selectedId={selectedId}
-                onSelectEvent={handleSelectEvent} onUpdateBounds={handleUpdateBounds} onAddEvent={handleAddEvent} />
+                onSelectEvent={handleSelectEvent} onUpdateBounds={handleUpdateBounds} onAddEvent={handleAddEvent} onDeleteEvent={handleDelete} />
             </div>
             <div className="reveal" style={{ animationDelay: "130ms" }}>
               <EventTable events={events} selectedId={selectedId} onSelect={handleSelectEvent}
