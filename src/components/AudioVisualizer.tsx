@@ -238,9 +238,13 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       wavesurfer.current.setTime(ev.t_start);
       const specContainer = specRef.current;
       const containerWidth = specContainer ? specContainer.clientWidth : 800;
-      const targetScroll = Math.max(0, ev.t_start * zoom - containerWidth / 2);
+      const targetScroll = Math.max(0, ev.t_start * zoom - containerWidth / 3);
       wavesurfer.current.setScroll(targetScroll);
       setScrollLeft(targetScroll);
+      if (specContainer) {
+        const wrapper = specContainer.querySelector('.spectrogram') || (specContainer.firstElementChild as HTMLElement | null);
+        if (wrapper) wrapper.scrollLeft = targetScroll;
+      }
     }
   }, [selectedId, events, wsReady, zoom]);
 
@@ -476,12 +480,17 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
             const isSelected = ev.id === selectedId;
             const border = borderColorForStatus(ev.review_status);
             const color = regionColorForStatus(ev.review_status, isSelected);
-            const left = ev.t_start * zoom - scrollLeft;
-            const width = (ev.t_end - ev.t_start) * zoom;
-            const top = 180 * (1 - (ev.f_high / FREQ_MAX));
-            const height = 180 * ((ev.f_high - ev.f_low) / FREQ_MAX);
 
-            if (left + width < 0 || left > 2000) return null; // Outside viewport
+            const fLow = (ev.f_low && ev.f_low > 0) ? ev.f_low : (ev.center_freq ? Math.max(0, ev.center_freq - 1500) : 500);
+            const fHigh = (ev.f_high && ev.f_high > fLow) ? ev.f_high : (ev.center_freq ? Math.min(FREQ_MAX, ev.center_freq + 1500) : 10000);
+
+            const left = ev.t_start * zoom - scrollLeft;
+            const width = Math.max(10, (ev.t_end - ev.t_start) * zoom);
+            const top = 180 * (1 - (fHigh / FREQ_MAX));
+            const height = Math.max(12, 180 * ((fHigh - fLow) / FREQ_MAX));
+
+            const containerWidth = specRef.current?.clientWidth || 1200;
+            if (left + width < -100 || left > containerWidth + 100) return null; // Outside viewport
 
             return (
               <div
