@@ -84,6 +84,13 @@ pub struct EventRow {
     pub stage_c_score: Option<f64>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionEventRow {
+    pub path: String,
+    pub duration: f64,
+    pub retained: bool,
+}
+
 /// Fields needed to log one reviewer action. `dwell_ms` is derived, not supplied.
 pub struct NewReviewEvent<'a> {
     pub session_id: i64,
@@ -490,6 +497,24 @@ impl Store {
                 retained: r.get::<_, Option<i64>>(11)?.map(|v| v != 0), n_members: r.get(12)?,
                 review_status: r.get(13)?, source: r.get(14)?, label: r.get(15)?, note: r.get(16)?,
                 stage_c_label: r.get(17)?, stage_c_score: r.get(18)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Return all events for a session with joined file path, duration, and retained flag.
+    pub fn list_events_all(&self, session_id: i64) -> rusqlite::Result<Vec<SessionEventRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.path, e.duration, COALESCE(e.retained, 0)
+             FROM events e
+             JOIN files f ON e.file_id = f.id
+             WHERE e.session_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![session_id], |r| {
+            Ok(SessionEventRow {
+                path: r.get(0)?,
+                duration: r.get(1)?,
+                retained: r.get::<_, i64>(2)? != 0,
             })
         })?;
         rows.collect()
