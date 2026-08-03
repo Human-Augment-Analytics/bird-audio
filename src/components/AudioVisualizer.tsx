@@ -55,6 +55,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 
   // 2D Spectrogram Bounding Box Drag State
   const [isDrawMode, setIsDrawMode] = useState(false);
+  const isDrawModeRef = useRef(isDrawMode);
+  useEffect(() => { isDrawModeRef.current = isDrawMode; }, [isDrawMode]);
+
   const [drawStart, setDrawStart] = useState<{ x: number; y: number; t: number; f: number } | null>(null);
   const [drawCurrent, setDrawCurrent] = useState<{ x: number; y: number; t: number; f: number } | null>(null);
 
@@ -99,7 +102,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 
     wsRegions.enableDragSelection({ color: 'rgba(244,162,58,0.22)' });
     wsRegions.on('region-created', (region: any) => {
-      if (suppressNewRegion.current) return;
+      if (suppressNewRegion.current || !isDrawModeRef.current) {
+        region.remove();
+        return;
+      }
       const cur = eventsRef.current;
       let f_low = FREQ_MIN, f_high = FREQ_MAX;
       if (cur.length > 0) {
@@ -250,6 +256,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   };
 
   const handleSpecMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDrawMode) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
     setDrawStart(coords);
@@ -333,7 +340,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
             }}
             title="Toggle interactive 2D bounding box drawing directly on the spectrogram"
           >
-            <Plus size={15} /> {isDrawMode ? 'Drawing Mode Active' : '+ Draw Bounding Box'}
+            <Plus size={15} /> {isDrawMode ? 'Drawing Mode Active' : 'Draw Bounding Box'}
           </button>
           <span style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums', letterSpacing: '0.02em' }}>
             {formatTime(currentTime)} <span style={{ color: 'var(--text-faint)' }}>/</span> {formatTime(duration)}
