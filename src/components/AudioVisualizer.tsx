@@ -3,7 +3,7 @@ import WaveSurfer from 'wavesurfer.js';
 import Spectrogram from 'wavesurfer.js/dist/plugins/spectrogram.esm.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
-import { Play, Pause, ZoomIn, ZoomOut, Volume2, VolumeX, Plus, X } from 'lucide-react';
+import { Play, Pause, ZoomIn, ZoomOut, Volume2, VolumeX, Plus } from 'lucide-react';
 import type { EventRow } from '../types';
 
 const FREQ_MIN = 0;
@@ -415,51 +415,57 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
                 title={`Event ${ev.id}: ${(ev.t_end - ev.t_start).toFixed(2)}s | ${Math.round(ev.f_low)}Hz - ${Math.round(ev.f_high)}Hz`}
               >
                 {isSelected && (
-                  <>
-                    <span style={{
-                      position: 'absolute',
-                      top: -18,
-                      left: 0,
-                      background: border,
-                      color: '#000',
-                      fontWeight: 700,
-                      fontSize: '9px',
-                      fontFamily: 'var(--mono)',
-                      padding: '1px 5px',
-                      borderRadius: 3,
-                      whiteSpace: 'nowrap',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
-                      pointerEvents: 'none'
-                    }}>
-                      #{ev.id} {ev.label || `${Math.round(ev.f_low)}–${Math.round(ev.f_high)}Hz`}
-                    </span>
+                  <div style={{
+                    position: 'absolute',
+                    top: -22,
+                    left: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: border,
+                    color: '#000',
+                    fontWeight: 700,
+                    fontSize: '9.5px',
+                    fontFamily: 'var(--mono)',
+                    padding: '2px 7px',
+                    borderRadius: 4,
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+                    zIndex: 30,
+                    pointerEvents: 'auto',
+                  }}>
+                    <span>#{ev.id} {ev.label || `${Math.round(ev.f_low)}–${Math.round(ev.f_high)}Hz`}</span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onDeleteEvent?.(ev.id);
                       }}
                       style={{
-                        position: 'absolute',
-                        top: -8,
-                        right: -8,
-                        width: 18,
-                        height: 18,
+                        padding: 0,
+                        margin: 0,
+                        minWidth: 'unset',
+                        minHeight: 'unset',
+                        width: 15,
+                        height: 15,
                         borderRadius: '50%',
-                        background: 'var(--coral)',
-                        color: '#fff',
-                        border: '1px solid #fff',
-                        display: 'flex',
+                        background: 'rgba(0,0,0,0.25)',
+                        color: '#000',
+                        border: 'none',
+                        display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         cursor: 'pointer',
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
-                        zIndex: 25,
+                        fontSize: '10px',
+                        lineHeight: 1,
+                        transition: 'all 0.15s ease',
                       }}
-                      title="Delete this bounding box (Cmd+Z to undo)"
+                      title="Delete this bounding box (Press Delete/Backspace to delete, Cmd+Z to undo)"
+                      onMouseEnter={(e) => { e.currentTarget.style.background = '#000'; e.currentTarget.style.color = '#fff'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.25)'; e.currentTarget.style.color = '#000'; }}
                     >
-                      <X size={12} />
+                      ✕
                     </button>
-                  </>
+                  </div>
                 )}
               </div>
             );

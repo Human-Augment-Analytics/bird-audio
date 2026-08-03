@@ -166,7 +166,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
       } else if (isCmdOrCtrl && ev.key.toLowerCase() === 'y') {
         ev.preventDefault();
         void handleRedo();
-      } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
+      } else if (ev.key === 'Delete' || ev.key === 'Backspace' || ev.key === 'd' || ev.key === 'D' || ev.code === 'Delete' || ev.code === 'Backspace') {
         if (selectedId !== null) {
           ev.preventDefault();
           void handleDelete(selectedId);
