@@ -476,101 +476,117 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
           {previewStyle && <div style={previewStyle} />}
           
           {/* Render 2D Bounding Box Overlay for Events directly on the Spectrogram */}
-          {events.map((ev) => {
-            const isSelected = ev.id === selectedId;
-            const border = borderColorForStatus(ev.review_status);
-            const color = regionColorForStatus(ev.review_status, isSelected);
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none',
+              transform: `translateX(-${scrollLeft}px)`,
+              willChange: 'transform',
+            }}
+          >
+            {events.map((ev) => {
+              const isSelected = ev.id === selectedId;
+              const border = borderColorForStatus(ev.review_status);
+              const color = regionColorForStatus(ev.review_status, isSelected);
 
-            const fLow = (ev.f_low && ev.f_low > 0) ? ev.f_low : (ev.center_freq ? Math.max(0, ev.center_freq - 1500) : 500);
-            const fHigh = (ev.f_high && ev.f_high > fLow) ? ev.f_high : (ev.center_freq ? Math.min(FREQ_MAX, ev.center_freq + 1500) : 10000);
+              const fLow = (ev.f_low && ev.f_low > 0) ? ev.f_low : (ev.center_freq ? Math.max(0, ev.center_freq - 1500) : 500);
+              const fHigh = (ev.f_high && ev.f_high > fLow) ? ev.f_high : (ev.center_freq ? Math.min(FREQ_MAX, ev.center_freq + 1500) : 10000);
 
-            const left = ev.t_start * zoom - scrollLeft;
-            const width = Math.max(10, (ev.t_end - ev.t_start) * zoom);
-            const top = 180 * (1 - (fHigh / FREQ_MAX));
-            const height = Math.max(12, 180 * ((fHigh - fLow) / FREQ_MAX));
+              const left = ev.t_start * zoom;
+              const width = Math.max(10, (ev.t_end - ev.t_start) * zoom);
+              const top = 180 * (1 - (fHigh / FREQ_MAX));
+              const height = Math.max(12, 180 * ((fHigh - fLow) / FREQ_MAX));
 
-            const containerWidth = specRef.current?.clientWidth || 1200;
-            if (left + width < -100 || left > containerWidth + 100) return null; // Outside viewport
+              const containerWidth = specRef.current?.clientWidth || 1200;
+              const viewLeft = scrollLeft - 150;
+              const viewRight = scrollLeft + containerWidth + 150;
+              if (left + width < viewLeft || left > viewRight) return null; // Outside viewport
 
-            return (
-              <div
-                key={`spec-box-${ev.id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectEvent?.(ev.id);
-                }}
-                style={{
-                  position: 'absolute',
-                  left,
-                  top,
-                  width: Math.max(6, width),
-                  height: Math.max(6, height),
-                  border: `2px solid ${border}`,
-                  backgroundColor: color,
-                  boxShadow: isSelected ? `0 0 14px ${border}` : 'none',
-                  borderRadius: 3,
-                  cursor: 'pointer',
-                  zIndex: isSelected ? 15 : 10,
-                  transition: 'border-color 0.15s ease, background-color 0.15s ease',
-                }}
-                title={`Event ${ev.id}: ${(ev.t_end - ev.t_start).toFixed(2)}s | ${Math.round(ev.f_low)}Hz - ${Math.round(ev.f_high)}Hz`}
-              >
-                {isSelected && (
-                  <div style={{
+              return (
+                <div
+                  key={`spec-box-${ev.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectEvent?.(ev.id);
+                  }}
+                  style={{
                     position: 'absolute',
-                    top: -22,
-                    left: 0,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    background: border,
-                    color: '#000',
-                    fontWeight: 700,
-                    fontSize: '9.5px',
-                    fontFamily: 'var(--mono)',
-                    padding: '2px 7px',
-                    borderRadius: 4,
-                    whiteSpace: 'nowrap',
-                    boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
-                    zIndex: 30,
+                    left,
+                    top,
+                    width: Math.max(6, width),
+                    height: Math.max(6, height),
+                    border: `2px solid ${border}`,
+                    backgroundColor: color,
+                    boxShadow: isSelected ? `0 0 16px ${border}` : 'none',
+                    borderRadius: 3,
+                    cursor: 'pointer',
                     pointerEvents: 'auto',
-                  }}>
-                    <span>#{ev.id} {ev.label || `${Math.round(ev.f_low)}–${Math.round(ev.f_high)}Hz`}</span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteEvent?.(ev.id);
-                      }}
-                      style={{
-                        padding: 0,
-                        margin: 0,
-                        minWidth: 'unset',
-                        minHeight: 'unset',
-                        width: 15,
-                        height: 15,
-                        borderRadius: '50%',
-                        background: 'rgba(0,0,0,0.25)',
-                        color: '#000',
-                        border: 'none',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                        fontSize: '10px',
-                        lineHeight: 1,
-                        transition: 'all 0.15s ease',
-                      }}
-                      title="Delete this bounding box (Press Delete/Backspace to delete, Cmd+Z to undo)"
-                      onMouseEnter={(e) => { e.currentTarget.style.background = '#000'; e.currentTarget.style.color = '#fff'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.25)'; e.currentTarget.style.color = '#000'; }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                    zIndex: isSelected ? 15 : 10,
+                    transition: 'border-color 0.15s ease, background-color 0.15s ease',
+                  }}
+                  title={`Event ${ev.id}: ${(ev.t_end - ev.t_start).toFixed(2)}s | ${Math.round(ev.f_low)}Hz - ${Math.round(ev.f_high)}Hz`}
+                >
+                  {isSelected && (
+                    <div style={{
+                      position: 'absolute',
+                      top: -22,
+                      left: 0,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      background: border,
+                      color: '#000',
+                      fontWeight: 700,
+                      fontSize: '9.5px',
+                      fontFamily: 'var(--mono)',
+                      padding: '2px 7px',
+                      borderRadius: 4,
+                      whiteSpace: 'nowrap',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+                      zIndex: 30,
+                      pointerEvents: 'auto',
+                    }}>
+                      <span>#{ev.id} {ev.label || `${Math.round(ev.f_low)}–${Math.round(ev.f_high)}Hz`}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteEvent?.(ev.id);
+                        }}
+                        style={{
+                          padding: 0,
+                          margin: 0,
+                          minWidth: 'unset',
+                          minHeight: 'unset',
+                          width: 15,
+                          height: 15,
+                          borderRadius: '50%',
+                          background: 'rgba(0,0,0,0.25)',
+                          color: '#000',
+                          border: 'none',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          fontSize: '10px',
+                          lineHeight: 1,
+                          transition: 'all 0.15s ease',
+                        }}
+                        title="Delete this bounding box (Press Delete/Backspace to delete, Cmd+Z to undo)"
+                        onMouseEnter={(e) => { e.currentTarget.style.background = '#000'; e.currentTarget.style.color = '#fff'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.25)'; e.currentTarget.style.color = '#000'; }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
         <div ref={containerRef} style={{ width: '100%', backgroundColor: 'var(--bg-deep)' }} />
         <div ref={timelineRef} style={{ width: '100%', marginTop: 4 }} />
