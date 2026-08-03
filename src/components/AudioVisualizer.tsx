@@ -79,6 +79,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       wavesurfer.current.destroy();
       wavesurfer.current = null; regionsPlugin.current = null; regionToEventId.current.clear();
     }
+    specRef.current.innerHTML = '';
+    containerRef.current.innerHTML = '';
+    timelineRef.current.innerHTML = '';
+
     const wsRegions = RegionsPlugin.create();
     regionsPlugin.current = wsRegions;
     const wsTimeline = TimelinePlugin.create({
@@ -139,6 +143,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     });
     return () => {
       ws.destroy();
+      if (specRef.current) specRef.current.innerHTML = '';
+      if (containerRef.current) containerRef.current.innerHTML = '';
+      if (timelineRef.current) timelineRef.current.innerHTML = '';
       wavesurfer.current = null; regionsPlugin.current = null; regionToEventId.current.clear();
       setWsReady(false);
     };
@@ -243,8 +250,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const getCanvasCoordsFromClient = (clientX: number, clientY: number) => {
     const specContainer = specRef.current;
     if (!specContainer) return null;
-    const canvas = specContainer.querySelector('canvas');
-    if (!canvas) return null;
+    const canvasList = specContainer.querySelectorAll('canvas');
+    if (canvasList.length === 0) return null;
+    const canvas = canvasList[canvasList.length - 1];
     const rect = canvas.getBoundingClientRect();
     const scrollParent = canvas.parentElement;
     const sLeft = scrollParent ? scrollParent.scrollLeft : 0;
