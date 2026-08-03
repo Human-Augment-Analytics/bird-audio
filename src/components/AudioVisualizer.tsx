@@ -237,7 +237,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   };
 
   // Helper to map Spectrogram Mouse Event to (Time, Frequency)
-  const getCanvasCoords = (e: React.MouseEvent<HTMLDivElement>) => {
+  const [panStart, setPanStart] = useState<{ x: number; scrollLeft: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const getCanvasCoordsFromClient = (clientX: number, clientY: number) => {
     const specContainer = specRef.current;
     if (!specContainer) return null;
     const canvas = specContainer.querySelector('canvas');
@@ -246,8 +249,8 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     const scrollParent = canvas.parentElement;
     const sLeft = scrollParent ? scrollParent.scrollLeft : 0;
     
-    const x = e.clientX - rect.left;
-    const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+    const x = clientX - rect.left;
+    const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
     
     const totalX = x + sLeft;
     const t = Math.max(0, totalX / zoom);
@@ -257,34 +260,64 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   };
 
   const handleSpecMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isDrawMode) return;
-    const coords = getCanvasCoords(e);
+    if ((e.target as HTMLElement).closest('button')) return;
+    const coords = getCanvasCoordsFromClient(e.clientX, e.clientY);
     if (!coords) return;
-    setDrawStart(coords);
-    setDrawCurrent(coords);
-  };
 
-  const handleSpecMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!drawStart) return;
-    const coords = getCanvasCoords(e);
-    if (coords) setDrawCurrent(coords);
-  };
-
-  const handleSpecMouseUp = () => {
-    if (drawStart && drawCurrent) {
-      const tStart = Math.min(drawStart.t, drawCurrent.t);
-      const tEnd = Math.max(drawStart.t, drawCurrent.t);
-      const fLow = Math.min(drawStart.f, drawCurrent.f);
-      const fHigh = Math.max(drawStart.f, drawCurrent.f);
-
-      // Only add if time width > 0.05s or frequency height > 100Hz
-      if (Math.abs(tEnd - tStart) > 0.05) {
-        onAddEventRef.current?.({ t_start: tStart, t_end: tEnd, f_low: fLow, f_high: fHigh });
+    if (isDrawMode) {
+      setDrawStart(coords);
+      setDrawCurrent(coords);
+    } else {
+      const canvas = specRef.current?.querySelector('canvas');
+      const scrollParent = canvas?.parentElement;
+      if (scrollParent) {
+        setPanStart({ x: e.clientX, scrollLeft: scrollParent.scrollLeft });
       }
     }
-    setDrawStart(null);
-    setDrawCurrent(null);
+    setIsDragging(true);
   };
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleWindowMouseMove = (ev: MouseEvent) => {
+      if (isDrawModeRef.current && drawStart) {
+        const coords = getCanvasCoordsFromClient(ev.clientX, ev.clientY);
+        if (coords) setDrawCurrent(coords);
+      } else if (!isDrawModeRef.current && panStart) {
+        const canvas = specRef.current?.querySelector('canvas');
+        const scrollParent = canvas?.parentElement;
+        if (scrollParent) {
+          const dx = ev.clientX - panStart.x;
+          scrollParent.scrollLeft = panStart.scrollLeft - dx;
+        }
+      }
+    };
+
+    const handleWindowMouseUp = () => {
+      if (isDrawModeRef.current && drawStart && drawCurrent) {
+        const tStart = Math.min(drawStart.t, drawCurrent.t);
+        const tEnd = Math.max(drawStart.t, drawCurrent.t);
+        const fLow = Math.min(drawStart.f, drawCurrent.f);
+        const fHigh = Math.max(drawStart.f, drawCurrent.f);
+
+        if (Math.abs(tEnd - tStart) > 0.05) {
+          onAddEventRef.current?.({ t_start: tStart, t_end: tEnd, f_low: fLow, f_high: fHigh });
+        }
+      }
+      setIsDragging(false);
+      setDrawStart(null);
+      setDrawCurrent(null);
+      setPanStart(null);
+    };
+
+    window.addEventListener('mousemove', handleWindowMouseMove);
+    window.addEventListener('mouseup', handleWindowMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+    };
+  }, [isDragging, drawStart, drawCurrent, panStart, zoom]);
 
   if (!src) {
     return (
@@ -367,10 +400,14 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, backgroundColor: 'var(--bg-deep)',
         padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)', overflow: 'hidden' }}>
         <div
-          style={{ position: 'relative', width: '100%', overflow: 'hidden', cursor: isDrawMode ? 'crosshair' : 'default' }}
+          style={{
+            position: 'relative',
+            width: '100%',
+            overflow: 'hidden',
+            cursor: isDrawMode ? 'crosshair' : (isDragging ? 'grabbing' : 'grab'),
+            userSelect: 'none',
+          }}
           onMouseDown={handleSpecMouseDown}
-          onMouseMove={handleSpecMouseMove}
-          onMouseUp={handleSpecMouseUp}
         >
           <div ref={specRef} style={{ width: '100%', overflow: 'hidden', backgroundColor: 'var(--bg-deep)' }} />
           {previewStyle && <div style={previewStyle} />}
