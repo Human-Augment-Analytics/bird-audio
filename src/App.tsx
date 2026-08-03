@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import SetupView from "./components/SetupView";
 import RunView from "./components/RunView";
 import ReviewView from "./components/ReviewView";
+import { EcologyView } from "./components/EcologyView";
 import appIcon from "./assets/app-icon.png";
 import { cancelSession, exportSession, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
 export default function App() {
   const [view, setView] = useState<"setup" | "run">("setup");
-  const [section, setSection] = useState<"batch" | "review">("batch");
+  const [section, setSection] = useState<"batch" | "review" | "ecology">("batch");
   const [start, setStart] = useState<StartResult | null>(null);
   const [opts, setOpts] = useState<StartOpts | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -128,6 +129,9 @@ export default function App() {
         <button className={section === "review" ? "primary" : "backlink"} onClick={() => setSection("review")} disabled={!start || !opts}>
           Review
         </button>
+        <button className={section === "ecology" ? "primary" : "backlink"} onClick={() => setSection("ecology")}>
+          Ecology
+        </button>
       </nav>
 
       {section === "batch" && view === "setup" && <SetupView onStarted={onStarted} />}
@@ -155,6 +159,12 @@ export default function App() {
       )}
       {section === "review" && start && opts && (
         <ReviewView start={start} opts={opts} rows={rows} />
+      )}
+      {section === "ecology" && (
+        <EcologyView
+          sessionId={start ? start.session_id : null}
+          dbPath={opts ? `${opts.outputDir}/batch.db` : null}
+        />
       )}
     </main>
   );

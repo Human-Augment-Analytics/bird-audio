@@ -748,3 +748,44 @@ input[type="checkbox"]:checked::after {
   display: inline-block;
 }
 
+/* — EcologyView Dashboard Styles — */
+:root {
+  --surface-dark: #100d0a;
+}
+
+.view-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.stat-box {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.card.error {
+  border-color: var(--coral);
+  color: var(--coral);
+}
+
+
