@@ -239,8 +239,14 @@ pub struct PathMetadata {
 
 pub fn parse_path_metadata(path: &str) -> PathMetadata {
     use regex::Regex;
-    let rec_re = Regex::new(r"(?i)(PSL\d+|PSM\d+|PSH\d+|H\d+)").unwrap();
-    let dt_re = Regex::new(r"(20\d{6})[_-]?([0-2]\d[0-5]\d[0-5]\d)").unwrap();
+    use std::sync::OnceLock;
+
+    static RECORDER_RE: OnceLock<Regex> = OnceLock::new();
+    static DATETIME_RE: OnceLock<Regex> = OnceLock::new();
+    let rec_re = RECORDER_RE
+        .get_or_init(|| Regex::new(r"(?i)(PSL\d+|PSM\d+|PSH\d+|H\d+)").unwrap());
+    let dt_re = DATETIME_RE
+        .get_or_init(|| Regex::new(r"(20\d{6})[_-]?([0-2]\d[0-5]\d[0-5]\d)").unwrap());
 
     let recorder_id = rec_re.find(path).map(|m| m.as_str().to_uppercase());
     let elevation_band = recorder_id.as_ref().and_then(|rid| {

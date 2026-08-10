@@ -129,6 +129,20 @@ export default function App() {
     }
   };
 
+  const handleNewSession = () => {
+    setView("setup");
+    setSection("batch");
+    setStart(null);
+    setOpts(null);
+    setProgress(null);
+    setSummary(null);
+    setRows([]);
+    setThroughput(0);
+    setNotice(null);
+    setCancelled(false);
+    tRef.current = null;
+  };
+
   const doExport = async (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => {
     if (!start || !opts) return;
     const ext = fmt === "json" ? "json" : fmt === "raven" ? "txt" : "csv";
@@ -147,6 +161,7 @@ export default function App() {
   };
 
   const noticeIsError = notice !== null && /failed|error/i.test(notice);
+  const analyticsAvailable = summary !== null && ["done", "failed", "cancelled"].includes(summary.status);
 
   return (
     <main style={{ padding: "44px 24px 64px", maxWidth: 1040, margin: "0 auto" }}>
@@ -166,15 +181,20 @@ export default function App() {
         <button className={section === "review" ? "primary" : "backlink"} onClick={() => setSection("review")} disabled={!start || !opts}>
           Review
         </button>
-        <button className={section === "ecology" ? "primary" : "backlink"} onClick={() => setSection("ecology")}>
-          Ecology
+        <button
+          className={section === "ecology" ? "primary" : "backlink"}
+          onClick={() => setSection("ecology")}
+          disabled={!analyticsAvailable}
+          title={analyticsAvailable ? "Open session analytics" : "Available after the batch session reaches a terminal state"}
+        >
+          Analytics
         </button>
       </nav>
 
       {section === "batch" && view === "setup" && <SetupView onStarted={onStarted} />}
       {section === "batch" && view === "run" && start && (
         <>
-          <button className="backlink reveal" style={{ marginBottom: 14 }} disabled={summary === null} onClick={() => setView("setup")}>
+          <button className="backlink reveal" style={{ marginBottom: 14 }} disabled={summary === null} onClick={handleNewSession}>
             ← Start a new session
           </button>
           {notice && (
@@ -202,6 +222,7 @@ export default function App() {
         <EcologyView
           sessionId={start ? start.session_id : null}
           dbPath={opts ? `${opts.outputDir}/batch.db` : null}
+          sessionStatus={summary?.status ?? null}
         />
       )}
     </main>

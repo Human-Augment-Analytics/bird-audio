@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS sessions(
   theta_a REAL NOT NULL,
   theta_b REAL NOT NULL,
   total_files INTEGER NOT NULL DEFAULT 0,
+  initial_total_files INTEGER,
   status TEXT NOT NULL DEFAULT 'running',
   species_name TEXT DEFAULT 'Hume''s Leaf Warbler',
   config_key TEXT,
@@ -236,6 +237,7 @@ fn ensure_curation_columns(conn: &Connection) -> rusqlite::Result<()> {
         ("classifier_c_path", "TEXT"),
         ("f_min_hz", "REAL"),
         ("f_max_hz", "REAL"),
+        ("initial_total_files", "INTEGER"),
     ];
     for (col, def) in session_columns {
         if !existing_sessions.iter().any(|n| n == col) {
@@ -495,7 +497,13 @@ impl Store {
             inserted += n;
         }
         self.conn.execute(
-            "UPDATE sessions SET total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1) WHERE id=?1",
+            "UPDATE sessions
+             SET total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1),
+                 initial_total_files=CASE
+                     WHEN status='running' THEN (SELECT COUNT(*) FROM files WHERE session_id=?1)
+                     ELSE initial_total_files
+                 END
+             WHERE id=?1",
             params![session_id],
         )?;
         Ok(inserted)
@@ -562,7 +570,10 @@ impl Store {
         }
 
         tx.execute(
-            "UPDATE sessions SET total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1) WHERE id=?1",
+            "UPDATE sessions
+             SET total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1),
+                 initial_total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1)
+             WHERE id=?1",
             params![session_id],
         )?;
         tx.commit()?;
@@ -1104,6 +1115,7 @@ impl Store {
 
     pub fn delete_cached_files(&self, session_id: i64, paths: &[String]) -> rusqlite::Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        let mut deleted = 0usize;
         for path in paths {
             // Get file_id to delete events
             let file_id: Option<i64> = tx.query_row(
@@ -1114,15 +1126,22 @@ impl Store {
 
             if let Some(id) = file_id {
                 tx.execute("DELETE FROM events WHERE file_id=?1", params![id])?;
-                tx.execute("DELETE FROM files WHERE id=?1", params![id])?;
+                deleted += tx.execute("DELETE FROM files WHERE id=?1", params![id])?;
             }
         }
-        
-        // Update session total
-        tx.execute(
-            "UPDATE sessions SET total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1) WHERE id=?1",
-            params![session_id],
-        )?;
+
+        if deleted > 0 {
+            // Once cached rows are removed, the previous terminal summary no longer
+            // describes the original input inventory. The next explicit run will
+            // reconcile the scan and set the session back to `running`.
+            tx.execute(
+                "UPDATE sessions
+                 SET total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1),
+                     status='invalidated'
+                 WHERE id=?1",
+                params![session_id],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -1313,6 +1332,11 @@ mod tests {
         let latest_sid = store.get_latest_session_id().unwrap().unwrap();
         assert_eq!(latest_sid, sid);
 
+        store
+            .delete_cached_files(sid, &["missing.wav".to_string()])
+            .unwrap();
+        assert_eq!(store.summary(sid).unwrap().status, "running");
+
         // Delete only file 1
         store.delete_cached_files(sid, &["a.wav".to_string()]).unwrap();
 
@@ -1320,6 +1344,7 @@ mod tests {
         let files = store.list_files(sid).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "b.wav");
+        assert_eq!(store.summary(sid).unwrap().status, "invalidated");
 
         let event_count: i64 = store.conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap();
         assert_eq!(event_count, 1);
@@ -1362,6 +1387,14 @@ mod tests {
         for col in &["review_status", "source", "label", "note", "reviewed_at"] {
             assert!(existing.contains(&col.to_string()), "missing column: {col}");
         }
+        let session_columns: Vec<String> = {
+            let mut stmt = s.conn.prepare("PRAGMA table_info(sessions)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .map(|row| row.unwrap())
+                .collect()
+        };
+        assert!(session_columns.contains(&"initial_total_files".to_string()));
     }
 
     #[test]

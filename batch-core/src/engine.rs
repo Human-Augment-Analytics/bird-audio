@@ -92,6 +92,7 @@ fn record_manifest(
     }
     let effective_device = value
         .pointer("/analysis/device")
+        .or_else(|| value.pointer("/extra/device"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
     let text = match serde_json::to_string(&value) {

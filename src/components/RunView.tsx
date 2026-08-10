@@ -16,25 +16,6 @@ interface Props {
   outputDir: string;
 }
 
-/* Eased count-up for the completion stats — adds a beat of delight on finish. */
-function useCountUp(target: number, run: boolean, duration = 1000) {
-  const [val, setVal] = useState(0);
-  useEffect(() => {
-    if (!run) return;
-    let raf = 0;
-    const start = performance.now();
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / duration);
-      const eased = 1 - Math.pow(1 - t, 3);
-      setVal(Math.round(target * eased));
-      if (t < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target, run, duration]);
-  return run ? val : 0;
-}
-
 function Stat({ label, value, color }: { label: string; value: number | string; color?: string }) {
   return (
     <div className="stat">
@@ -92,9 +73,9 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   const lastMs = progress?.last_elapsed_ms ?? null;
   const elapsedTotalMs = progress?.elapsed_ms_total ?? null;
 
-  const nEvents = useCountUp(summary?.n_events ?? 0, done);
-  const nComplete = useCountUp(summary?.n_complete ?? 0, done);
-  const nRetained = useCountUp(summary?.n_retained ?? 0, done);
+  const nEvents = summary?.n_events ?? 0;
+  const nComplete = summary?.n_complete ?? 0;
+  const nRetained = summary?.n_retained ?? 0;
 
   const etaTime = useMemo(() => {
     if (!eta || eta <= 0) return null;

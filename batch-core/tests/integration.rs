@@ -75,6 +75,17 @@ fn worker_manifest_is_stored_once_for_the_session() {
     assert!(parsed["extra"]["worker_pid"].is_number());
     assert_eq!(parsed["analysis"]["theta_a"], 0.0);
     assert_eq!(parsed["analysis"]["theta_b"], 0.53);
+    let effective_device: Option<String> = store
+        .lock()
+        .unwrap()
+        .conn
+        .query_row(
+            "SELECT effective_device FROM sessions WHERE id=?1",
+            rusqlite::params![sid],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(effective_device.as_deref(), Some("cpu"));
 }
 
 #[test]
