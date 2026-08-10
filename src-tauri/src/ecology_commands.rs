@@ -894,6 +894,7 @@ mod tests {
                 4.0,
                 4_000.0,
                 5_000.0,
+                "complete",
             )
             .unwrap();
         let with_manual = get_ecological_summary(sid, db_path.to_str().unwrap().to_string())

@@ -78,10 +78,14 @@ After a batch run, switch to **Review** to turn raw ML output into a verified da
    - **Reject** — a false positive (kept in the DB, marked rejected).
    - **Reset** — back to *unreviewed*.
 4. **Fix the bounds.** Drag the edges of an event box to correct its time/frequency extent.
-5. **Add a manual event.** Draw a new box on the spectrogram for a call the model missed.
+5. **Add a manual event.** Draw a new box on the spectrogram for a call the model missed, then record whether it is a **complete buzz**, **incomplete buzz**, or **not sure**. “Not sure” sends that finalized window to Stage B. The app shows the score and threshold, then asks you to accept the suggestion, override it with a human decision, or leave it unresolved. Stage B never silently becomes a human label.
 6. **Delete** an event entirely to remove a false positive from the data.
 
 Decisions are saved to `batch.db` and accumulate across Review sessions — stop and resume curation any time.
+Human completeness, the Stage B score, and the source of the final label are stored separately. If you
+change the bounds of a Stage-B-assisted manual box, its old model result is invalidated because it no
+longer describes the same window. Manual annotations remain separate from pipeline detections in
+research-rate numerators unless exhaustive standardized search coverage is declared.
 
 ### Keyboard shortcuts
 

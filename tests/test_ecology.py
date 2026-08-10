@@ -271,6 +271,23 @@ def test_apply_thresholds_does_not_mutate_input():
     assert records[0]["retained"] is True
 
 
+def test_threshold_sweep_preserves_manual_completeness_provenance():
+    manual = {
+        "source": "manual",
+        "stage_a_conf": 0.0,
+        "completeness_score": 0.91,
+        "completeness_label": "complete",
+        "human_completeness": "unsure",
+        "completeness_source": "stage_b_accepted",
+        "retained": None,
+    }
+    result = eco.apply_thresholds([manual], theta_a=0.99, theta_b=0.99)[0]
+    assert result["completeness_label"] == "complete"
+    assert result["human_completeness"] == "unsure"
+    assert result["completeness_source"] == "stage_b_accepted"
+    assert result["retained"] is None
+
+
 # --- band aggregation uses recorder means -----------------------------------
 
 def test_band_summary_averages_recorders_not_events():

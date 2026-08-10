@@ -171,6 +171,62 @@ pub async fn run_verification_plan(
     serde_json::to_string(&plan).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn score_manual_completeness(
+    audio_path: String,
+    classifier: Option<String>,
+    device: String,
+    t_start: f64,
+    t_end: f64,
+    f_low: f64,
+    f_high: f64,
+    theta_b: f64,
+    f_min_hz: Option<f64>,
+    f_max_hz: Option<f64>,
+) -> Result<String, String> {
+    if !std::path::Path::new(&audio_path).is_file() {
+        return Err(format!("Audio file not found: {audio_path}"));
+    }
+    if !t_start.is_finite() || !t_end.is_finite() || t_start < 0.0 || t_end <= t_start {
+        return Err("Manual window needs finite bounds with end after start".to_string());
+    }
+    if !f_low.is_finite() || !f_high.is_finite() || f_low < 0.0 || f_high <= f_low {
+        return Err("Manual window needs finite frequency bounds with high above low".to_string());
+    }
+    if !theta_b.is_finite() || !(0.0..=1.0).contains(&theta_b) {
+        return Err("Stage B threshold must be between 0 and 1".to_string());
+    }
+    if f_min_hz.is_some_and(|value| !value.is_finite() || value < 0.0)
+        || f_max_hz.is_some_and(|value| !value.is_finite() || value <= 0.0)
+        || matches!((f_min_hz, f_max_hz), (Some(low), Some(high)) if low >= high)
+    {
+        return Err("Stage B frequency band must be finite, positive, and non-empty".to_string());
+    }
+    let mut args = vec![
+        "--audio".into(), audio_path,
+        "--device".into(), device,
+        "--t-start".into(), t_start.to_string(),
+        "--t-end".into(), t_end.to_string(),
+        "--f-low".into(), f_low.to_string(),
+        "--f-high".into(), f_high.to_string(),
+        "--theta-b".into(), theta_b.to_string(),
+    ];
+    if let Some(value) = classifier.filter(|value| !value.trim().is_empty()) {
+        args.extend(["--classifier".into(), value]);
+    }
+    if let Some(value) = f_min_hz {
+        args.extend(["--f-min-hz".into(), value.to_string()]);
+    }
+    if let Some(value) = f_max_hz {
+        args.extend(["--f-max-hz".into(), value.to_string()]);
+    }
+    let stdout = run_script("scripts/score_completeness.py", &args).await?;
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|error| {
+        format!("score_completeness.py returned invalid JSON: {error}\n{}", stdout.trim())
+    })?;
+    serde_json::to_string(&value).map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +237,15 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err();
         assert!(err_msg.contains("Error loading audio file") || err_msg.contains("No such file"));
+    }
+
+    #[tokio::test]
+    async fn score_manual_completeness_rejects_missing_audio_before_running_python() {
+        let result = score_manual_completeness(
+            "nonexistent.wav".to_string(), None, "cpu".to_string(),
+            0.0, 1.0, 5000.0, 7000.0, 0.5, None, None,
+        ).await;
+        assert!(result.unwrap_err().contains("Audio file not found"));
     }
 
     #[tokio::test]

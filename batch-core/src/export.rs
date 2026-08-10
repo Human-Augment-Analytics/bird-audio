@@ -12,7 +12,8 @@ use crate::store::Store;
 use crate::audio::audio_duration_hours;
 
 const SELECT: &str = "SELECT f.path, e.t_start, e.t_end, e.duration, e.f_low, e.f_high, \
-     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label, e.retained, e.n_members, e.review_status, \
+     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label, \
+     e.human_completeness, e.completeness_source, e.retained, e.n_members, e.review_status, \
      e.stage_c_label, e.stage_c_score \
      FROM events e JOIN files f ON f.id=e.file_id \
      WHERE e.session_id=?1 \
@@ -42,6 +43,8 @@ struct Row {
     stage_a_conf: f64,
     completeness_score: Option<f64>,
     completeness_label: Option<String>,
+    human_completeness: Option<String>,
+    completeness_source: Option<String>,
     retained: Option<bool>,
     n_members: i64,
     review_status: String,
@@ -71,11 +74,13 @@ fn collect(store: &Store, session_id: i64, complete_only: bool, confirmed_only: 
             stage_a_conf: r.get(7)?,
             completeness_score: r.get(8)?,
             completeness_label: r.get(9)?,
-            retained: r.get::<_, Option<i64>>(10)?.map(|v| v != 0),
-            n_members: r.get(11)?,
-            review_status: r.get(12)?,
-            stage_c_label: r.get(13)?,
-            stage_c_score: r.get(14)?,
+            human_completeness: r.get(10)?,
+            completeness_source: r.get(11)?,
+            retained: r.get::<_, Option<i64>>(12)?.map(|v| v != 0),
+            n_members: r.get(13)?,
+            review_status: r.get(14)?,
+            stage_c_label: r.get(15)?,
+            stage_c_score: r.get(16)?,
             site_id: None,
             elevation_m: None,
             lat: None,
@@ -433,12 +438,12 @@ pub fn export_csv(
     if metadata_path.is_some() {
         writeln!(
             f,
-            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members,review_status,stage_c_label,stage_c_score,site_id,elevation_m,lat,lon"
+            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,human_completeness,completeness_source,retained,n_members,review_status,stage_c_label,stage_c_score,site_id,elevation_m,lat,lon"
         )?;
     } else {
         writeln!(
             f,
-            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members,review_status,stage_c_label,stage_c_score"
+            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,human_completeness,completeness_source,retained,n_members,review_status,stage_c_label,stage_c_score"
         )?;
     }
 
@@ -448,7 +453,7 @@ pub fn export_csv(
         if metadata_path.is_some() {
             writeln!(
                 f,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 csv_escape(&r.path),
                 r.t_start,
                 r.t_end,
@@ -459,6 +464,8 @@ pub fn export_csv(
                 r.stage_a_conf,
                 r.completeness_score.map(|v| v.to_string()).unwrap_or_default(),
                 r.completeness_label.clone().unwrap_or_default(),
+                r.human_completeness.clone().unwrap_or_default(),
+                r.completeness_source.clone().unwrap_or_default(),
                 r.retained.map(|v| v.to_string()).unwrap_or_default(),
                 r.n_members,
                 csv_escape(&r.review_status),
@@ -472,7 +479,7 @@ pub fn export_csv(
         } else {
             writeln!(
                 f,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 csv_escape(&r.path),
                 r.t_start,
                 r.t_end,
@@ -483,6 +490,8 @@ pub fn export_csv(
                 r.stage_a_conf,
                 r.completeness_score.map(|v| v.to_string()).unwrap_or_default(),
                 r.completeness_label.clone().unwrap_or_default(),
+                r.human_completeness.clone().unwrap_or_default(),
+                r.completeness_source.clone().unwrap_or_default(),
                 r.retained.map(|v| v.to_string()).unwrap_or_default(),
                 r.n_members,
                 csv_escape(&r.review_status),
@@ -759,6 +768,8 @@ mod tests {
         assert_eq!(n, 2);
         let body = std::fs::read_to_string(&p).unwrap();
         assert!(body.starts_with("path,t_start"));
+        let header = body.lines().next().unwrap();
+        assert!(header.contains("human_completeness,completeness_source"));
         assert_eq!(body.trim().lines().count(), 3); // header + 2 rows
         std::fs::remove_file(&p).ok();
     }

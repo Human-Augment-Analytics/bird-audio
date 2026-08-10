@@ -56,6 +56,7 @@ fn code_identities(cwd: &std::path::Path, worker_cmd: &str) -> serde_json::Value
     let mut identities = serde_json::Map::new();
     for relative in [
         "scripts/ml_engine.py",
+        "scripts/score_completeness.py",
         "birdpipe/audio.py",
         "birdpipe/consolidate.py",
         "birdpipe/constants.py",
@@ -765,11 +766,16 @@ pub fn update_event_bounds(output_dir: String, event_id: i64, t_start: f64, t_en
 }
 
 #[tauri::command]
-pub fn add_manual_event(output_dir: String, session_id: i64, path: String, t_start: f64, t_end: f64, f_low: f64, f_high: f64) -> Result<i64, String> {
+pub fn add_manual_event(output_dir: String, session_id: i64, path: String, t_start: f64,
+                        t_end: f64, f_low: f64, f_high: f64,
+                        human_completeness: String) -> Result<i64, String> {
     let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
-    let new_id = store.add_manual_event(session_id, &path, t_start, t_end, f_low, f_high).map_err(|e| e.to_string())?;
+    let new_id = store.add_manual_event(
+        session_id, &path, t_start, t_end, f_low, f_high, &human_completeness,
+    ).map_err(|e| e.to_string())?;
     let meta = serde_json::json!({
-        "path": path, "t_start": t_start, "t_end": t_end, "f_low": f_low, "f_high": f_high
+        "path": path, "t_start": t_start, "t_end": t_end, "f_low": f_low,
+        "f_high": f_high, "human_completeness": human_completeness,
     }).to_string();
     log_telemetry(&store, &NewReviewEvent {
         session_id,
@@ -779,6 +785,42 @@ pub fn add_manual_event(output_dir: String, session_id: i64, path: String, t_sta
         meta: Some(&meta),
     });
     Ok(new_id)
+}
+
+#[tauri::command]
+pub fn set_manual_completeness(
+    output_dir: String,
+    event_id: i64,
+    human_completeness: String,
+    completeness_label: Option<String>,
+    completeness_source: String,
+    completeness_score: Option<f64>,
+) -> Result<(), String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    let scope = event_scope(&store, event_id);
+    store.set_manual_completeness(
+        event_id,
+        &human_completeness,
+        completeness_label.as_deref(),
+        &completeness_source,
+        completeness_score,
+    ).map_err(|e| e.to_string())?;
+    if let Some((session_id, file_id)) = scope {
+        let meta = serde_json::json!({
+            "human_completeness": human_completeness,
+            "completeness_label": completeness_label,
+            "completeness_source": completeness_source,
+            "completeness_score": completeness_score,
+        }).to_string();
+        log_telemetry(&store, &NewReviewEvent {
+            session_id,
+            event_id: Some(event_id),
+            file_id: Some(file_id),
+            action: "set_manual_completeness",
+            meta: Some(&meta),
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -894,7 +936,9 @@ mod tests {
             classifier_path: None, classifier_c_path: None, f_min_hz: None, f_max_hz: None,
         }).unwrap();
         store.add_files(sid, &[PathBuf::from("/d/a.wav")]).unwrap();
-        let eid = store.add_manual_event(sid, "/d/a.wav", 1.0, 2.0, 4000.0, 8000.0).unwrap();
+        let eid = store.add_manual_event(
+            sid, "/d/a.wav", 1.0, 2.0, 4000.0, 8000.0, "complete",
+        ).unwrap();
         (dir.to_string_lossy().into_owned(), sid, eid)
     }
 

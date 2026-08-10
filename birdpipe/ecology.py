@@ -173,6 +173,7 @@ _SELECT_EVENTS = """
            e.t_start, e.t_end, e.duration,
            e.f_low, e.f_high, e.center_freq,
            e.stage_a_conf, e.completeness_score, e.completeness_label,
+           e.human_completeness, e.completeness_source,
            e.retained, e.n_members, e.review_status, e.source
     FROM events e
     JOIN files f ON f.id = e.file_id
@@ -225,6 +226,13 @@ def apply_thresholds(
     out: List[Dict] = []
     for rec in records:
         r = dict(rec)
+        if str(r.get("source") or "ml").lower() == "manual":
+            # Manual completeness is a separate human/assistive decision. Do
+            # not overwrite it with detector thresholds or treat Stage A=0 as
+            # a model detection when rebuilding sensitivity datasets.
+            r["retained"] = None
+            out.append(r)
+            continue
         ta = theta_a if theta_a is not None else r.get("session_theta_a")
         tb = theta_b if theta_b is not None else r.get("session_theta_b")
         if ta is None or tb is None:
@@ -261,7 +269,22 @@ def load_event_records(
         if session_id is None:
             return []
         thetas = _session_thetas(conn)
-        rows = conn.execute(_SELECT_EVENTS, (session_id, session_id)).fetchall()
+        # Historical/test databases predate the manual-completeness provenance
+        # columns.  Keep them readable without weakening the migrated desktop
+        # schema: synthesize NULLs only when those optional columns are absent.
+        event_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(events)").fetchall()
+        }
+        query = _SELECT_EVENTS
+        if "human_completeness" not in event_columns:
+            query = query.replace(
+                "e.human_completeness,", "NULL AS human_completeness,"
+            )
+        if "completeness_source" not in event_columns:
+            query = query.replace(
+                "e.completeness_source,", "NULL AS completeness_source,"
+            )
+        rows = conn.execute(query, (session_id, session_id)).fetchall()
     finally:
         if owned:
             conn.close()

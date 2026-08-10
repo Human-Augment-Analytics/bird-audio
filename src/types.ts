@@ -156,6 +156,8 @@ export interface EventRow {
   stage_a_conf: number;
   completeness_score: number | null;
   completeness_label: string | null;
+  human_completeness: ManualCompletenessDecision | null;
+  completeness_source: ManualCompletenessSource | null;
   retained: boolean | null;
   n_members: number;
   review_status: "unreviewed" | "confirmed" | "rejected";
@@ -165,6 +167,15 @@ export interface EventRow {
   reviewed_at: string | null;
   stage_c_label: string | null;
   stage_c_score: number | null;
+}
+
+export type ManualCompletenessDecision = "complete" | "incomplete" | "unsure";
+export type ManualCompletenessSource = "human" | "stage_b_accepted" | "unresolved";
+
+export interface CompletenessSuggestion {
+  score: number;
+  label: "complete" | "incomplete";
+  threshold: number;
 }
 
 export interface ResearchRateBin {

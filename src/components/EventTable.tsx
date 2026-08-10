@@ -86,6 +86,13 @@ export const EventTable: React.FC<EventTableProps> = ({
                   {ev.completeness_score !== null && (
                     <span style={{ color: 'var(--text-faint)', marginLeft: '0.3rem', fontFamily: 'var(--mono)', fontSize: '0.76rem' }}>({ev.completeness_score.toFixed(2)})</span>
                   )}
+                  {ev.source === 'manual' && ev.human_completeness && (
+                    <div style={{ color: 'var(--text-faint)', marginTop: 3, fontFamily: 'var(--mono)', fontSize: '0.64rem' }}>
+                      human: {ev.human_completeness}
+                      {ev.completeness_source === 'stage_b_accepted' ? ' · Stage B accepted' :
+                        ev.completeness_source === 'unresolved' && ev.completeness_score !== null ? ' · Stage B suggestion' : ''}
+                    </div>
+                  )}
                 </td>
                 <td style={{ padding: '0.6rem 0.5rem', fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums' }}>{ev.stage_a_conf.toFixed(2)}</td>
                 <td style={{ padding: '0.6rem 0.5rem' }}>

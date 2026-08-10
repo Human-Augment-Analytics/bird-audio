@@ -94,6 +94,8 @@ pub struct EventRow {
     pub stage_a_conf: f64,
     pub completeness_score: Option<f64>,
     pub completeness_label: Option<String>,
+    pub human_completeness: Option<String>,
+    pub completeness_source: Option<String>,
     pub retained: Option<bool>,
     pub n_members: i64,
     pub review_status: String,
@@ -189,6 +191,8 @@ CREATE TABLE IF NOT EXISTS events(
   stage_a_conf REAL,
   completeness_score REAL,
   completeness_label TEXT,
+  human_completeness TEXT,
+  completeness_source TEXT,
   retained INTEGER,
   n_members INTEGER,
   stage_c_label TEXT,
@@ -214,6 +218,8 @@ fn ensure_curation_columns(conn: &Connection) -> rusqlite::Result<()> {
         ("reviewed_at",   "TEXT"),
         ("stage_c_label", "TEXT"),
         ("stage_c_score", "REAL"),
+        ("human_completeness", "TEXT"),
+        ("completeness_source", "TEXT"),
     ];
     for (col, def) in event_columns {
         if !existing_events.iter().any(|n| n == col) {
@@ -289,6 +295,8 @@ CREATE TABLE events_no_reuse(
   stage_a_conf REAL,
   completeness_score REAL,
   completeness_label TEXT,
+  human_completeness TEXT,
+  completeness_source TEXT,
   retained INTEGER,
   n_members INTEGER,
   stage_c_label TEXT,
@@ -301,11 +309,13 @@ CREATE TABLE events_no_reuse(
 );
 INSERT INTO events_no_reuse(
   id, session_id, file_id, t_start, t_end, duration, f_low, f_high, center_freq,
-  stage_a_conf, completeness_score, completeness_label, retained, n_members,
+  stage_a_conf, completeness_score, completeness_label, human_completeness,
+  completeness_source, retained, n_members,
   stage_c_label, stage_c_score, review_status, source, label, note, reviewed_at
 )
 SELECT id, session_id, file_id, t_start, t_end, duration, f_low, f_high, center_freq,
-       stage_a_conf, completeness_score, completeness_label, retained, n_members,
+       stage_a_conf, completeness_score, completeness_label, human_completeness,
+       completeness_source, retained, n_members,
        stage_c_label, stage_c_score, review_status, source, label, note, reviewed_at
 FROM events;
 DROP TABLE events;
@@ -782,7 +792,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.file_id, e.t_start, e.t_end, e.duration, e.f_low, e.f_high,
                     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label,
-                    e.retained, e.n_members, e.review_status, e.source, e.label, e.note,
+                    e.human_completeness, e.completeness_source, e.retained, e.n_members,
+                    e.review_status, e.source, e.label, e.note,
                     e.reviewed_at, e.stage_c_label, e.stage_c_score
              FROM events e
              WHERE e.file_id = (SELECT id FROM files WHERE session_id=?1 AND path=?2)
@@ -793,9 +804,10 @@ impl Store {
                 id: r.get(0)?, file_id: r.get(1)?, t_start: r.get(2)?, t_end: r.get(3)?,
                 duration: r.get(4)?, f_low: r.get(5)?, f_high: r.get(6)?, center_freq: r.get(7)?,
                 stage_a_conf: r.get(8)?, completeness_score: r.get(9)?, completeness_label: r.get(10)?,
-                retained: r.get::<_, Option<i64>>(11)?.map(|v| v != 0), n_members: r.get(12)?,
-                review_status: r.get(13)?, source: r.get(14)?, label: r.get(15)?, note: r.get(16)?,
-                reviewed_at: r.get(17)?, stage_c_label: r.get(18)?, stage_c_score: r.get(19)?,
+                human_completeness: r.get(11)?, completeness_source: r.get(12)?,
+                retained: r.get::<_, Option<i64>>(13)?.map(|v| v != 0), n_members: r.get(14)?,
+                review_status: r.get(15)?, source: r.get(16)?, label: r.get(17)?, note: r.get(18)?,
+                reviewed_at: r.get(19)?, stage_c_label: r.get(20)?, stage_c_score: r.get(21)?,
             })
         })?;
         rows.collect()
@@ -833,7 +845,18 @@ impl Store {
     pub fn update_event_bounds(&self, event_id: i64, t_start: f64, t_end: f64, f_low: f64, f_high: f64) -> rusqlite::Result<()> {
         let changed = self.conn.execute(
             "UPDATE events SET t_start=?2, t_end=?3, duration=(?3 - ?2),
-                 f_low=?4, f_high=?5, center_freq=((?4 + ?5) / 2.0) WHERE id=?1",
+                 f_low=?4, f_high=?5, center_freq=((?4 + ?5) / 2.0),
+                 completeness_score=CASE WHEN source='manual' THEN NULL ELSE completeness_score END,
+                 completeness_label=CASE
+                   WHEN source='manual' AND completeness_source IN ('stage_b_accepted','unresolved') THEN NULL
+                   ELSE completeness_label END,
+                 completeness_source=CASE
+                   WHEN source='manual' AND completeness_source='stage_b_accepted' THEN 'unresolved'
+                   ELSE completeness_source END,
+                 human_completeness=CASE
+                   WHEN source='manual' AND completeness_source='stage_b_accepted' THEN 'unsure'
+                   ELSE human_completeness END
+             WHERE id=?1",
             params![event_id, t_start, t_end, f_low, f_high],
         )?;
         if changed == 0 {
@@ -842,7 +865,15 @@ impl Store {
         Ok(())
     }
 
-    pub fn add_manual_event(&self, session_id: i64, path: &str, t_start: f64, t_end: f64, f_low: f64, f_high: f64) -> rusqlite::Result<i64> {
+    pub fn add_manual_event(&self, session_id: i64, path: &str, t_start: f64, t_end: f64,
+                            f_low: f64, f_high: f64, human_completeness: &str) -> rusqlite::Result<i64> {
+        let (completeness_label, completeness_source) = match human_completeness {
+            "complete" => (Some("complete"), "human"),
+            "incomplete" => (Some("incomplete"), "human"),
+            "unsure" => (None, "unresolved"),
+            _ => return Err(rusqlite::Error::InvalidParameterName(
+                "human_completeness must be complete, incomplete, or unsure".into())),
+        };
         let file_id: i64 = self.conn.query_row(
             "SELECT id FROM files WHERE session_id=?1 AND path=?2",
             params![session_id, path], |r| r.get(0),
@@ -850,14 +881,70 @@ impl Store {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO events(session_id, file_id, t_start, t_end, duration, f_low, f_high, center_freq,
-                 stage_a_conf, n_members, completeness_score, completeness_label, retained, source, review_status)
-             VALUES(?1,?2,?3,?4,(?4 - ?3),?5,?6,((?5 + ?6) / 2.0),0.0,0,NULL,NULL,NULL,'manual','confirmed')",
-            params![session_id, file_id, t_start, t_end, f_low, f_high],
+                 stage_a_conf, n_members, completeness_score, completeness_label,
+                 human_completeness, completeness_source, retained, source, review_status)
+             VALUES(?1,?2,?3,?4,(?4 - ?3),?5,?6,((?5 + ?6) / 2.0),0.0,0,NULL,?7,?8,?9,NULL,'manual','confirmed')",
+            params![session_id, file_id, t_start, t_end, f_low, f_high,
+                    completeness_label, human_completeness, completeness_source],
         )?;
         let event_id = tx.last_insert_rowid();
         Self::refresh_file_event_counts(&tx, file_id)?;
         tx.commit()?;
         Ok(event_id)
+    }
+
+    pub fn set_manual_completeness(
+        &self, event_id: i64, human_completeness: &str,
+        completeness_label: Option<&str>, completeness_source: &str,
+        completeness_score: Option<f64>,
+    ) -> rusqlite::Result<()> {
+        if !matches!(human_completeness, "complete" | "incomplete" | "unsure") {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "human_completeness must be complete, incomplete, or unsure".into()));
+        }
+        if completeness_label.is_some_and(|value| !matches!(value, "complete" | "incomplete")) {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "completeness_label must be complete, incomplete, or null".into()));
+        }
+        if !matches!(completeness_source, "human" | "stage_b_accepted" | "unresolved") {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "completeness_source must be human, stage_b_accepted, or unresolved".into()));
+        }
+        if completeness_score.is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value)) {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "completeness_score must be finite and between 0 and 1".into()));
+        }
+        let provenance_is_consistent = match completeness_source {
+            "human" => completeness_label == Some(human_completeness)
+                && human_completeness != "unsure",
+            "stage_b_accepted" => human_completeness == "unsure"
+                && completeness_label.is_some()
+                && completeness_score.is_some(),
+            "unresolved" => human_completeness == "unsure"
+                && completeness_label.is_none(),
+            _ => false,
+        };
+        if !provenance_is_consistent {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "manual completeness decision, label, score, and source are inconsistent".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let file_id: i64 = tx.query_row(
+            "SELECT file_id FROM events WHERE id=?1 AND source='manual'",
+            params![event_id], |row| row.get(0),
+        )?;
+        let changed = tx.execute(
+            "UPDATE events SET human_completeness=?2, completeness_label=?3,
+                 completeness_source=?4, completeness_score=?5 WHERE id=?1 AND source='manual'",
+            params![event_id, human_completeness, completeness_label,
+                    completeness_source, completeness_score],
+        )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Self::refresh_file_event_counts(&tx, file_id)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn delete_event(&self, event_id: i64) -> rusqlite::Result<()> {
@@ -909,11 +996,12 @@ impl Store {
         tx.execute(
             "INSERT INTO events(
                  session_id, file_id, t_start, t_end, duration, f_low, f_high, center_freq,
-                 stage_a_conf, completeness_score, completeness_label, retained, n_members,
-                 review_status, source, label, note, reviewed_at, stage_c_label, stage_c_score
+                 stage_a_conf, completeness_score, completeness_label, human_completeness,
+                 completeness_source, retained, n_members, review_status, source, label, note,
+                 reviewed_at, stage_c_label, stage_c_score
              ) VALUES(
                  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                 ?14, ?15, ?16, ?17, ?18, ?19, ?20
+                 ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
              )",
             params![
                 session_id,
@@ -927,6 +1015,8 @@ impl Store {
                 event.stage_a_conf,
                 event.completeness_score,
                 event.completeness_label,
+                event.human_completeness,
+                event.completeness_source,
                 event.retained,
                 event.n_members,
                 event.review_status,
@@ -1429,7 +1519,9 @@ mod tests {
             "SELECT id FROM files WHERE path='new.wav'", [], |row| row.get(0),
         ).unwrap();
         assert!(file_id > 7);
-        let event_id = store.add_manual_event(1, "new.wav", 0.0, 1.0, 1.0, 2.0).unwrap();
+        let event_id = store.add_manual_event(
+            1, "new.wav", 0.0, 1.0, 1.0, 2.0, "complete",
+        ).unwrap();
         assert!(event_id > 9);
         drop(store);
         std::fs::remove_file(path).ok();
@@ -1529,11 +1621,79 @@ mod tests {
     fn add_manual_event_inserts_confirmed_manual() {
         let s = mem(); let sid = new_session(&s);
         s.add_files(sid, &[PathBuf::from("/data/m.wav")]).unwrap();
-        let new_id = s.add_manual_event(sid, "/data/m.wav", 0.5, 1.5, 2000.0, 6000.0).unwrap();
+        let new_id = s.add_manual_event(
+            sid, "/data/m.wav", 0.5, 1.5, 2000.0, 6000.0, "complete",
+        ).unwrap();
         let row = s.list_events(sid, "/data/m.wav").unwrap().into_iter().find(|r| r.id == new_id).unwrap();
         assert_eq!(row.source, "manual");
         assert_eq!(row.review_status, "confirmed");
+        assert_eq!(row.human_completeness.as_deref(), Some("complete"));
+        assert_eq!(row.completeness_source.as_deref(), Some("human"));
+        assert_eq!(row.completeness_label.as_deref(), Some("complete"));
         assert!((row.center_freq - 4000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unsure_manual_event_stays_unresolved_until_a_decision() {
+        let s = mem(); let sid = new_session(&s);
+        s.add_files(sid, &[PathBuf::from("/data/m.wav")]).unwrap();
+        let event_id = s.add_manual_event(
+            sid, "/data/m.wav", 0.5, 1.5, 2000.0, 6000.0, "unsure",
+        ).unwrap();
+        let unresolved = s.list_events(sid, "/data/m.wav").unwrap().into_iter()
+            .find(|row| row.id == event_id).unwrap();
+        assert_eq!(unresolved.human_completeness.as_deref(), Some("unsure"));
+        assert_eq!(unresolved.completeness_source.as_deref(), Some("unresolved"));
+        assert_eq!(unresolved.completeness_label, None);
+        assert_eq!(unresolved.completeness_score, None);
+
+        s.set_manual_completeness(
+            event_id, "unsure", Some("complete"), "stage_b_accepted", Some(0.91),
+        ).unwrap();
+        let accepted = s.list_events(sid, "/data/m.wav").unwrap().into_iter()
+            .find(|row| row.id == event_id).unwrap();
+        assert_eq!(accepted.completeness_source.as_deref(), Some("stage_b_accepted"));
+        assert_eq!(accepted.completeness_label.as_deref(), Some("complete"));
+        assert_eq!(accepted.completeness_score, Some(0.91));
+    }
+
+    #[test]
+    fn changing_manual_bounds_invalidates_an_accepted_stage_b_result() {
+        let s = mem(); let sid = new_session(&s);
+        s.add_files(sid, &[PathBuf::from("/data/m.wav")]).unwrap();
+        let event_id = s.add_manual_event(
+            sid, "/data/m.wav", 0.5, 1.5, 2000.0, 6000.0, "unsure",
+        ).unwrap();
+        s.set_manual_completeness(
+            event_id, "unsure", Some("complete"), "stage_b_accepted", Some(0.91),
+        ).unwrap();
+
+        s.update_event_bounds(event_id, 0.4, 1.7, 1800.0, 6400.0).unwrap();
+        let changed = s.list_events(sid, "/data/m.wav").unwrap().into_iter()
+            .find(|row| row.id == event_id).unwrap();
+        assert_eq!(changed.human_completeness.as_deref(), Some("unsure"));
+        assert_eq!(changed.completeness_source.as_deref(), Some("unresolved"));
+        assert_eq!(changed.completeness_label, None);
+        assert_eq!(changed.completeness_score, None);
+    }
+
+    #[test]
+    fn manual_completeness_rejects_inconsistent_provenance() {
+        let s = mem(); let sid = new_session(&s);
+        s.add_files(sid, &[PathBuf::from("/data/m.wav")]).unwrap();
+        let event_id = s.add_manual_event(
+            sid, "/data/m.wav", 0.5, 1.5, 2000.0, 6000.0, "unsure",
+        ).unwrap();
+
+        assert!(s.set_manual_completeness(
+            event_id, "unsure", Some("complete"), "human", Some(0.9),
+        ).is_err());
+        assert!(s.set_manual_completeness(
+            event_id, "unsure", Some("complete"), "stage_b_accepted", None,
+        ).is_err());
+        assert!(s.set_manual_completeness(
+            event_id, "unsure", Some("complete"), "unresolved", Some(0.9),
+        ).is_err());
     }
 
     #[test]
@@ -1567,6 +1727,8 @@ mod tests {
         assert_eq!(restored.stage_a_conf, original.stage_a_conf);
         assert_eq!(restored.completeness_score, original.completeness_score);
         assert_eq!(restored.completeness_label, original.completeness_label);
+        assert_eq!(restored.human_completeness, original.human_completeness);
+        assert_eq!(restored.completeness_source, original.completeness_source);
         assert_eq!(restored.retained, original.retained);
         assert_eq!(restored.stage_c_label, original.stage_c_label);
         assert_eq!(restored.stage_c_score, original.stage_c_score);

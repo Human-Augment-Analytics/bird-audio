@@ -32,12 +32,19 @@ pruned from the resumed inventory.
 
 ![Review workspace with a selected event](screenshots/research-features/02-review-sural-event.png)
 
+![Stage B suggestion for an uncertain manual annotation](screenshots/research-features/08-manual-stage-b-suggestion.jpg)
+
+When a reviewer chooses **Not sure**, the dialog shows Stage B's score and the
+session threshold side by side. The reviewer must then accept the suggestion,
+override it, or leave the event unresolved; the model never silently supplies a
+human decision.
+
 | Feature | What it does | Why it is useful | Important limit |
 |---|---|---|---|
 | Spectrogram and playback | Displays sound energy over time and frequency and plays the corresponding audio. | Lets a reviewer combine visual and auditory evidence. | A spectrogram view is a review aid, not an independent validation sample. |
 | Confirm, reject, unreviewed | Stores a reviewer decision without deleting the detector record. | Preserves false positives for error analysis and makes curation auditable. | Convenience or uncertainty-ranked review does not provide population-representative precision. |
 | Edit bounds | Corrects event start/end and frequency bounds. | Improves duration and frequency measurements for accepted events. | Boundary consistency still depends on a documented annotation protocol. |
-| Manual annotation | Adds an event the pipeline did not propose. | Records obvious false negatives found during review. | Opportunistic manual finds must not augment a full-effort inferential rate unless all audio was searched systematically. |
+| Manual completeness decision | After a box is drawn, records complete, incomplete, or not sure. “Not sure” scores the finalized box with Stage B, then requires the reviewer to accept, override, or leave the suggestion unresolved. Human judgment, model score, and final-label source are stored separately; editing an assisted box invalidates its old score. | Captures false negatives without forcing uncertain reviewers to guess, while keeping model assistance auditable. | Stage B is assistive, was trained on detector-aligned crops, and does not establish species identity; opportunistic manual finds must not augment a full-effort inferential rate unless all audio was searched systematically. |
 | Delete, Undo, Redo | Removes an event and restores or reapplies the edit. | Makes curation reversible while preserving scientific fields when restored. | Prefer rejection when a detector error should remain available for model improvement. |
 
 ## 3. Analytics overview

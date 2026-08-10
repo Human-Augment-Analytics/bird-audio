@@ -77,6 +77,7 @@ def build(args):
     event_fields = sorted({key for row in base + curated for key in row}) or [
         "event_id", "path", "t_start", "t_end", "duration", "f_low", "f_high",
         "center_freq", "stage_a_conf", "completeness_score", "retained",
+        "completeness_label", "human_completeness", "completeness_source",
         "review_status", "source", "label", "note", "curation_basis",
     ]
     file_fields = sorted({key for row in file_rows for key in row}) or [

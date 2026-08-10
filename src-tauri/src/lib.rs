@@ -28,6 +28,7 @@ pub fn run() {
             commands::set_event_review,
             commands::update_event_bounds,
             commands::add_manual_event,
+            commands::set_manual_completeness,
             commands::delete_event,
             commands::restore_event,
             commands::log_review_action,
@@ -37,6 +38,7 @@ pub fn run() {
             active_learning_commands::run_active_learning,
             active_learning_commands::run_qbe_search,
             active_learning_commands::run_verification_plan,
+            active_learning_commands::score_manual_completeness,
             ecology_commands::get_ecological_summary,
             research_commands::run_research_analysis,
         ])
