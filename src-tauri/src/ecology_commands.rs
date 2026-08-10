@@ -2,9 +2,8 @@ use batch_core::export::parse_path_metadata;
 use rusqlite::params;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use batch_core::audio::audio_duration_hours;
 
 const DEFAULT_FILE_EFFORT_HOURS: f64 = 0.25;
 
@@ -150,57 +149,6 @@ fn recorder_for_path(path: &str) -> String {
     parse_path_metadata(path)
         .recorder_id
         .unwrap_or_else(|| "Unattributed (combined)".to_string())
-}
-
-/// Read duration from an ordinary RIFF/WAVE header without decoding the audio.
-/// Unsupported or malformed files return `None` so callers can use the documented fallback.
-fn wav_duration_hours(path: &Path) -> Option<f64> {
-    let mut file = File::open(path).ok()?;
-    let mut riff = [0_u8; 12];
-    file.read_exact(&mut riff).ok()?;
-    if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
-        return None;
-    }
-
-    let mut byte_rate = None;
-    let mut data_bytes = None;
-    loop {
-        let mut chunk = [0_u8; 8];
-        if file.read_exact(&mut chunk).is_err() {
-            break;
-        }
-        let chunk_size = u32::from_le_bytes(chunk[4..8].try_into().ok()?) as u64;
-        match &chunk[0..4] {
-            b"fmt " => {
-                if chunk_size < 12 {
-                    return None;
-                }
-                let mut format = [0_u8; 12];
-                file.read_exact(&mut format).ok()?;
-                byte_rate = Some(u32::from_le_bytes(format[8..12].try_into().ok()?) as u64);
-                file.seek(SeekFrom::Current((chunk_size - 12) as i64)).ok()?;
-            }
-            b"data" => {
-                data_bytes = Some(chunk_size);
-                file.seek(SeekFrom::Current(chunk_size as i64)).ok()?;
-            }
-            _ => {
-                file.seek(SeekFrom::Current(chunk_size as i64)).ok()?;
-            }
-        }
-        if chunk_size % 2 == 1 {
-            file.seek(SeekFrom::Current(1)).ok()?;
-        }
-        if byte_rate.is_some() && data_bytes.is_some() {
-            break;
-        }
-    }
-
-    let bytes_per_second = byte_rate?;
-    if bytes_per_second == 0 {
-        return None;
-    }
-    Some(data_bytes? as f64 / bytes_per_second as f64 / 3600.0)
 }
 
 fn finish_band(name: String, mut acc: BandAccumulator) -> BandSummary {
@@ -464,7 +412,7 @@ pub async fn get_ecological_summary(
     let mut recorder_aggregates: BTreeMap<String, RecorderAccumulator> = BTreeMap::new();
 
     for file in files.iter().filter(|file| file.status == "done") {
-        let effort = match wav_duration_hours(Path::new(&file.path)) {
+        let effort = match audio_duration_hours(Path::new(&file.path)) {
             Some(hours) => {
                 effort_files_measured += 1;
                 hours
@@ -705,6 +653,7 @@ pub async fn get_ecological_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
 
     #[test]
     fn ecological_summary_struct() {
@@ -752,7 +701,7 @@ mod tests {
         file.set_len(header.len() as u64 + data_size as u64).unwrap();
         drop(file);
 
-        assert_eq!(wav_duration_hours(&path).unwrap(), 1.0 / 60.0);
+        assert_eq!(audio_duration_hours(&path).unwrap(), 1.0 / 60.0);
         std::fs::remove_file(path).ok();
     }
 

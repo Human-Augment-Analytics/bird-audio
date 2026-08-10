@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::Path;
 
 use rusqlite::params;
 
 use crate::store::Store;
+use crate::audio::audio_duration_hours;
 
 const SELECT: &str = "SELECT f.path, e.t_start, e.t_end, e.duration, e.f_low, e.f_high, \
      e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label, e.retained, e.n_members, e.review_status, \
@@ -295,53 +296,6 @@ fn median(mut values: Vec<f64>) -> f64 {
     }
 }
 
-fn wav_duration_hours(path: &Path) -> Option<f64> {
-    let mut file = File::open(path).ok()?;
-    let mut riff = [0_u8; 12];
-    file.read_exact(&mut riff).ok()?;
-    if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
-        return None;
-    }
-    let mut byte_rate = None;
-    let mut data_bytes = None;
-    loop {
-        let mut chunk = [0_u8; 8];
-        if file.read_exact(&mut chunk).is_err() {
-            break;
-        }
-        let chunk_size = u32::from_le_bytes(chunk[4..8].try_into().ok()?) as u64;
-        match &chunk[0..4] {
-            b"fmt " => {
-                if chunk_size < 12 {
-                    return None;
-                }
-                let mut format = [0_u8; 12];
-                file.read_exact(&mut format).ok()?;
-                byte_rate = Some(u32::from_le_bytes(format[8..12].try_into().ok()?) as u64);
-                file.seek(SeekFrom::Current((chunk_size - 12) as i64)).ok()?;
-            }
-            b"data" => {
-                data_bytes = Some(chunk_size);
-                file.seek(SeekFrom::Current(chunk_size as i64)).ok()?;
-            }
-            _ => {
-                file.seek(SeekFrom::Current(chunk_size as i64)).ok()?;
-            }
-        }
-        if chunk_size % 2 == 1 {
-            file.seek(SeekFrom::Current(1)).ok()?;
-        }
-        if byte_rate.is_some() && data_bytes.is_some() {
-            break;
-        }
-    }
-    let bytes_per_second = byte_rate?;
-    if bytes_per_second == 0 {
-        return None;
-    }
-    Some(data_bytes? as f64 / bytes_per_second as f64 / 3600.0)
-}
-
 fn export_secondary_summary(
     store: &Store,
     session_id: i64,
@@ -371,7 +325,7 @@ fn export_secondary_summary(
         let entry = group_files
             .entry((site_id, session_datetime))
             .or_insert_with(|| (elevation_m, HashMap::new()));
-        let measured = wav_duration_hours(Path::new(path));
+        let measured = audio_duration_hours(Path::new(path));
         entry.1.insert(path.clone(), (measured.unwrap_or(0.25), measured.is_some()));
     }
 

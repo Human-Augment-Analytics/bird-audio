@@ -3,13 +3,14 @@ import SetupView from "./components/SetupView";
 import RunView from "./components/RunView";
 import ReviewView from "./components/ReviewView";
 import { EcologyView } from "./components/EcologyView";
+import { ResearchView } from "./components/ResearchView";
 import appIcon from "./assets/app-icon.png";
 import { cancelSession, exportSession, getSummary, listFiles, onBatchError, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
 export default function App() {
   const [view, setView] = useState<"setup" | "run">("setup");
-  const [section, setSection] = useState<"batch" | "review" | "ecology">("batch");
+  const [section, setSection] = useState<"batch" | "review" | "ecology" | "research">("batch");
   const [start, setStart] = useState<StartResult | null>(null);
   const [opts, setOpts] = useState<StartOpts | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -189,6 +190,14 @@ export default function App() {
         >
           Analytics
         </button>
+        <button
+          className={section === "research" ? "primary" : "backlink"}
+          onClick={() => setSection("research")}
+          disabled={!analyticsAvailable}
+          title={analyticsAvailable ? "Open research analysis tools" : "Available after the batch session reaches a terminal state"}
+        >
+          Research
+        </button>
       </nav>
 
       {section === "batch" && view === "setup" && <SetupView onStarted={onStarted} />}
@@ -222,6 +231,16 @@ export default function App() {
         <EcologyView
           sessionId={start ? start.session_id : null}
           dbPath={opts ? `${opts.outputDir}/batch.db` : null}
+          sessionStatus={summary?.status ?? null}
+        />
+      )}
+      {section === "research" && (
+        <ResearchView
+          sessionId={start ? start.session_id : null}
+          dbPath={opts ? `${opts.outputDir}/batch.db` : null}
+          outputDir={opts?.outputDir ?? null}
+          thetaA={opts?.thetaA ?? 0.25}
+          thetaB={opts?.thetaB ?? 0.530306}
           sessionStatus={summary?.status ?? null}
         />
       )}

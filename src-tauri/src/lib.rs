@@ -2,6 +2,7 @@ mod commands;
 mod state;
 mod active_learning_commands;
 mod ecology_commands;
+mod research_commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -37,6 +38,7 @@ pub fn run() {
             active_learning_commands::run_qbe_search,
             active_learning_commands::run_verification_plan,
             ecology_commands::get_ecological_summary,
+            research_commands::run_research_analysis,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

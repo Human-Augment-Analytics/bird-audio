@@ -116,3 +116,18 @@ export const runVerificationPlan = async (
 export const getReviewTelemetry = (outputDir: string, sessionId: number) =>
   invoke<Record<string, unknown>>("get_review_telemetry", { outputDir, sessionId });
 export const audioSrc = (path: string): string => convertFileSrc(path);
+
+export const runResearchAnalysis = async (
+  dbPath: string,
+  sessionId: number,
+  outputDir: string,
+  metadataPath: string | null,
+  thetaA: number,
+  thetaB: number,
+  binMinutes: number,
+) => {
+  const raw = await invoke<string>('run_research_analysis', {
+    dbPath, sessionId, outputDir, metadataPath, thetaA, thetaB, binMinutes,
+  });
+  return JSON.parse(raw) as import('./types').ResearchAnalysis;
+};

@@ -6,7 +6,7 @@ use crate::commands::{find_uv, resolve_cwd};
 
 /// Run one of the `scripts/*.py` CLIs through the project's uv environment.
 /// On failure the captured stderr is returned so the UI can show why.
-async fn run_script(script: &str, args: &[String]) -> Result<String, String> {
+pub(crate) async fn run_script(script: &str, args: &[String]) -> Result<String, String> {
     let dir = resolve_cwd(None);
     let output = Command::new(find_uv())
         .arg("run")

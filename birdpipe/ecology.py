@@ -346,6 +346,11 @@ def read_deployment_metadata(metadata_csv: str) -> Dict[str, Dict]:
             device_id = row.get("device_id", "")
             if not device_id:
                 continue
+            if device_id.upper() in table:
+                raise ValueError(
+                    "duplicate device_id {!r}: deployment intervals are required; "
+                    "refusing to silently overwrite metadata".format(device_id)
+                )
 
             def _num(name):
                 try:
@@ -362,6 +367,13 @@ def read_deployment_metadata(metadata_csv: str) -> Dict[str, Dict]:
                 "lon": _num("lon"),
                 "deploy_date": row.get("deploy_date") or None,
                 "elevation_band": band,
+                # Optional research covariates.  They are deliberately read
+                # from the supplied deployment table rather than inferred.
+                "season": row.get("season") or None,
+                "temperature_c": _num("temperature_c"),
+                "precipitation_mm": _num("precipitation_mm"),
+                "wind_mps": _num("wind_mps"),
+                "humidity_pct": _num("humidity_pct"),
             }
     return table
 

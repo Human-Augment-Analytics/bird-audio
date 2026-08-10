@@ -441,7 +441,7 @@ export const EcologyView: React.FC<EcologyViewProps> = ({
           {summary.effort_files_defaulted > 0 && (
             <div className="analytics-callout">
               <strong>Estimated effort:</strong> {summary.effort_files_defaulted} files use
-              {' '}the documented 0.25-hour estimate because a WAV duration was unavailable.
+              {' '}the documented 0.25-hour estimate because an audio duration was unavailable.
             </div>
           )}
           {summary.incomplete_numeric_events > 0 && (
@@ -543,7 +543,7 @@ export const EcologyView: React.FC<EcologyViewProps> = ({
         <div className="analytics-table-head">
           <div>
             <h3>Recorder performance</h3>
-            <p>Rates use measured WAV duration when available and the documented estimate otherwise.</p>
+            <p>Rates use measured WAV, FLAC, and MP3 duration when available and the documented estimate otherwise.</p>
           </div>
           <label>
             Sort by
