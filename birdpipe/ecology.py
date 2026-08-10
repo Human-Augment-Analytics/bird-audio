@@ -176,7 +176,7 @@ _SELECT_EVENTS = """
            e.retained, e.n_members, e.review_status, e.source
     FROM events e
     JOIN files f ON f.id = e.file_id
-    WHERE (? IS NULL OR e.session_id = ?)
+    WHERE f.status = 'done' AND (? IS NULL OR e.session_id = ?)
     ORDER BY f.path, e.t_start
 """
 
@@ -191,6 +191,24 @@ def _connect(db: DbLike):
 def _session_thetas(conn: sqlite3.Connection) -> Dict[int, Dict[str, float]]:
     cur = conn.execute("SELECT id, theta_a, theta_b FROM sessions")
     return {int(r[0]): {"theta_a": float(r[1]), "theta_b": float(r[2])} for r in cur.fetchall()}
+
+
+def _analysis_session_id(
+    conn: sqlite3.Connection, session_id: Optional[int] = None
+) -> Optional[int]:
+    if session_id is None:
+        row = conn.execute(
+            "SELECT id FROM sessions WHERE status = 'done' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return int(row[0]) if row is not None else None
+    row = conn.execute("SELECT status FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"session {session_id} does not exist")
+    if row[0] != "done":
+        raise ValueError(
+            f"session {session_id} has status {row[0]!r}; ecological analysis requires a completed session"
+        )
+    return int(session_id)
 
 
 def apply_thresholds(
@@ -239,6 +257,9 @@ def load_event_records(
     conn, owned = _connect(db_path)
     try:
         conn.row_factory = sqlite3.Row
+        session_id = _analysis_session_id(conn, session_id)
+        if session_id is None:
+            return []
         thetas = _session_thetas(conn)
         rows = conn.execute(_SELECT_EVENTS, (session_id, session_id)).fetchall()
     finally:
@@ -267,15 +288,16 @@ def session_thetas(db_path: DbLike, session_id: Optional[int] = None) -> Optiona
     """The thresholds a session was actually run with, used as the sweep baseline."""
     conn, owned = _connect(db_path)
     try:
+        resolved_session_id = _analysis_session_id(conn, session_id)
         thetas = _session_thetas(conn)
     finally:
         if owned:
             conn.close()
     if not thetas:
         return None
-    if session_id is not None:
-        return thetas.get(int(session_id))
-    return thetas[min(thetas)]
+    if resolved_session_id is None:
+        return None
+    return thetas.get(resolved_session_id)
 
 
 def load_file_paths(db_path: DbLike, session_id: Optional[int] = None) -> List[str]:
@@ -286,9 +308,12 @@ def load_file_paths(db_path: DbLike, session_id: Optional[int] = None) -> List[s
     """
     conn, owned = _connect(db_path)
     try:
+        session_id = _analysis_session_id(conn, session_id)
+        if session_id is None:
+            return []
         rows = conn.execute(
-            "SELECT path FROM files WHERE (? IS NULL OR session_id = ?) ORDER BY path",
-            (session_id, session_id),
+            "SELECT path FROM files WHERE session_id = ? AND status = 'done' ORDER BY path",
+            (session_id,),
         ).fetchall()
     finally:
         if owned:

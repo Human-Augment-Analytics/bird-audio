@@ -1,9 +1,9 @@
 //! Export consolidated events to CSV / JSON analysis-ready files.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use rusqlite::params;
@@ -289,6 +289,53 @@ fn median(mut values: Vec<f64>) -> f64 {
     }
 }
 
+fn wav_duration_hours(path: &Path) -> Option<f64> {
+    let mut file = File::open(path).ok()?;
+    let mut riff = [0_u8; 12];
+    file.read_exact(&mut riff).ok()?;
+    if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut byte_rate = None;
+    let mut data_bytes = None;
+    loop {
+        let mut chunk = [0_u8; 8];
+        if file.read_exact(&mut chunk).is_err() {
+            break;
+        }
+        let chunk_size = u32::from_le_bytes(chunk[4..8].try_into().ok()?) as u64;
+        match &chunk[0..4] {
+            b"fmt " => {
+                if chunk_size < 12 {
+                    return None;
+                }
+                let mut format = [0_u8; 12];
+                file.read_exact(&mut format).ok()?;
+                byte_rate = Some(u32::from_le_bytes(format[8..12].try_into().ok()?) as u64);
+                file.seek(SeekFrom::Current((chunk_size - 12) as i64)).ok()?;
+            }
+            b"data" => {
+                data_bytes = Some(chunk_size);
+                file.seek(SeekFrom::Current(chunk_size as i64)).ok()?;
+            }
+            _ => {
+                file.seek(SeekFrom::Current(chunk_size as i64)).ok()?;
+            }
+        }
+        if chunk_size % 2 == 1 {
+            file.seek(SeekFrom::Current(1)).ok()?;
+        }
+        if byte_rate.is_some() && data_bytes.is_some() {
+            break;
+        }
+    }
+    let bytes_per_second = byte_rate?;
+    if bytes_per_second == 0 {
+        return None;
+    }
+    Some(data_bytes? as f64 / bytes_per_second as f64 / 3600.0)
+}
+
 fn export_secondary_summary(
     store: &Store,
     session_id: i64,
@@ -297,12 +344,14 @@ fn export_secondary_summary(
     confirmed_only: bool,
     metadata: &[MetadataRow],
 ) -> Result<(), Box<dyn Error>> {
-    let mut stmt = store.conn.prepare("SELECT path FROM files WHERE session_id = ?1")?;
+    let mut stmt = store.conn.prepare(
+        "SELECT path FROM files WHERE session_id = ?1 AND status = 'done'",
+    )?;
     let file_paths: Vec<String> = stmt
         .query_map(params![session_id], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
 
-    let mut group_files: HashMap<(String, String), (f64, HashSet<String>)> = HashMap::new();
+    let mut group_files: HashMap<(String, String), (f64, HashMap<String, (f64, bool)>)> = HashMap::new();
 
     for path in &file_paths {
         let dev_id = find_device_id(path);
@@ -315,8 +364,9 @@ fn export_secondary_summary(
         
         let entry = group_files
             .entry((site_id, session_datetime))
-            .or_insert_with(|| (elevation_m, HashSet::new()));
-        entry.1.insert(path.clone());
+            .or_insert_with(|| (elevation_m, HashMap::new()));
+        let measured = wav_duration_hours(Path::new(path));
+        entry.1.insert(path.clone(), (measured.unwrap_or(0.25), measured.is_some()));
     }
 
     let rows = collect(store, session_id, complete_only, confirmed_only)?;
@@ -347,7 +397,7 @@ fn export_secondary_summary(
     let mut f = File::create(&summary_path)?;
     writeln!(
         f,
-        "site_id,session_datetime,elevation_m,n_events,duration_mean,duration_median,center_freq_mean,effort_hours"
+        "site_id,session_datetime,elevation_m,n_events,duration_mean,duration_median,center_freq_mean,effort_hours,effort_measured_files,effort_defaulted_files"
     )?;
 
     let mut keys: Vec<&(String, String)> = group_files.keys().collect();
@@ -358,7 +408,9 @@ fn export_secondary_summary(
         let events = group_events.get(&(site_id.clone(), session_datetime.clone()));
         
         let n_events = events.map(|v| v.len()).unwrap_or(0);
-        let effort_hours = (files.len() as f64) * 0.25;
+        let effort_hours: f64 = files.values().map(|(hours, _)| hours).sum();
+        let effort_measured_files = files.values().filter(|(_, measured)| *measured).count();
+        let effort_defaulted_files = files.len() - effort_measured_files;
 
         let (dur_mean, dur_median, freq_mean) = if n_events > 0 {
             let evs = events.unwrap();
@@ -376,7 +428,7 @@ fn export_secondary_summary(
 
         writeln!(
             f,
-            "{},{},{},{},{:.4},{:.4},{:.4},{}",
+            "{},{},{},{},{:.4},{:.4},{:.4},{},{},{}",
             csv_escape(site_id),
             csv_escape(session_datetime),
             elevation_m,
@@ -384,7 +436,9 @@ fn export_secondary_summary(
             dur_mean,
             dur_median,
             freq_mean,
-            effort_hours
+            effort_hours,
+            effort_measured_files,
+            effort_defaulted_files,
         )?;
     }
 
@@ -696,6 +750,9 @@ mod tests {
                 theta_a: 0.0,
                 theta_b: 0.53,
                 species_name: None,
+                config_key: "test", worker_cmd: None, cwd: None,
+                localizer_path: None, classifier_path: None, classifier_c_path: None,
+                f_min_hz: None, f_max_hz: None,
             })
             .unwrap();
         s.add_files(sid, &[
@@ -847,6 +904,7 @@ mod tests {
         assert!(summary_body.contains("SITE_A"));
         assert!(summary_body.contains("SITE_B"));
         assert!(summary_body.contains("0.25")); // effort hours
+        assert!(summary_body.contains("effort_defaulted_files"));
         
         std::fs::remove_file(&meta_p).ok();
         std::fs::remove_file(&out_p).ok();

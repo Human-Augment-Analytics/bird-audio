@@ -41,6 +41,9 @@ fn session_with(paths: &[&str]) -> (Arc<Mutex<Store>>, i64) {
             theta_a: 0.0,
             theta_b: 0.53,
             species_name: None,
+            config_key: "test", worker_cmd: None, cwd: None,
+            localizer_path: None, classifier_path: None, classifier_c_path: None,
+            f_min_hz: None, f_max_hz: None,
         })
         .unwrap();
     let pbs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
@@ -51,7 +54,9 @@ fn session_with(paths: &[&str]) -> (Arc<Mutex<Store>>, i64) {
 #[test]
 fn runs_all_files_to_done() {
     let (store, sid) = session_with(&["/jobs/a.wav", "/jobs/b.wav", "/jobs/c.wav"]);
-    let summary = run_session(store, sid, cfg(2, 10_000, 2), None);
+    let summary = run_session(store, sid, cfg(2, 10_000, 2), None).unwrap();
+    assert_eq!(summary.session_id, sid);
+    assert_eq!(summary.status, "done");
     assert_eq!(summary.done, 3);
     assert_eq!(summary.failed, 0);
     assert_eq!(summary.n_events, 3);
@@ -62,27 +67,51 @@ fn runs_all_files_to_done() {
 fn worker_manifest_is_stored_once_for_the_session() {
     let (store, sid) = session_with(&["/jobs/a.wav", "/jobs/CRASH.wav", "/jobs/b.wav"]);
     // Several workers, plus a respawn after the crash: exactly one manifest must survive.
-    run_session(store.clone(), sid, cfg(2, 10_000, 2), None);
+    run_session(store.clone(), sid, cfg(2, 10_000, 2), None).unwrap();
     let stored = store.lock().unwrap().run_manifest(sid).unwrap().expect("manifest stored");
     let parsed: serde_json::Value = serde_json::from_str(&stored).unwrap();
     assert_eq!(parsed["schema_version"], 1);
     assert_eq!(parsed["extra"]["device"], "cpu");
     assert!(parsed["extra"]["worker_pid"].is_number());
+    assert_eq!(parsed["analysis"]["theta_a"], 0.0);
+    assert_eq!(parsed["analysis"]["theta_b"], 0.53);
 }
 
 #[test]
 fn worker_reported_bad_file_is_marked_failed() {
     let (store, sid) = session_with(&["/jobs/ok.wav", "/jobs/BOOM.wav"]);
-    let summary = run_session(store, sid, cfg(1, 10_000, 2), None);
+    let summary = run_session(store.clone(), sid, cfg(1, 10_000, 2), None).unwrap();
     assert_eq!(summary.done, 1);
     assert_eq!(summary.failed, 1);
+    assert_eq!(summary.status, "failed");
+    let attempts: i64 = store.lock().unwrap().conn.query_row(
+        "SELECT attempts FROM files WHERE session_id=?1 AND path='/jobs/BOOM.wav'",
+        [sid],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(attempts, 2, "worker-reported errors must honor the retry limit");
+}
+
+#[test]
+fn starting_a_failed_session_explicitly_retries_failed_files() {
+    let (store, sid) = session_with(&["/jobs/BOOM.wav"]);
+    let first = run_session(store.clone(), sid, cfg(1, 10_000, 2), None).unwrap();
+    assert_eq!(first.failed, 1);
+    let second = run_session(store.clone(), sid, cfg(1, 10_000, 2), None).unwrap();
+    assert_eq!(second.failed, 1);
+    let attempts: i64 = store.lock().unwrap().conn.query_row(
+        "SELECT attempts FROM files WHERE session_id=?1",
+        [sid],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(attempts, 2, "the explicit rerun must perform a fresh retry budget");
 }
 
 #[test]
 fn hung_worker_times_out_and_file_is_poisoned_after_retries() {
     // short timeout so the test is fast; HANG never replies -> timeout each attempt
     let (store, sid) = session_with(&["/jobs/ok.wav", "/jobs/HANG.wav"]);
-    let summary = run_session(store, sid, cfg(1, 400, 2), None);
+    let summary = run_session(store, sid, cfg(1, 400, 2), None).unwrap();
     assert_eq!(summary.done, 1);
     assert_eq!(summary.failed, 1); // HANG poisoned after max_attempts
     assert_eq!(summary.pending, 0);
@@ -92,7 +121,7 @@ fn hung_worker_times_out_and_file_is_poisoned_after_retries() {
 #[test]
 fn crashing_worker_is_respawned_and_pool_keeps_working() {
     let (store, sid) = session_with(&["/jobs/ok1.wav", "/jobs/CRASH.wav", "/jobs/ok2.wav"]);
-    let summary = run_session(store, sid, cfg(1, 10_000, 2), None);
+    let summary = run_session(store, sid, cfg(1, 10_000, 2), None).unwrap();
     assert_eq!(summary.done, 2); // both ok files complete despite the crash
     assert_eq!(summary.failed, 1); // CRASH poisoned after retries
 }
@@ -114,7 +143,7 @@ fn resume_does_not_reprocess_done_files() {
         .unwrap();
     }
     // Now run: only the remaining pending file should be processed by the worker.
-    let summary = run_session(store, sid, cfg(1, 10_000, 2), None);
+    let summary = run_session(store, sid, cfg(1, 10_000, 2), None).unwrap();
     assert_eq!(summary.done, 2);
     // The pre-done file had 0 events; the worker-processed one has 1 -> total events == 1.
     assert_eq!(summary.n_events, 1);
@@ -127,7 +156,8 @@ fn cancel_flag_stops_processing_before_any_file() {
     let (store, sid) = session_with(&["/jobs/a.wav", "/jobs/b.wav", "/jobs/c.wav"]);
     let mut c = cfg(1, 10_000, 2);
     c.cancel = Some(Arc::new(AtomicBool::new(true))); // pre-cancelled
-    let summary = run_session(store, sid, c, None);
+    let summary = run_session(store, sid, c, None).unwrap();
     assert_eq!(summary.done, 0); // nothing processed
     assert_eq!(summary.pending, 3);
+    assert_eq!(summary.status, "cancelled");
 }

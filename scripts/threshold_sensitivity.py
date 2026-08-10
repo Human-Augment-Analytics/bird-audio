@@ -70,6 +70,7 @@ def evaluate_cell(base_records, file_paths, meta_by_recorder, theta_a, theta_b, 
         file_paths=file_paths,
         retained_only=True,
         metadata=meta_by_recorder,
+        effort_by_path=getattr(args, "effort_by_path", None),
     )
     band_rows = eco.band_summary(recorder_rows)
     models = eco.fit_elevation_models(recorder_rows, alpha=args.alpha)
@@ -137,6 +138,8 @@ def main():
     ap.add_argument("--theta-b-range", nargs=3, type=float, metavar=("MIN", "MAX", "STEP"),
                     default=[0.3, 0.8, 0.1])
     ap.add_argument("--effort-hours", type=float, default=eco.DEFAULT_EFFORT_HOURS_PER_FILE)
+    ap.add_argument("--measure-effort", action="store_true",
+                    help="measure each recording's duration from its audio header")
     ap.add_argument("--alpha", type=float, default=eco.ALPHA)
     ap.add_argument("--json", action="store_true", dest="as_json",
                     help="emit machine-readable JSON on stdout")
@@ -148,6 +151,11 @@ def main():
 
     base_records = eco.load_event_records(args.db, session_id=args.session_id)
     file_paths = eco.load_file_paths(args.db, session_id=args.session_id)
+    measured_effort = (
+        eco.measure_effort_hours(file_paths, args.effort_hours)
+        if args.measure_effort else None
+    )
+    args.effort_by_path = measured_effort["hours"] if measured_effort else None
     meta_table = eco.read_deployment_metadata(args.metadata) if args.metadata else {}
     base_records = eco.join_deployment_metadata(base_records, metadata=meta_table)
     meta_by_recorder = eco.metadata_by_recorder(meta_table)

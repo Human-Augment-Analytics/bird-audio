@@ -12,6 +12,8 @@ use batch_core::enumerate::enumerate_audio;
 use batch_core::export::{export_csv, export_json, export_telemetry_csv};
 use batch_core::store::{NewSession, Store};
 
+const DEFAULT_SPECIES_NAME: &str = "Hume's Leaf Warbler";
+
 struct Args {
     input: PathBuf,
     db: PathBuf,
@@ -21,6 +23,12 @@ struct Args {
     cwd: Option<PathBuf>,
     theta_a: f64,
     theta_b: f64,
+    localizer: Option<String>,
+    classifier: Option<String>,
+    classifier_c: Option<String>,
+    f_min_hz: Option<f64>,
+    f_max_hz: Option<f64>,
+    species_name: Option<String>,
     timeout_secs: u64,
     max_attempts: i64,
     export_csv: Option<PathBuf>,
@@ -31,11 +39,73 @@ struct Args {
     metadata: Option<PathBuf>,
 }
 
+fn model_identity(cwd: &std::path::Path, configured: Option<&str>, default_path: Option<&str>) -> serde_json::Value {
+    let selected = configured
+        .filter(|value| !value.trim().is_empty())
+        .or(default_path);
+    let Some(selected) = selected else {
+        return serde_json::Value::Null;
+    };
+    let raw = PathBuf::from(selected);
+    let path = if raw.is_absolute() { raw } else { cwd.join(raw) };
+    let metadata = path.metadata().ok();
+    let size_bytes = metadata.as_ref().map(std::fs::Metadata::len);
+    let modified_ns = metadata
+        .and_then(|value| value.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().to_string());
+    serde_json::json!({
+        "path": path.to_string_lossy(),
+        "size_bytes": size_bytes,
+        "modified_ns": modified_ns,
+    })
+}
+
+fn code_identities(cwd: &std::path::Path, worker_cmd: &str) -> serde_json::Value {
+    let mut identities = serde_json::Map::new();
+    for relative in [
+        "scripts/ml_engine.py",
+        "birdpipe/audio.py",
+        "birdpipe/consolidate.py",
+        "birdpipe/constants.py",
+        "birdpipe/coords.py",
+        "birdpipe/records.py",
+        "birdpipe/stageb.py",
+        "birdpipe/worker.py",
+        "pyproject.toml",
+        "uv.lock",
+    ] {
+        identities.insert(relative.into(), model_identity(cwd, Some(relative), None));
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        identities.insert(
+            "application_binary".into(),
+            model_identity(cwd, executable.to_str(), None),
+        );
+    }
+    for (index, token) in worker_cmd.split_whitespace().enumerate() {
+        if token.starts_with('-') {
+            continue;
+        }
+        let raw = PathBuf::from(token);
+        let resolved = if raw.is_absolute() { raw } else { cwd.join(raw) };
+        if resolved.is_file() {
+            identities.insert(
+                format!("worker_arg_{index}"),
+                model_identity(cwd, resolved.to_str(), None),
+            );
+        }
+    }
+    serde_json::Value::Object(identities)
+}
+
 fn usage_and_exit() -> ! {
     eprintln!(
         "usage: batch --input <folder> [--db batch.db] [--device cpu] [--concurrency 0] \
          [--worker-cmd \"uv run python scripts/ml_engine.py --worker\"] [--cwd DIR] \
          [--theta-a 0.0] [--theta-b 0.530306] [--timeout-secs 600] [--max-attempts 2] \
+         [--localizer model.pt] [--classifier model.pt] [--classifier-c model.pt] \
+         [--f-min-hz 4125] [--f-max-hz 11625] [--species-name NAME] \
          [--export-csv out.csv] [--export-json out.json] [--export-telemetry telemetry.csv] \
          [--complete-only] [--confirmed-only] [--metadata deployments.csv]"
     );
@@ -52,6 +122,12 @@ fn parse_args() -> Args {
         cwd: None,
         theta_a: 0.0,
         theta_b: 0.530306,
+        localizer: None,
+        classifier: None,
+        classifier_c: None,
+        f_min_hz: None,
+        f_max_hz: None,
+        species_name: None,
         timeout_secs: 600,
         max_attempts: 2,
         export_csv: None,
@@ -73,6 +149,12 @@ fn parse_args() -> Args {
             "--cwd" => a.cwd = Some(PathBuf::from(next())),
             "--theta-a" => a.theta_a = next().parse().unwrap_or_else(|_| usage_and_exit()),
             "--theta-b" => a.theta_b = next().parse().unwrap_or_else(|_| usage_and_exit()),
+            "--localizer" => a.localizer = Some(next()),
+            "--classifier" => a.classifier = Some(next()),
+            "--classifier-c" => a.classifier_c = Some(next()),
+            "--f-min-hz" => a.f_min_hz = Some(next().parse().unwrap_or_else(|_| usage_and_exit())),
+            "--f-max-hz" => a.f_max_hz = Some(next().parse().unwrap_or_else(|_| usage_and_exit())),
+            "--species-name" => a.species_name = Some(next()),
             "--timeout-secs" => a.timeout_secs = next().parse().unwrap_or_else(|_| usage_and_exit()),
             "--max-attempts" => a.max_attempts = next().parse().unwrap_or_else(|_| usage_and_exit()),
             "--export-csv" => a.export_csv = Some(PathBuf::from(next())),
@@ -93,7 +175,7 @@ fn parse_args() -> Args {
 fn main() {
     let args = parse_args();
 
-    let paths = enumerate_audio(&[args.input.clone()]);
+    let paths = enumerate_audio(&[args.input.clone()]).expect("enumerate audio input");
     println!("Found {} audio files under {}", paths.len(), args.input.display());
 
     let store = Store::open(&args.db).expect("open db");
@@ -105,8 +187,46 @@ fn main() {
     } else {
         args.concurrency
     };
+    let resolved_cwd = args.cwd.clone().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+    let resolved_cwd = resolved_cwd.canonicalize().unwrap_or(resolved_cwd);
+    let config_key = serde_json::to_string(&serde_json::json!({
+        "schema": 1,
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "device": args.device,
+        "worker_cmd": args.worker_cmd,
+        "cwd": resolved_cwd.to_string_lossy(),
+        "theta_a": args.theta_a,
+        "theta_b": args.theta_b,
+        "species_name": args.species_name.as_deref().filter(|value| !value.trim().is_empty()).unwrap_or(DEFAULT_SPECIES_NAME),
+        "f_min_hz": args.f_min_hz,
+        "f_max_hz": args.f_max_hz,
+        "localizer": args.localizer,
+        "classifier": args.classifier,
+        "classifier_c": args.classifier_c,
+        "model_identities": {
+            "localizer": model_identity(&resolved_cwd, args.localizer.as_deref(), Some("models/buzz_localizer.pt")),
+            "classifier": model_identity(&resolved_cwd, args.classifier.as_deref(), Some("models/classifier.pt")),
+            "classifier_c": model_identity(&resolved_cwd, args.classifier_c.as_deref(), None),
+        },
+        "code_identities": code_identities(&resolved_cwd, &args.worker_cmd),
+    }))
+    .expect("serialize analysis configuration");
+    let output_dir = args
+        .db
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let cwd_text = resolved_cwd.to_string_lossy().into_owned();
+    let species_name = args
+        .species_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(DEFAULT_SPECIES_NAME)
+        .to_owned();
 
-    let sid = match store.find_resumable(&roots_json).expect("find_resumable") {
+    let sid = match store.find_resumable(&roots_json, &config_key, &args.device).expect("find_resumable") {
         Some(id) => {
             println!("Resuming session {}", id);
             id
@@ -114,21 +234,28 @@ fn main() {
         None => store
             .create_session(&NewSession {
                 input_roots: &roots_json,
-                output_dir: &args
-                    .db
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default(),
+                output_dir: &output_dir,
                 device: &args.device,
                 concurrency: conc as i64,
                 theta_a: args.theta_a,
                 theta_b: args.theta_b,
-                species_name: None,
+                species_name: Some(&species_name),
+                config_key: &config_key,
+                worker_cmd: Some(&args.worker_cmd),
+                cwd: Some(&cwd_text),
+                localizer_path: args.localizer.as_deref(),
+                classifier_path: args.classifier.as_deref(),
+                classifier_c_path: args.classifier_c.as_deref(),
+                f_min_hz: args.f_min_hz,
+                f_max_hz: args.f_max_hz,
             })
             .expect("create_session"),
     };
-    let added = store.add_files(sid, &paths).expect("add_files");
-    println!("{} new files queued (session {})", added, sid);
+    let synced = store.sync_files(sid, &paths).expect("sync_files");
+    println!(
+        "{} new, {} changed, {} removed files reconciled (session {})",
+        synced.added, synced.requeued, synced.removed, sid
+    );
 
     let mut parts: Vec<String> = args.worker_cmd.split_whitespace().map(String::from).collect();
     if parts.is_empty() {
@@ -138,11 +265,31 @@ fn main() {
     let mut worker_args = parts;
     worker_args.push("--device".into());
     worker_args.push(args.device.clone());
+    for (flag, value) in [
+        ("--localizer", args.localizer.as_ref()),
+        ("--classifier", args.classifier.as_ref()),
+        ("--classifier-c", args.classifier_c.as_ref()),
+    ] {
+        if let Some(value) = value {
+            worker_args.push(flag.into());
+            worker_args.push(value.clone());
+        }
+    }
+    worker_args.push("--species-name".into());
+    worker_args.push(species_name.clone());
+    if let Some(value) = args.f_min_hz {
+        worker_args.push("--f-min-hz".into());
+        worker_args.push(value.to_string());
+    }
+    if let Some(value) = args.f_max_hz {
+        worker_args.push("--f-max-hz".into());
+        worker_args.push(value.to_string());
+    }
 
     let cfg = EngineConfig {
         python: program,
         worker_args,
-        cwd: args.cwd.clone(),
+        cwd: Some(resolved_cwd),
         concurrency: conc,
         theta_a: args.theta_a,
         theta_b: args.theta_b,
@@ -150,12 +297,12 @@ fn main() {
         timeout: Duration::from_secs(args.timeout_secs),
         max_attempts: args.max_attempts,
         cancel: None,
-        localizer: None,
-        classifier: None,
-        classifier_c: None,
-        f_min_hz: None,
-        f_max_hz: None,
-        species_name: None,
+        localizer: args.localizer.clone(),
+        classifier: args.classifier.clone(),
+        classifier_c: args.classifier_c.clone(),
+        f_min_hz: args.f_min_hz,
+        f_max_hz: args.f_max_hz,
+        species_name: Some(species_name),
     };
     println!("Running {} worker(s) (device={})...", conc, args.device);
 
@@ -170,8 +317,15 @@ fn main() {
         println!();
     });
 
-    let summary = run_session(store.clone(), sid, cfg, Some(tx));
+    let run_result = run_session(store.clone(), sid, cfg, Some(tx));
     let _ = printer.join();
+    let summary = match run_result {
+        Ok(summary) => summary,
+        Err(error) => {
+            eprintln!("Session {sid} failed internally: {error}");
+            std::process::exit(1);
+        }
+    };
     println!(
         "Session {} complete: {} ok, {} failed, {} events ({} complete, {} retained)",
         sid, summary.done, summary.failed, summary.n_events, summary.n_complete, summary.n_retained
@@ -197,5 +351,9 @@ fn main() {
         let s = store.lock().unwrap();
         let n = export_telemetry_csv(&s, sid, &csv).expect("export telemetry");
         println!("Exported {} review telemetry rows to {}", n, csv.display());
+    }
+
+    if summary.status != "done" {
+        std::process::exit(1);
     }
 }

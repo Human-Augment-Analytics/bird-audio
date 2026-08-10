@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -112,12 +113,14 @@ def git_snapshot(repo_root: Path | None = None) -> dict[str, Any]:
     }
 
 
-def model_snapshot(model_paths: dict[str, str | Path]) -> dict[str, Any]:
+def model_snapshot(
+    model_paths: dict[str, str | Path], base_dir: str | Path | None = None
+) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for role, path in model_paths.items():
         resolved = Path(path)
         if not resolved.is_absolute():
-            resolved = _REPO_ROOT / resolved
+            resolved = Path(base_dir) / resolved if base_dir is not None else _REPO_ROOT / resolved
         out[role] = {
             "path": str(path),
             "sha256": sha256_file(resolved),
@@ -171,17 +174,59 @@ def build_manifest(
     model_paths: dict[str, str | Path] | None = None,
     generated_at: str | None = None,
     extra: dict[str, Any] | None = None,
+    analysis: dict[str, Any] | None = None,
+    model_base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
+    session = session_snapshot(db_path, session_id) if db_path is not None else None
+    resolved_models: dict[str, str | Path] = dict(DEFAULT_MODEL_PATHS)
+    if session:
+        for role, column in (
+            ("localizer", "localizer_path"),
+            ("classifier", "classifier_path"),
+            ("classifier_c", "classifier_c_path"),
+        ):
+            if session.get(column):
+                resolved_models[role] = session[column]
+    if model_paths:
+        resolved_models.update(model_paths)
+
+    if analysis is None and session:
+        stage_a_conf = C.STAGE_A_MODEL_CONF
+        worker_cmd = session.get("worker_cmd")
+        if worker_cmd:
+            try:
+                tokens = shlex.split(str(worker_cmd))
+                for index, token in enumerate(tokens):
+                    if token == "--conf" and index + 1 < len(tokens):
+                        stage_a_conf = float(tokens[index + 1])
+                    elif token.startswith("--conf="):
+                        stage_a_conf = float(token.split("=", 1)[1])
+            except (TypeError, ValueError):
+                pass
+        analysis = {
+            key: session.get(key)
+            for key in (
+                "theta_a", "theta_b", "species_name", "f_min_hz", "f_max_hz",
+            )
+            if session.get(key) is not None
+        }
+        analysis["device"] = session.get("effective_device") or session.get("device")
+        analysis["conf"] = stage_a_conf
     manifest: dict[str, Any] = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
         "git": git_snapshot(),
         "environment": environment_snapshot(),
-        "models": model_snapshot(model_paths or DEFAULT_MODEL_PATHS),
+        "models": model_snapshot(
+            resolved_models,
+            base_dir=(session.get("cwd") if session and session.get("cwd") else model_base_dir),
+        ),
         "constants": constants_snapshot(),
     }
-    if db_path is not None:
-        manifest["session"] = session_snapshot(db_path, session_id)
+    if session is not None:
+        manifest["session"] = session
+    if analysis:
+        manifest["analysis"] = analysis
     if extra:
         manifest["extra"] = extra
     return manifest
@@ -222,7 +267,7 @@ def diff_manifests(
     keys = sorted(set(flat_a) | set(flat_b))
 
     def section_rank(key: str) -> int:
-        for rank, prefix in enumerate(("models", "constants", "environment", "git", "session")):
+        for rank, prefix in enumerate(("models", "analysis", "constants", "environment", "git", "session")):
             if key.startswith(prefix):
                 return rank
         return 99
@@ -241,7 +286,8 @@ def diff_manifests(
 
 
 def is_reproducible(diffs: list[dict[str, Any]]) -> bool:
-    """A rerun reproduces the analysis only if weights and constants are identical."""
+    """Exact reproduction requires the determining code, runtime, config, and weights."""
     return not any(
-        d["field"].startswith("models") or d["field"].startswith("constants") for d in diffs
+        d["field"].startswith(("models", "analysis", "constants", "environment", "git"))
+        for d in diffs
     )

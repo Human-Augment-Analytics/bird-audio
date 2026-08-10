@@ -31,7 +31,17 @@ CREATE TABLE events (
 );
 """
 
-_NEW_COLUMNS = "ALTER TABLE sessions ADD COLUMN species_name TEXT DEFAULT 'Hume''s Leaf Warbler';"
+_NEW_COLUMNS = """
+ALTER TABLE sessions ADD COLUMN species_name TEXT DEFAULT 'Hume''s Leaf Warbler';
+ALTER TABLE sessions ADD COLUMN effective_device TEXT;
+ALTER TABLE sessions ADD COLUMN worker_cmd TEXT;
+ALTER TABLE sessions ADD COLUMN cwd TEXT;
+ALTER TABLE sessions ADD COLUMN localizer_path TEXT;
+ALTER TABLE sessions ADD COLUMN classifier_path TEXT;
+ALTER TABLE sessions ADD COLUMN classifier_c_path TEXT;
+ALTER TABLE sessions ADD COLUMN f_min_hz REAL;
+ALTER TABLE sessions ADD COLUMN f_max_hz REAL;
+"""
 
 
 def make_db(tmp_path, roots, *, device="mps", theta_a=0.0, theta_b=0.530306,
@@ -99,6 +109,13 @@ def test_read_session_reads_config_and_counts(tmp_path, audio_root):
     assert (session.n_events, session.n_complete, session.n_retained) == (3, 2, 2)
 
 
+def test_read_session_replays_effective_fallback_device(tmp_path, audio_root):
+    db = make_db(tmp_path, [str(audio_root)], device="cuda")
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE sessions SET effective_device='cpu' WHERE id=1")
+    assert P.read_session_protocol(db, session_id=1).device == "cpu"
+
+
 def test_read_session_tolerates_old_schema_without_new_columns(tmp_path, audio_root):
     db = make_db(tmp_path, [str(audio_root)], new_schema=False)
     with sqlite3.connect(db) as conn:
@@ -139,6 +156,38 @@ def test_thetas_and_device_reach_the_batch_command(tmp_path, audio_root):
     for flag, value in (("--device", "cuda"), ("--theta-a", "0.25"), ("--theta-b", "0.61"),
                         ("--input", str(audio_root))):
         assert run_step.command[run_step.command.index(flag) + 1] == value
+
+
+def test_custom_worker_models_band_and_species_reach_rerun(tmp_path, audio_root):
+    db = make_db(tmp_path, [str(audio_root)])
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE sessions SET worker_cmd=?, cwd=?, localizer_path=?, classifier_path=?, "
+            "classifier_c_path=?, f_min_hz=?, f_max_hz=?, species_name=? WHERE id=1",
+            (
+                "python custom_worker.py --worker",
+                str(tmp_path),
+                "models/custom-a.pt",
+                "models/custom-b.pt",
+                "models/custom-c.pt",
+                0.0,
+                8000.0,
+                "custom species",
+            ),
+        )
+    run = next(step for step in build(tmp_path, db).steps if step.name == "batch-run")
+    expected = {
+        "--worker-cmd": "python custom_worker.py --worker",
+        "--cwd": str(tmp_path),
+        "--localizer": "models/custom-a.pt",
+        "--classifier": "models/custom-b.pt",
+        "--classifier-c": "models/custom-c.pt",
+        "--f-min-hz": "0.0",
+        "--f-max-hz": "8000.0",
+        "--species-name": "custom species",
+    }
+    for flag, value in expected.items():
+        assert run.command[run.command.index(flag) + 1] == value
 
 
 def test_quoting_survives_spaces_and_quotes(tmp_path):
@@ -207,6 +256,10 @@ def test_analysis_steps_toggle(tmp_path, audio_root):
     assert analysis <= with_analysis
     assert analysis.isdisjoint(without)
     assert {"preflight-manifest", "preflight-compare", "batch-run", "export"} <= without
+    ecology = next(step for step in build(tmp_path, db).steps if step.name == "ecological-analysis")
+    assert "--measure-effort" in ecology.command
+    sensitivity = next(step for step in build(tmp_path, db).steps if step.name == "threshold-sensitivity")
+    assert "--measure-effort" in sensitivity.command
 
 
 def test_metadata_argument_only_when_supplied(tmp_path, audio_root):

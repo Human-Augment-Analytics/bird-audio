@@ -33,7 +33,9 @@ from birdpipe import constants as C
 from birdpipe.constants import ConsolidationParams, StageBParams, is_yolo_model
 
 class BirdAudioPipeline:
-    def __init__(self, localizer_path, classifier_path=None, device=None, conf=0.25):
+    def __init__(self, localizer_path, classifier_path=None, device=None, conf=C.STAGE_A_MODEL_CONF,
+                 classifier_c_path=None, f_min_hz=None, f_max_hz=None,
+                 species_name=None):
         if device:
             self.device = torch.device(device)
         elif torch.cuda.is_available():
@@ -48,9 +50,14 @@ class BirdAudioPipeline:
         self._model_cache = {}
         self.localizer_path = localizer_path
         self.classifier_path = classifier_path
+        self.classifier_c_path = classifier_c_path
+        self.f_min_hz = f_min_hz
+        self.f_max_hz = f_max_hz
+        self.species_name = species_name
         
         self.localizer = self._get_model(localizer_path)
         self.classifier = self._get_model(classifier_path) if classifier_path else None
+        self.classifier_c = self._get_model(classifier_c_path) if classifier_c_path else None
         
         self.conf = conf
         self.letterbox = LetterBox((160, 512), auto=False, stride=32)
@@ -124,27 +131,39 @@ class BirdAudioPipeline:
     def process_file(self, input_wav, output_root="output", write_artifacts=False,
                      theta_a=0.0, theta_b=0.530306, emit_raw=False,
                      localizer=None, classifier=None, classifier_c=None,
-                     f_min_hz=None, f_max_hz=None):
+                     f_min_hz=None, f_max_hz=None, species_name=None):
         input_wav = Path(input_wav)
         t0 = time.time()
 
         # Dynamic frequency calculations & validation
-        f_min = float(f_min_hz) if f_min_hz is not None else C.F_MIN_HZ
-        f_max = float(f_max_hz) if f_max_hz is not None else C.F_MAX_HZ
+        configured_f_min = f_min_hz if f_min_hz is not None else self.f_min_hz
+        configured_f_max = f_max_hz if f_max_hz is not None else self.f_max_hz
+        active_species_name = species_name if species_name is not None else self.species_name
+        f_min = float(configured_f_min) if configured_f_min is not None else C.F_MIN_HZ
+        f_max = float(configured_f_max) if configured_f_max is not None else C.F_MAX_HZ
 
-        if f_min <= 0 or f_max <= 0 or f_min >= f_max:
+        if f_min < 0 or f_max <= 0 or f_min >= f_max:
             return {"status": "error", "message": f"Invalid frequency bounds: f_min_hz={f_min_hz}, f_max_hz={f_max_hz} must be positive and f_min_hz < f_max_hz"}
 
         # Resolve active models dynamically
         try:
             active_localizer = self._get_model(localizer) if localizer else self.localizer
             active_classifier = self._get_model(classifier) if classifier else self.classifier
-            active_classifier_c = self._get_model(classifier_c) if classifier_c else None
+            active_classifier_c = self._get_model(classifier_c) if classifier_c else self.classifier_c
         except Exception as e:
             return {"status": "error", "message": f"Failed to load model: {e}"}
 
         try:
             sr = librosa.get_samplerate(str(input_wav))
+            if int(sr) != C.SAMPLE_RATE:
+                return {
+                    "status": "error",
+                    "input": str(input_wav),
+                    "message": (
+                        f"Unsupported sample rate {int(sr)} Hz; this model requires "
+                        f"{C.SAMPLE_RATE} Hz audio so its time/frequency preprocessing stays fixed"
+                    ),
+                }
             stream = librosa.stream(
                 str(input_wav), block_length=128, frame_length=1024,
                 hop_length=256, fill_value=0,
@@ -162,6 +181,9 @@ class BirdAudioPipeline:
             return {"status": "error", "message": f"Minimum frequency f_min_hz={f_min} must be below the Nyquist frequency={nyquist}"}
 
         n_fft = 1024
+        delta_t = C.DELTA_T
+        window_seconds = C.T_W
+        sec_per_frame = C.SEC_PER_FRAME
         freq_bin_low = int(np.round(f_min * n_fft / sr))
         freq_bin_high = int(np.round(f_max * n_fft / sr))
 
@@ -205,7 +227,10 @@ class BirdAudioPipeline:
             confs = boxes.conf.cpu().numpy()
             for k in range(len(xywhn)):
                 x, y, w, h = (float(v) for v in xywhn[k])
-                raw.append(coords.map_box(x, y, w, h, float(confs[k]), count, f_min=f_min, f_max=f_max))
+                raw.append(coords.map_box(
+                    x, y, w, h, float(confs[k]), count,
+                    dt=delta_t, tw=window_seconds, f_min=f_min, f_max=f_max,
+                ))
 
         # Consolidation -> event tracks
         events = consolidate.consolidate(raw, ConsolidationParams())
@@ -216,7 +241,10 @@ class BirdAudioPipeline:
         if events and active_classifier is not None:
             band = self._band_image(feats_quarters, freq_bin_low=freq_bin_low, freq_bin_high=freq_bin_high)
             for ev in events:
-                crop = stageb.build_crop(band, ev, params=sbp, f_min=f_min, f_max=f_max)
+                crop = stageb.build_crop(
+                    band, ev, params=sbp, sec_per_frame=sec_per_frame,
+                    f_min=f_min, f_max=f_max,
+                )
                 ev.completeness_score = stageb.classify_crop(
                     active_classifier, crop, sbp.complete_class)
         rec.finalize_events(events, theta_a=theta_a, theta_b=theta_b)
@@ -231,7 +259,10 @@ class BirdAudioPipeline:
 
             for ev in events:
                 if ev.retained:
-                    crop = stageb.build_crop(band, ev, params=sbp, f_min=f_min, f_max=f_max)
+                    crop = stageb.build_crop(
+                        band, ev, params=sbp, sec_per_frame=sec_per_frame,
+                        f_min=f_min, f_max=f_max,
+                    )
                     if not is_pytorch:
                         res = active_classifier_c(crop, verbose=False)[0]
                         idx = int(res.probs.top1)
@@ -248,29 +279,50 @@ class BirdAudioPipeline:
                                 outputs = active_classifier_c(crop_tensor)
                             if isinstance(outputs, tuple):
                                 outputs = outputs[0]
-                            probs = torch.softmax(outputs, dim=1).squeeze(0)
-                            idx = int(torch.argmax(probs).item())
-                            score = float(probs[idx].item())
-                            
                             names = None
                             if hasattr(active_classifier_c, "names"):
                                 names = active_classifier_c.names
                             elif hasattr(active_classifier_c, "classes"):
                                 names = active_classifier_c.classes
                             
-                            if names and hasattr(names, "get") and (idx in names or str(idx) in names):
-                                label = names.get(idx) or names.get(str(idx))
-                            elif names and isinstance(names, list) and idx < len(names):
-                                label = names[idx]
+                            if outputs.shape[-1] == 1:
+                                probability = float(torch.sigmoid(outputs).item())
+                                if isinstance(names, dict):
+                                    negative_label = names.get(0) or names.get("0")
+                                    positive_label = names.get(1) or names.get("1")
+                                elif isinstance(names, (list, tuple)) and len(names) >= 2:
+                                    negative_label, positive_label = names[0], names[1]
+                                else:
+                                    positive_label = active_species_name
+                                    negative_label = f"not_{active_species_name}" if active_species_name else None
+                                if not positive_label or not negative_label:
+                                    raise ValueError(
+                                        "Single-output Stage C model needs two class names or a species_name"
+                                    )
+                                is_positive = probability >= 0.5
+                                label = positive_label if is_positive else negative_label
+                                score = probability if is_positive else 1.0 - probability
                             else:
-                                label = str(idx)
+                                probs = torch.softmax(outputs, dim=1).squeeze(0)
+                                idx = int(torch.argmax(probs).item())
+                                score = float(probs[idx].item())
+                                if names and hasattr(names, "get") and (idx in names or str(idx) in names):
+                                    label = names.get(idx) or names.get(str(idx))
+                                elif names and isinstance(names, list) and idx < len(names):
+                                    label = names[idx]
+                                else:
+                                    raise ValueError(
+                                        "Multi-class Stage C model has no class name for its winning index"
+                                    )
                             
                             ev.stage_c_label = label
                             ev.stage_c_score = score
                         except Exception as e:
-                            print(f"Warning: Failed to execute Stage C non-YOLO model: {e}", file=sys.stderr)
-                            ev.stage_c_label = "unknown"
-                            ev.stage_c_score = 0.0
+                            return {
+                                "status": "error",
+                                "input": str(input_wav),
+                                "message": f"Failed to execute Stage C classifier: {e}",
+                            }
 
         out = {
             "status": "success",
@@ -300,15 +352,20 @@ def main():
     parser.add_argument("--classifier-c", type=str, help="Stage C classifier model path")
     parser.add_argument("--f-min-hz", type=float, help="Dynamic minimum frequency in Hz")
     parser.add_argument("--f-max-hz", type=float, help="Dynamic maximum frequency in Hz")
+    parser.add_argument("--species-name", type=str, help="Species or call-type label recorded for provenance")
     parser.add_argument("--device", type=str, help="Device (cpu, cuda, mps)")
-    parser.add_argument("--conf", type=float, default=0.25, help="Stage A confidence threshold")
+    parser.add_argument("--conf", type=float, default=C.STAGE_A_MODEL_CONF, help="Stage A confidence threshold")
     parser.add_argument("--theta-a", type=float, default=0.0, help="Export Stage A conf threshold")
     parser.add_argument("--theta-b", type=float, default=0.530306, help="Stage B completeness threshold")
     parser.add_argument("--write-artifacts", action="store_true", help="Write vis/crops/wav/labels")
     parser.add_argument("--worker", action="store_true", help="Run as a stdin/stdout JSON worker")
     args = parser.parse_args()
 
-    pipeline = BirdAudioPipeline(args.localizer, args.classifier, device=args.device, conf=args.conf)
+    pipeline = BirdAudioPipeline(
+        args.localizer, args.classifier, device=args.device, conf=args.conf,
+        classifier_c_path=args.classifier_c, f_min_hz=args.f_min_hz,
+        f_max_hz=args.f_max_hz, species_name=args.species_name,
+    )
 
     if args.worker:
         from birdpipe.worker import run_worker
@@ -322,7 +379,7 @@ def main():
         args.input, args.output, write_artifacts=args.write_artifacts,
         theta_a=args.theta_a, theta_b=args.theta_b,
         localizer=args.localizer, classifier=args.classifier, classifier_c=args.classifier_c,
-        f_min_hz=args.f_min_hz, f_max_hz=args.f_max_hz,
+        f_min_hz=args.f_min_hz, f_max_hz=args.f_max_hz, species_name=args.species_name,
     )
     print(json.dumps(result, indent=2))
 

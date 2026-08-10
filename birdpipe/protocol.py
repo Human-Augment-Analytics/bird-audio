@@ -31,6 +31,7 @@ DEFAULT_PYTHON_CMD: tuple[str, ...] = ("uv", "run", "python")
 _MODEL_PATH_COLUMNS = {
     "localizer": ("localizer_path", "localizer", "model_localizer"),
     "classifier": ("classifier_path", "classifier", "model_classifier"),
+    "classifier_c": ("classifier_c_path", "classifier_c", "model_classifier_c"),
 }
 
 
@@ -57,6 +58,10 @@ class SessionProtocol:
     theta_b: float
     species_name: str | None = None
     model_paths: dict[str, str] = field(default_factory=dict)
+    worker_cmd: str | None = None
+    cwd: str | None = None
+    f_min_hz: float | None = None
+    f_max_hz: float | None = None
     status: str | None = None
     created_at: str | None = None
     total_files: int | None = None
@@ -234,12 +239,16 @@ def read_session_protocol(
             session_id=sid,
             input_roots=_parse_roots(rec.get("input_roots")),
             output_dir=str(rec.get("output_dir") or ""),
-            device=str(rec.get("device") or "cpu"),
+            device=str(rec.get("effective_device") or rec.get("device") or "cpu"),
             concurrency=_as_int(rec.get("concurrency"), 0),
             theta_a=_as_float(rec.get("theta_a"), 0.0),
             theta_b=_as_float(rec.get("theta_b"), StageBParams().theta_b),
             species_name=rec.get("species_name"),
             model_paths=model_paths,
+            worker_cmd=rec.get("worker_cmd"),
+            cwd=rec.get("cwd"),
+            f_min_hz=(float(rec["f_min_hz"]) if rec.get("f_min_hz") is not None else None),
+            f_max_hz=(float(rec["f_max_hz"]) if rec.get("f_max_hz") is not None else None),
             status=rec.get("status"),
             created_at=rec.get("created_at"),
             total_files=rec.get("total_files"),
@@ -272,6 +281,23 @@ def _batch_command(
     ]
     if session.concurrency > 0:
         cmd += ["--concurrency", str(session.concurrency)]
+    if session.worker_cmd:
+        cmd += ["--worker-cmd", session.worker_cmd]
+    if session.cwd:
+        cmd += ["--cwd", session.cwd]
+    for role, flag in (
+        ("localizer", "--localizer"),
+        ("classifier", "--classifier"),
+        ("classifier_c", "--classifier-c"),
+    ):
+        if session.model_paths.get(role):
+            cmd += [flag, session.model_paths[role]]
+    if session.f_min_hz is not None:
+        cmd += ["--f-min-hz", repr(session.f_min_hz)]
+    if session.f_max_hz is not None:
+        cmd += ["--f-max-hz", repr(session.f_max_hz)]
+    if session.species_name:
+        cmd += ["--species-name", session.species_name]
     if export is not None:
         cmd += [
             "--export-csv", export[0],
@@ -375,6 +401,7 @@ def build_protocol(
         eco_cmd = [
             *py, "scripts/ecological_analysis.py",
             "--db", rerun,
+            "--measure-effort",
             "--theta-a", repr(session.theta_a),
             "--theta-b", repr(session.theta_b),
             "--out", f"{out}/ecology",
@@ -382,6 +409,7 @@ def build_protocol(
         sens_cmd = [
             *py, "scripts/threshold_sensitivity.py",
             "--db", rerun,
+            "--measure-effort",
             "--out", f"{out}/ecology/sensitivity",
         ]
         if metadata is not None:

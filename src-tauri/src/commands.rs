@@ -20,8 +20,99 @@ use batch_core::store::{
 
 use crate::state::AppState;
 
+const DEFAULT_SPECIES_NAME: &str = "Hume's Leaf Warbler";
+
 fn db_path(output_dir: &str) -> PathBuf {
     PathBuf::from(output_dir).join("batch.db")
+}
+
+fn model_identity(
+    cwd: &std::path::Path,
+    configured: Option<&str>,
+    default_path: Option<&str>,
+) -> serde_json::Value {
+    let selected = configured
+        .filter(|value| !value.trim().is_empty())
+        .or(default_path);
+    let Some(selected) = selected else {
+        return serde_json::Value::Null;
+    };
+    let raw = PathBuf::from(selected);
+    let path = if raw.is_absolute() { raw } else { cwd.join(raw) };
+    let metadata = path.metadata().ok();
+    let size_bytes = metadata.as_ref().map(std::fs::Metadata::len);
+    let modified_ns = metadata
+        .and_then(|value| value.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().to_string());
+    serde_json::json!({
+        "path": path.to_string_lossy(),
+        "size_bytes": size_bytes,
+        "modified_ns": modified_ns,
+    })
+}
+
+fn code_identities(cwd: &std::path::Path, worker_cmd: &str) -> serde_json::Value {
+    let mut identities = serde_json::Map::new();
+    for relative in [
+        "scripts/ml_engine.py",
+        "birdpipe/audio.py",
+        "birdpipe/consolidate.py",
+        "birdpipe/constants.py",
+        "birdpipe/coords.py",
+        "birdpipe/records.py",
+        "birdpipe/stageb.py",
+        "birdpipe/worker.py",
+        "pyproject.toml",
+        "uv.lock",
+    ] {
+        identities.insert(relative.into(), model_identity(cwd, Some(relative), None));
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        identities.insert(
+            "application_binary".into(),
+            model_identity(cwd, executable.to_str(), None),
+        );
+    }
+    for (index, token) in worker_cmd.split_whitespace().enumerate() {
+        if token.starts_with('-') {
+            continue;
+        }
+        let raw = PathBuf::from(token);
+        let resolved = if raw.is_absolute() { raw } else { cwd.join(raw) };
+        if resolved.is_file() {
+            identities.insert(
+                format!("worker_arg_{index}"),
+                model_identity(cwd, resolved.to_str(), None),
+            );
+        }
+    }
+    serde_json::Value::Object(identities)
+}
+
+fn analysis_config_key(opts: &StartOpts, resolved_cwd: &std::path::Path) -> Result<String, String> {
+    serde_json::to_string(&serde_json::json!({
+        "schema": 1,
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "device": opts.device,
+        "worker_cmd": opts.worker_cmd,
+        "cwd": resolved_cwd.to_string_lossy(),
+        "theta_a": opts.theta_a,
+        "theta_b": opts.theta_b,
+        "species_name": opts.species_name.as_deref().filter(|value| !value.trim().is_empty()).unwrap_or(DEFAULT_SPECIES_NAME),
+        "f_min_hz": opts.f_min_hz,
+        "f_max_hz": opts.f_max_hz,
+        "localizer": opts.localizer,
+        "classifier": opts.classifier,
+        "classifier_c": opts.classifier_c,
+        "model_identities": {
+            "localizer": model_identity(resolved_cwd, opts.localizer.as_deref(), Some("models/buzz_localizer.pt")),
+            "classifier": model_identity(resolved_cwd, opts.classifier.as_deref(), Some("models/classifier.pt")),
+            "classifier_c": model_identity(resolved_cwd, opts.classifier_c.as_deref(), None),
+        },
+        "code_identities": code_identities(resolved_cwd, &opts.worker_cmd),
+    }))
+    .map_err(|e| format!("failed to serialize analysis configuration: {e}"))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,7 +191,7 @@ pub fn start_session(
     state: State<'_, AppState>,
     opts: StartOpts,
 ) -> Result<StartResult, String> {
-    let paths = enumerate_audio(&[PathBuf::from(&opts.input)]);
+    let paths = enumerate_audio(&[PathBuf::from(&opts.input)])?;
     let store = Store::open(&db_path(&opts.output_dir)).map_err(|e| e.to_string())?;
     let input_abs = PathBuf::from(&opts.input)
         .canonicalize()
@@ -119,7 +210,18 @@ pub fn start_session(
         Some(v) if v == &serde_json::Value::Bool(false) => resolve_concurrency(&opts.device, None),
         _ => conc,
     };
-    let sid = match store.find_resumable(&roots_json).map_err(|e| e.to_string())? {
+    let config_key = analysis_config_key(&opts, &proj_dir)?;
+    let cwd_text = proj_dir.to_string_lossy().into_owned();
+    let species_name = opts
+        .species_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(DEFAULT_SPECIES_NAME)
+        .to_owned();
+    let sid = match store
+        .find_resumable(&roots_json, &config_key, &opts.device)
+        .map_err(|e| e.to_string())?
+    {
         Some(id) => id,
         None => store
                 .create_session(&NewSession {
@@ -129,11 +231,19 @@ pub fn start_session(
                     concurrency: conc_final as i64,
                 theta_a: opts.theta_a,
                 theta_b: opts.theta_b,
-                species_name: opts.species_name.as_deref(),
+                species_name: Some(&species_name),
+                config_key: &config_key,
+                worker_cmd: Some(&opts.worker_cmd),
+                cwd: Some(&cwd_text),
+                localizer_path: opts.localizer.as_deref(),
+                classifier_path: opts.classifier.as_deref(),
+                classifier_c_path: opts.classifier_c.as_deref(),
+                f_min_hz: opts.f_min_hz,
+                f_max_hz: opts.f_max_hz,
             })
             .map_err(|e| e.to_string())?,
     };
-    store.add_files(sid, &paths).map_err(|e| e.to_string())?;
+    store.sync_files(sid, &paths).map_err(|e| e.to_string())?;
     let total_files = store.list_files(sid).map_err(|e| e.to_string())?.len();
 
     // worker command: split "uv run python scripts/ml_engine.py --worker" + device
@@ -175,6 +285,8 @@ pub fn start_session(
         worker_args.push("--f-max-hz".into());
         worker_args.push(f_max.to_string());
     }
+    worker_args.push("--species-name".into());
+    worker_args.push(species_name.clone());
 
     let cancel = Arc::new(AtomicBool::new(false));
     *state.cancel.lock().unwrap() = Some(cancel.clone());
@@ -189,13 +301,13 @@ pub fn start_session(
         manifest_only: true,
         timeout: Duration::from_secs(opts.timeout_secs),
         max_attempts: opts.max_attempts,
-        cancel: Some(cancel),
+        cancel: Some(cancel.clone()),
         localizer: opts.localizer.clone(),
         classifier: opts.classifier.clone(),
         classifier_c: opts.classifier_c.clone(),
         f_min_hz: opts.f_min_hz,
         f_max_hz: opts.f_max_hz,
-        species_name: opts.species_name.clone(),
+        species_name: Some(species_name),
     };
 
     let store = Arc::new(Mutex::new(store));
@@ -215,10 +327,23 @@ pub fn start_session(
 
     // run thread: drives the engine, then emits final summary
     let app_done = app.clone();
+    let run_cancel = cancel.clone();
     thread::spawn(move || {
-        let summary = run_session(store, sid, cfg, Some(tx));
+        let result = run_session(store, sid, cfg, Some(tx));
         let _ = fwd.join();
-        let _ = app_done.emit("batch://done", &summary);
+        match result {
+            Ok(summary) => {
+                let _ = app_done.emit("batch://done", &summary);
+            }
+            Err(error) => {
+                let _ = app_done.emit("batch://error", &error);
+            }
+        }
+        let state = app_done.state::<AppState>();
+        let mut current = state.cancel.lock().unwrap();
+        if current.as_ref().is_some_and(|flag| Arc::ptr_eq(flag, &run_cancel)) {
+            *current = None;
+        }
     });
 
     Ok(StartResult { session_id: sid, total_files })
@@ -450,8 +575,15 @@ pub fn check_cache(output_dir: String) -> Result<bool, String> {
 #[tauri::command]
 pub fn clear_cache(output_dir: String) -> Result<(), String> {
     let path = db_path(&output_dir);
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|e| format!("Failed to delete cache: {}", e))?;
+    for candidate in [
+        path.clone(),
+        PathBuf::from(format!("{}-wal", path.display())),
+        PathBuf::from(format!("{}-shm", path.display())),
+    ] {
+        if candidate.exists() {
+            std::fs::remove_file(&candidate)
+                .map_err(|e| format!("Failed to delete cache file {}: {e}", candidate.display()))?;
+        }
     }
     Ok(())
 }
@@ -666,6 +798,28 @@ pub fn delete_event(output_dir: String, event_id: i64) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn restore_event(
+    output_dir: String,
+    session_id: i64,
+    path: String,
+    event: EventRow,
+) -> Result<i64, String> {
+    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
+    let new_id = store
+        .restore_event(session_id, &path, &event)
+        .map_err(|e| e.to_string())?;
+    let meta = serde_json::json!({ "path": path, "original_event_id": event.id }).to_string();
+    log_telemetry(&store, &NewReviewEvent {
+        session_id,
+        event_id: Some(new_id),
+        file_id: event_scope(&store, new_id).map(|(_, file_id)| file_id),
+        action: "restore",
+        meta: Some(&meta),
+    });
+    Ok(new_id)
+}
+
 /// Log a non-mutating reviewer action (play / seek / open_file / search).
 #[tauri::command]
 pub fn log_review_action(
@@ -736,6 +890,8 @@ mod tests {
         let sid = store.create_session(&NewSession {
             input_roots: "[\"/d\"]", output_dir: "/o", device: "cpu",
             concurrency: 1, theta_a: 0.0, theta_b: 0.53, species_name: None,
+            config_key: "test", worker_cmd: None, cwd: None, localizer_path: None,
+            classifier_path: None, classifier_c_path: None, f_min_hz: None, f_max_hz: None,
         }).unwrap();
         store.add_files(sid, &[PathBuf::from("/d/a.wav")]).unwrap();
         let eid = store.add_manual_event(sid, "/d/a.wav", 1.0, 2.0, 4000.0, 8000.0).unwrap();
@@ -787,6 +943,27 @@ mod tests {
         assert_eq!(summary.total_actions, 2);
         assert_eq!(summary.actions_by_type.get("play"), Some(&1));
         assert_eq!(summary.n_decisions, 0);
+        std::fs::remove_dir_all(&out).ok();
+    }
+
+    #[test]
+    fn restore_event_round_trips_and_logs_telemetry() {
+        let (out, sid, eid) = temp_session("restore_event");
+        let store = Store::open(&db_path(&out)).unwrap();
+        let original = store.list_events(sid, "/d/a.wav").unwrap()
+            .into_iter().find(|r| r.id == eid).unwrap();
+        drop(store);
+
+        delete_event(out.clone(), eid).unwrap();
+        let restored_id = restore_event(out.clone(), sid, "/d/a.wav".into(), original).unwrap();
+        let store = Store::open(&db_path(&out)).unwrap();
+        let restored = store.list_events(sid, "/d/a.wav").unwrap()
+            .into_iter().find(|r| r.id == restored_id).unwrap();
+        assert_eq!(restored.source, "manual");
+        let summary = store.review_telemetry_summary(sid).unwrap();
+        assert_eq!(summary.actions_by_type.get("delete"), Some(&1));
+        assert_eq!(summary.actions_by_type.get("restore"), Some(&1));
+        drop(store);
         std::fs::remove_dir_all(&out).ok();
     }
 }

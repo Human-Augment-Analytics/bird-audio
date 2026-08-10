@@ -24,8 +24,8 @@ if str(_REPO_ROOT) not in sys.path:
 from birdpipe import verification as V
 
 _EVENT_COLUMNS = (
-    "id, session_id, file_id, stage_a_conf, completeness_score, completeness_label, "
-    "retained, review_status, source"
+    "e.id, e.session_id, e.file_id, e.stage_a_conf, e.completeness_score, "
+    "e.completeness_label, e.retained, e.review_status, e.source, f.path AS path"
 )
 
 
@@ -35,10 +35,10 @@ def load_events(db_path: str, session_id: Optional[int] = None) -> List[Dict[str
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        sql = f"SELECT {_EVENT_COLUMNS} FROM events"
+        sql = f"SELECT {_EVENT_COLUMNS} FROM events e JOIN files f ON f.id = e.file_id"
         params: tuple = ()
         if session_id is not None:
-            sql += " WHERE session_id = ?"
+            sql += " WHERE e.session_id = ?"
             params = (session_id,)
         rows = conn.execute(sql, params).fetchall()
     finally:
@@ -85,6 +85,7 @@ def build_report(events: List[Dict[str, Any]], args: argparse.Namespace) -> Dict
             "stage_a_conf": lookup[eid].get("stage_a_conf"),
             "completeness_score": lookup[eid].get("completeness_score"),
             "file_id": lookup[eid].get("file_id"),
+            "path": lookup[eid].get("path"),
         }
         for eid in queue_ids
     ]

@@ -16,6 +16,7 @@ FREQ_BIN_LOW = 88
 FREQ_BIN_HIGH = 248           # band = bins [88:248] -> 160 rows
 F_MIN_HZ = 4125.0
 F_MAX_HZ = 11625.0
+STAGE_A_MODEL_CONF = 0.25
 
 # Window stride Δt and duration T_w in seconds (matches paper's 0.6827 s / 2.7467 s).
 DELTA_T = BLOCK_FRAMES * HOP_LENGTH / SAMPLE_RATE                 # ≈ 0.6827 s
@@ -106,4 +107,3 @@ def is_yolo_model(model) -> bool:
         "ultralytics" in module_name or 
         class_name in ("YOLO", "MagicMock")
     )
-

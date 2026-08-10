@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 import traceback
+from pathlib import Path
 
 from birdpipe import provenance
 
@@ -36,7 +37,14 @@ def build_run_manifest(pipeline) -> dict:
         value = getattr(pipeline, attr, None)
         if value is not None:
             extra[attr] = value
-    return provenance.build_manifest(model_paths=model_paths or None, extra=extra)
+    # Keep `extra` for old manifest consumers, but `analysis` is determining and
+    # therefore participates in reproducibility comparisons.
+    return provenance.build_manifest(
+        model_paths=model_paths or None,
+        extra=extra,
+        analysis=extra,
+        model_base_dir=Path.cwd(),
+    )
 
 
 def run_worker(pipeline, in_stream=None, out_stream=None) -> None:
@@ -79,6 +87,7 @@ def run_worker(pipeline, in_stream=None, out_stream=None) -> None:
                 "classifier_c": req.get("classifier_c"),
                 "f_min_hz": req.get("f_min_hz"),
                 "f_max_hz": req.get("f_max_hz"),
+                "species_name": req.get("species_name"),
             }
             for k, v in extra.items():
                 if has_var_keyword or k in sig.parameters:

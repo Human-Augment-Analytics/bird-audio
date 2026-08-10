@@ -1,6 +1,6 @@
 //! SQLite-backed work queue + checkpoint. The DB IS the durable state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,6 +19,16 @@ pub struct NewSession<'a> {
     pub theta_a: f64,
     pub theta_b: f64,
     pub species_name: Option<&'a str>,
+    /// Stable serialization of every analysis-affecting option. Only an exact
+    /// match may reuse completed file rows from this session.
+    pub config_key: &'a str,
+    pub worker_cmd: Option<&'a str>,
+    pub cwd: Option<&'a str>,
+    pub localizer_path: Option<&'a str>,
+    pub classifier_path: Option<&'a str>,
+    pub classifier_c_path: Option<&'a str>,
+    pub f_min_hz: Option<f64>,
+    pub f_max_hz: Option<f64>,
 }
 
 /// A file claimed for processing.
@@ -40,6 +50,8 @@ pub struct RecordedResult<'a> {
 /// Aggregate counts for a session.
 #[derive(Debug, PartialEq, serde::Serialize)]
 pub struct Summary {
+    pub session_id: i64,
+    pub status: String,
     pub total: i64,
     pub pending: i64,
     pub in_progress: i64,
@@ -60,8 +72,16 @@ pub struct FileRow {
     pub error: Option<String>,
 }
 
+/// Changes made while reconciling a resumed session with the current input scan.
+#[derive(Debug, Default, PartialEq)]
+pub struct FileSync {
+    pub added: usize,
+    pub requeued: usize,
+    pub removed: usize,
+}
+
 /// A single event row with curation fields, for the review UI.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EventRow {
     pub id: i64,
     pub file_id: i64,
@@ -80,6 +100,7 @@ pub struct EventRow {
     pub source: String,
     pub label: Option<String>,
     pub note: Option<String>,
+    pub reviewed_at: Option<String>,
     pub stage_c_label: Option<String>,
     pub stage_c_score: Option<f64>,
 }
@@ -126,15 +147,24 @@ CREATE TABLE IF NOT EXISTS sessions(
   input_roots TEXT NOT NULL,
   output_dir TEXT NOT NULL,
   device TEXT NOT NULL,
+  effective_device TEXT,
   concurrency INTEGER NOT NULL,
   theta_a REAL NOT NULL,
   theta_b REAL NOT NULL,
   total_files INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'running',
-  species_name TEXT DEFAULT 'Hume''s Leaf Warbler'
+  species_name TEXT DEFAULT 'Hume''s Leaf Warbler',
+  config_key TEXT,
+  worker_cmd TEXT,
+  cwd TEXT,
+  localizer_path TEXT,
+  classifier_path TEXT,
+  classifier_c_path TEXT,
+  f_min_hz REAL,
+  f_max_hz REAL
 );
 CREATE TABLE IF NOT EXISTS files(
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER NOT NULL,
   path TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
@@ -144,11 +174,13 @@ CREATE TABLE IF NOT EXISTS files(
   elapsed_ms INTEGER NOT NULL DEFAULT 0,
   error TEXT,
   attempts INTEGER NOT NULL DEFAULT 0,
+  size_bytes INTEGER,
+  modified_ns INTEGER,
   updated_at TEXT,
   UNIQUE(session_id, path)
 );
 CREATE TABLE IF NOT EXISTS events(
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER NOT NULL,
   file_id INTEGER NOT NULL,
   t_start REAL, t_end REAL, duration REAL,
@@ -195,6 +227,15 @@ fn ensure_curation_columns(conn: &Connection) -> rusqlite::Result<()> {
     };
     let session_columns: &[(&str, &str)] = &[
         ("species_name", "TEXT DEFAULT 'Hume''s Leaf Warbler'"),
+        ("effective_device", "TEXT"),
+        ("config_key", "TEXT"),
+        ("worker_cmd", "TEXT"),
+        ("cwd", "TEXT"),
+        ("localizer_path", "TEXT"),
+        ("classifier_path", "TEXT"),
+        ("classifier_c_path", "TEXT"),
+        ("f_min_hz", "REAL"),
+        ("f_max_hz", "REAL"),
     ];
     for (col, def) in session_columns {
         if !existing_sessions.iter().any(|n| n == col) {
@@ -202,7 +243,127 @@ fn ensure_curation_columns(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
 
+    let existing_files: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(files)")?;
+        let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        names.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (col, def) in [("size_bytes", "INTEGER"), ("modified_ns", "INTEGER")] {
+        if !existing_files.iter().any(|n| n == col) {
+            conn.execute_batch(&format!("ALTER TABLE files ADD COLUMN {col} {def}"))?;
+        }
+    }
+
     Ok(())
+}
+
+/// SQLite may reuse the largest deleted INTEGER PRIMARY KEY. Review telemetry
+/// refers to event ids historically, so migrate old databases to AUTOINCREMENT
+/// before any event can be deleted and restored under an old identity.
+fn ensure_event_ids_never_reused(conn: &Connection) -> rusqlite::Result<()> {
+    let create_sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='events'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if create_sql
+        .as_deref()
+        .is_some_and(|sql| sql.to_ascii_uppercase().contains("AUTOINCREMENT"))
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+BEGIN IMMEDIATE;
+CREATE TABLE events_no_reuse(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL,
+  file_id INTEGER NOT NULL,
+  t_start REAL, t_end REAL, duration REAL,
+  f_low REAL, f_high REAL, center_freq REAL,
+  stage_a_conf REAL,
+  completeness_score REAL,
+  completeness_label TEXT,
+  retained INTEGER,
+  n_members INTEGER,
+  stage_c_label TEXT,
+  stage_c_score REAL,
+  review_status TEXT NOT NULL DEFAULT 'unreviewed',
+  source TEXT NOT NULL DEFAULT 'ml',
+  label TEXT,
+  note TEXT,
+  reviewed_at TEXT
+);
+INSERT INTO events_no_reuse(
+  id, session_id, file_id, t_start, t_end, duration, f_low, f_high, center_freq,
+  stage_a_conf, completeness_score, completeness_label, retained, n_members,
+  stage_c_label, stage_c_score, review_status, source, label, note, reviewed_at
+)
+SELECT id, session_id, file_id, t_start, t_end, duration, f_low, f_high, center_freq,
+       stage_a_conf, completeness_score, completeness_label, retained, n_members,
+       stage_c_label, stage_c_score, review_status, source, label, note, reviewed_at
+FROM events;
+DROP TABLE events;
+ALTER TABLE events_no_reuse RENAME TO events;
+CREATE INDEX idx_events_file ON events(file_id);
+CREATE INDEX idx_events_session_label ON events(session_id, completeness_label, retained);
+COMMIT;
+"#,
+    )
+}
+
+/// File ids also appear in historical review telemetry. Prevent a pruned cache
+/// row from lending its identity to an unrelated recording added later.
+fn ensure_file_ids_never_reused(conn: &Connection) -> rusqlite::Result<()> {
+    let create_sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='files'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if create_sql
+        .as_deref()
+        .is_some_and(|sql| sql.to_ascii_uppercase().contains("AUTOINCREMENT"))
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+BEGIN IMMEDIATE;
+CREATE TABLE files_no_reuse(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  n_events INTEGER NOT NULL DEFAULT 0,
+  n_complete INTEGER NOT NULL DEFAULT 0,
+  n_retained INTEGER NOT NULL DEFAULT 0,
+  elapsed_ms INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  size_bytes INTEGER,
+  modified_ns INTEGER,
+  updated_at TEXT,
+  UNIQUE(session_id, path)
+);
+INSERT INTO files_no_reuse(
+  id, session_id, path, status, n_events, n_complete, n_retained,
+  elapsed_ms, error, attempts, size_bytes, modified_ns, updated_at
+)
+SELECT id, session_id, path, status, n_events, n_complete, n_retained,
+       elapsed_ms, error, attempts, size_bytes, modified_ns, updated_at
+FROM files;
+DROP TABLE files;
+ALTER TABLE files_no_reuse RENAME TO files;
+CREATE INDEX idx_files_session_status ON files(session_id, status);
+COMMIT;
+"#,
+    )
 }
 
 /// Idempotent migration: add the run manifest column to `sessions` if not already present.
@@ -245,6 +406,19 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn file_identity(path: &Path) -> (Option<i64>, Option<i64>) {
+    let Ok(metadata) = path.metadata() else {
+        return (None, None);
+    };
+    let size_bytes = i64::try_from(metadata.len()).ok();
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64);
+    (size_bytes, modified_ns)
+}
+
 fn median_of(mut values: Vec<f64>) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -264,6 +438,8 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA)?;
         ensure_curation_columns(&conn)?;
+        ensure_file_ids_never_reused(&conn)?;
+        ensure_event_ids_never_reused(&conn)?;
         ensure_run_manifest_column(&conn)?;
         ensure_review_telemetry(&conn)?;
         Ok(Store { conn })
@@ -273,6 +449,8 @@ impl Store {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
         ensure_curation_columns(&conn)?;
+        ensure_file_ids_never_reused(&conn)?;
+        ensure_event_ids_never_reused(&conn)?;
         ensure_run_manifest_column(&conn)?;
         ensure_review_telemetry(&conn)?;
         Ok(Store { conn })
@@ -280,8 +458,11 @@ impl Store {
 
     pub fn create_session(&self, s: &NewSession) -> rusqlite::Result<i64> {
         self.conn.execute(
-            "INSERT INTO sessions(input_roots, output_dir, device, concurrency, theta_a, theta_b, species_name)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO sessions(
+                 input_roots, output_dir, device, concurrency, theta_a, theta_b, species_name,
+                 config_key, worker_cmd, cwd, localizer_path, classifier_path,
+                 classifier_c_path, f_min_hz, f_max_hz
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 s.input_roots,
                 s.output_dir,
@@ -289,7 +470,15 @@ impl Store {
                 s.concurrency,
                 s.theta_a,
                 s.theta_b,
-                s.species_name.unwrap_or("Hume's Leaf Warbler")
+                s.species_name.unwrap_or("Hume's Leaf Warbler"),
+                s.config_key,
+                s.worker_cmd,
+                s.cwd,
+                s.localizer_path,
+                s.classifier_path,
+                s.classifier_c_path,
+                s.f_min_hz,
+                s.f_max_hz,
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -310,6 +499,74 @@ impl Store {
             params![session_id],
         )?;
         Ok(inserted)
+    }
+
+    /// Reconcile a complete input scan with an existing session.
+    ///
+    /// A same-path file whose size or modification time changed is put back in
+    /// the queue and its now-stale detections are removed. Files no longer in
+    /// the scan are removed from the session entirely. This is intentionally a
+    /// separate operation from `add_files`, whose callers may add partial lists.
+    pub fn sync_files(&self, session_id: i64, paths: &[PathBuf]) -> rusqlite::Result<FileSync> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut result = FileSync::default();
+        let mut current_paths = HashSet::with_capacity(paths.len());
+
+        for path in paths {
+            let path_text = path.to_string_lossy().into_owned();
+            current_paths.insert(path_text.clone());
+            let (size_bytes, modified_ns) = file_identity(path);
+            let existing: Option<(i64, Option<i64>, Option<i64>)> = tx
+                .query_row(
+                    "SELECT id, size_bytes, modified_ns FROM files WHERE session_id=?1 AND path=?2",
+                    params![session_id, path_text],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+
+            match existing {
+                None => {
+                    tx.execute(
+                        "INSERT INTO files(session_id, path, size_bytes, modified_ns) VALUES(?1, ?2, ?3, ?4)",
+                        params![session_id, path_text, size_bytes, modified_ns],
+                    )?;
+                    result.added += 1;
+                }
+                Some((file_id, old_size, old_modified))
+                    if old_size != size_bytes || old_modified != modified_ns =>
+                {
+                    tx.execute("DELETE FROM events WHERE file_id=?1", params![file_id])?;
+                    tx.execute(
+                        "UPDATE files SET status='pending', n_events=0, n_complete=0, n_retained=0,
+                             elapsed_ms=0, error=NULL, attempts=0, size_bytes=?2, modified_ns=?3,
+                             updated_at=datetime('now') WHERE id=?1",
+                        params![file_id, size_bytes, modified_ns],
+                    )?;
+                    result.requeued += 1;
+                }
+                Some(_) => {}
+            }
+        }
+
+        let known: Vec<(i64, String)> = {
+            let mut stmt = tx.prepare("SELECT id, path FROM files WHERE session_id=?1")?;
+            let rows = stmt.query_map(params![session_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (file_id, path) in known {
+            if !current_paths.contains(&path) {
+                tx.execute("DELETE FROM events WHERE file_id=?1", params![file_id])?;
+                tx.execute("DELETE FROM files WHERE id=?1", params![file_id])?;
+                result.removed += 1;
+            }
+        }
+
+        tx.execute(
+            "UPDATE sessions SET total_files=(SELECT COUNT(*) FROM files WHERE session_id=?1) WHERE id=?1",
+            params![session_id],
+        )?;
+        tx.commit()?;
+        Ok(result)
     }
 
     /// Atomically claim the next pending file: set it in_progress, bump attempts, return it.
@@ -333,19 +590,25 @@ impl Store {
 
     /// Put a file back to pending (e.g., worker crash/timeout, will be retried).
     pub fn requeue(&self, file_id: i64) -> rusqlite::Result<()> {
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE files SET status='pending', updated_at=datetime('now') WHERE id=?1",
             params![file_id],
         )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
     /// Terminally mark a file failed with an error message.
     pub fn mark_failed(&self, file_id: i64, error: &str) -> rusqlite::Result<()> {
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE files SET status='failed', error=?2, updated_at=datetime('now') WHERE id=?1",
             params![file_id, error],
         )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -353,6 +616,16 @@ impl Store {
     pub fn reset_in_progress(&self, session_id: i64) -> rusqlite::Result<usize> {
         let n = self.conn.execute(
             "UPDATE files SET status='pending' WHERE session_id=?1 AND status='in_progress'",
+            params![session_id],
+        )?;
+        Ok(n)
+    }
+
+    /// A new invocation is an explicit retry opportunity for terminal file failures.
+    pub fn reset_failed(&self, session_id: i64) -> rusqlite::Result<usize> {
+        let n = self.conn.execute(
+            "UPDATE files SET status='pending', attempts=0, error=NULL, updated_at=datetime('now')
+             WHERE session_id=?1 AND status='failed'",
             params![session_id],
         )?;
         Ok(n)
@@ -373,11 +646,16 @@ impl Store {
         r: &RecordedResult,
     ) -> rusqlite::Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute(
+        let changed = tx.execute(
             "UPDATE files SET status='done', n_events=?2, n_complete=?3, n_retained=?4,
-                 elapsed_ms=?5, error=NULL, updated_at=datetime('now') WHERE id=?1",
-            params![file_id, r.n_events, r.n_complete, r.n_retained, r.elapsed_ms],
+                 elapsed_ms=?5, error=NULL, updated_at=datetime('now')
+             WHERE id=?1 AND session_id=?6",
+            params![file_id, r.n_events, r.n_complete, r.n_retained, r.elapsed_ms, session_id],
         )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        tx.execute("DELETE FROM events WHERE file_id=?1", params![file_id])?;
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO events(session_id, file_id, t_start, t_end, duration, f_low, f_high,
@@ -410,6 +688,11 @@ impl Store {
 
     /// Aggregate counts for a session.
     pub fn summary(&self, session_id: i64) -> rusqlite::Result<Summary> {
+        let status: String = self.conn.query_row(
+            "SELECT status FROM sessions WHERE id=?1",
+            params![session_id],
+            |r| r.get(0),
+        )?;
         let count = |status: &str| -> rusqlite::Result<i64> {
             self.conn.query_row(
                 "SELECT COUNT(*) FROM files WHERE session_id=?1 AND status=?2",
@@ -438,6 +721,8 @@ impl Store {
             |r| r.get(0),
         )?;
         Ok(Summary {
+            session_id,
+            status,
             total,
             pending: count("pending")?,
             in_progress: count("in_progress")?,
@@ -449,12 +734,15 @@ impl Store {
         })
     }
 
-    /// Most-recent session for these roots (resume target; done files are skipped on run).
-    pub fn find_resumable(&self, input_roots: &str) -> rusqlite::Result<Option<i64>> {
+    /// Most-recent session for these roots and this exact analysis configuration.
+    pub fn find_resumable(&self, input_roots: &str, config_key: &str, requested_device: &str) -> rusqlite::Result<Option<i64>> {
         self.conn
             .query_row(
-                "SELECT id FROM sessions WHERE input_roots=?1 ORDER BY id DESC LIMIT 1",
-                params![input_roots],
+                "SELECT id FROM sessions
+                 WHERE input_roots=?1 AND config_key=?2
+                   AND (effective_device IS NULL OR effective_device=?3)
+                 ORDER BY id DESC LIMIT 1",
+                params![input_roots, config_key, requested_device],
                 |r| r.get(0),
             )
             .optional()
@@ -484,7 +772,7 @@ impl Store {
             "SELECT e.id, e.file_id, e.t_start, e.t_end, e.duration, e.f_low, e.f_high,
                     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label,
                     e.retained, e.n_members, e.review_status, e.source, e.label, e.note,
-                    e.stage_c_label, e.stage_c_score
+                    e.reviewed_at, e.stage_c_label, e.stage_c_score
              FROM events e
              WHERE e.file_id = (SELECT id FROM files WHERE session_id=?1 AND path=?2)
              ORDER BY e.t_start",
@@ -496,7 +784,7 @@ impl Store {
                 stage_a_conf: r.get(8)?, completeness_score: r.get(9)?, completeness_label: r.get(10)?,
                 retained: r.get::<_, Option<i64>>(11)?.map(|v| v != 0), n_members: r.get(12)?,
                 review_status: r.get(13)?, source: r.get(14)?, label: r.get(15)?, note: r.get(16)?,
-                stage_c_label: r.get(17)?, stage_c_score: r.get(18)?,
+                reviewed_at: r.get(17)?, stage_c_label: r.get(18)?, stage_c_score: r.get(19)?,
             })
         })?;
         rows.collect()
@@ -508,7 +796,7 @@ impl Store {
             "SELECT f.path, e.duration, COALESCE(e.retained, 0)
              FROM events e
              JOIN files f ON e.file_id = f.id
-             WHERE e.session_id = ?1",
+             WHERE e.session_id = ?1 AND f.status = 'done'",
         )?;
         let rows = stmt.query_map(params![session_id], |r| {
             Ok(SessionEventRow {
@@ -521,19 +809,25 @@ impl Store {
     }
 
     pub fn set_event_review(&self, event_id: i64, status: &str, label: Option<&str>, note: Option<&str>) -> rusqlite::Result<()> {
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE events SET review_status=?2, label=?3, note=?4, reviewed_at=datetime('now') WHERE id=?1",
             params![event_id, status, label, note],
         )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
     pub fn update_event_bounds(&self, event_id: i64, t_start: f64, t_end: f64, f_low: f64, f_high: f64) -> rusqlite::Result<()> {
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE events SET t_start=?2, t_end=?3, duration=(?3 - ?2),
                  f_low=?4, f_high=?5, center_freq=((?4 + ?5) / 2.0) WHERE id=?1",
             params![event_id, t_start, t_end, f_low, f_high],
         )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -542,18 +836,101 @@ impl Store {
             "SELECT id FROM files WHERE session_id=?1 AND path=?2",
             params![session_id, path], |r| r.get(0),
         )?;
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO events(session_id, file_id, t_start, t_end, duration, f_low, f_high, center_freq,
                  stage_a_conf, n_members, completeness_score, completeness_label, retained, source, review_status)
              VALUES(?1,?2,?3,?4,(?4 - ?3),?5,?6,((?5 + ?6) / 2.0),0.0,0,NULL,NULL,NULL,'manual','confirmed')",
             params![session_id, file_id, t_start, t_end, f_low, f_high],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        let event_id = tx.last_insert_rowid();
+        Self::refresh_file_event_counts(&tx, file_id)?;
+        tx.commit()?;
+        Ok(event_id)
     }
 
     pub fn delete_event(&self, event_id: i64) -> rusqlite::Result<()> {
-        self.conn.execute("DELETE FROM events WHERE id=?1", params![event_id])?;
+        let tx = self.conn.unchecked_transaction()?;
+        let file_id: i64 = tx.query_row(
+            "SELECT file_id FROM events WHERE id=?1",
+            params![event_id],
+            |row| row.get(0),
+        )?;
+        let changed = tx.execute("DELETE FROM events WHERE id=?1", params![event_id])?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Self::refresh_file_event_counts(&tx, file_id)?;
+        tx.commit()?;
         Ok(())
+    }
+
+    fn refresh_file_event_counts(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE files SET
+                 n_events=(SELECT COUNT(*) FROM events WHERE file_id=?1),
+                 n_complete=(SELECT COUNT(*) FROM events WHERE file_id=?1 AND completeness_label='complete'),
+                 n_retained=(SELECT COUNT(*) FROM events WHERE file_id=?1 AND retained=1),
+                 updated_at=datetime('now')
+             WHERE id=?1",
+            params![file_id],
+        )?;
+        Ok(())
+    }
+
+    /// Reinsert a deleted event without degrading an ML event into a manual one.
+    ///
+    /// The database assigns a fresh id because another edit may have reused the old
+    /// row id while the event was on the undo stack. Every scientific and curation
+    /// field is otherwise restored verbatim.
+    pub fn restore_event(
+        &self,
+        session_id: i64,
+        path: &str,
+        event: &EventRow,
+    ) -> rusqlite::Result<i64> {
+        let file_id: i64 = self.conn.query_row(
+            "SELECT id FROM files WHERE session_id=?1 AND path=?2",
+            params![session_id, path],
+            |r| r.get(0),
+        )?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO events(
+                 session_id, file_id, t_start, t_end, duration, f_low, f_high, center_freq,
+                 stage_a_conf, completeness_score, completeness_label, retained, n_members,
+                 review_status, source, label, note, reviewed_at, stage_c_label, stage_c_score
+             ) VALUES(
+                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                 ?14, ?15, ?16, ?17, ?18, ?19, ?20
+             )",
+            params![
+                session_id,
+                file_id,
+                event.t_start,
+                event.t_end,
+                event.duration,
+                event.f_low,
+                event.f_high,
+                event.center_freq,
+                event.stage_a_conf,
+                event.completeness_score,
+                event.completeness_label,
+                event.retained,
+                event.n_members,
+                event.review_status,
+                event.source,
+                event.label,
+                event.note,
+                event.reviewed_at,
+                event.stage_c_label,
+                event.stage_c_score,
+            ],
+        )?;
+        let event_id = tx.last_insert_rowid();
+        Self::refresh_file_event_counts(&tx, file_id)?;
+        tx.commit()?;
+        Ok(event_id)
     }
 
     /// The (session_id, file_id) an event belongs to, for telemetry attribution.
@@ -687,10 +1064,24 @@ impl Store {
     }
 
     pub fn set_session_status(&self, session_id: i64, status: &str) -> rusqlite::Result<()> {
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE sessions SET status=?2 WHERE id=?1",
             params![session_id, status],
         )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Ok(())
+    }
+
+    pub fn set_session_effective_device(&self, session_id: i64, device: &str) -> rusqlite::Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE sessions SET effective_device=?2 WHERE id=?1",
+            params![session_id, device],
+        )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -705,7 +1096,7 @@ impl Store {
 
     pub fn get_latest_session_id(&self) -> rusqlite::Result<Option<i64>> {
         self.conn.query_row(
-            "SELECT id FROM sessions ORDER BY created_at DESC LIMIT 1",
+            "SELECT id FROM sessions ORDER BY id DESC LIMIT 1",
             [],
             |r| r.get(0),
         ).optional()
@@ -755,6 +1146,9 @@ mod tests {
                 theta_a: 0.0,
                 theta_b: 0.53,
                 species_name: None,
+                config_key: "test", worker_cmd: None, cwd: None,
+                localizer_path: None, classifier_path: None, classifier_c_path: None,
+                f_min_hz: None, f_max_hz: None,
             })
             .unwrap()
     }
@@ -859,18 +1253,23 @@ mod tests {
         assert_eq!(sum.total, 2);
         assert_eq!(sum.failed, 1);
         assert_eq!(sum.pending, 1);
+        assert_eq!(sum.session_id, sid);
+        assert_eq!(sum.status, "running");
     }
 
     #[test]
     fn find_resumable_matches_latest_session_for_roots() {
         let s = mem();
         let sid = new_session(&s); // input_roots = "[\"/data\"]"
-        assert_eq!(s.find_resumable("[\"/data\"]").unwrap(), Some(sid));
+        assert_eq!(s.find_resumable("[\"/data\"]", "test", "cpu").unwrap(), Some(sid));
         // still resumable even after being marked done (run skips already-done files)
         s.set_session_status(sid, "done").unwrap();
-        assert_eq!(s.find_resumable("[\"/data\"]").unwrap(), Some(sid));
+        assert_eq!(s.find_resumable("[\"/data\"]", "test", "cpu").unwrap(), Some(sid));
+        assert_eq!(s.find_resumable("[\"/data\"]", "changed", "cpu").unwrap(), None);
         // a different root has no session
-        assert_eq!(s.find_resumable("[\"/other\"]").unwrap(), None);
+        assert_eq!(s.find_resumable("[\"/other\"]", "test", "cpu").unwrap(), None);
+        s.set_session_effective_device(sid, "cpu").unwrap();
+        assert_eq!(s.find_resumable("[\"/data\"]", "test", "cuda").unwrap(), None);
     }
 
     #[test]
@@ -898,7 +1297,9 @@ mod tests {
     fn test_granular_cache_deletion() {
         let store = Store::open_memory().unwrap();
         let sid = store.create_session(&NewSession {
-            input_roots: "[]", output_dir: "out", device: "cpu", concurrency: 1, theta_a: 0.1, theta_b: 0.5, species_name: None
+            input_roots: "[]", output_dir: "out", device: "cpu", concurrency: 1, theta_a: 0.1, theta_b: 0.5, species_name: None,
+            config_key: "test", worker_cmd: None, cwd: None, localizer_path: None,
+            classifier_path: None, classifier_c_path: None, f_min_hz: None, f_max_hz: None,
         }).unwrap();
         store.add_files(sid, &[PathBuf::from("a.wav"), PathBuf::from("b.wav")]).unwrap();
 
@@ -922,6 +1323,14 @@ mod tests {
 
         let event_count: i64 = store.conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap();
         assert_eq!(event_count, 1);
+
+        store.add_files(sid, &[PathBuf::from("c.wav")]).unwrap();
+        let new_file_id: i64 = store.conn.query_row(
+            "SELECT id FROM files WHERE session_id=?1 AND path='c.wav'",
+            params![sid],
+            |row| row.get(0),
+        ).unwrap();
+        assert!(new_file_id > 2, "a deleted file id must never identify a later recording");
     }
 
     fn make_events_for_file(store: &mut Store, sid: i64) -> i64 {
@@ -953,6 +1362,44 @@ mod tests {
         for col in &["review_status", "source", "label", "note", "reviewed_at"] {
             assert!(existing.contains(&col.to_string()), "missing column: {col}");
         }
+    }
+
+    #[test]
+    fn legacy_primary_keys_migrate_to_non_reusable_file_and_event_ids() {
+        let path = std::env::temp_dir().join(format!(
+            "bird_audio_legacy_ids_{}_{}.db",
+            std::process::id(),
+            now_ms(),
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(&SCHEMA.replace("PRIMARY KEY AUTOINCREMENT", "PRIMARY KEY"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO sessions(id, input_roots, output_dir, device, concurrency, theta_a, theta_b)
+             VALUES(1, '[]', '/out', 'cpu', 1, 0, 0.5)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO files(id, session_id, path) VALUES(7, 1, 'old.wav')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO events(id, session_id, file_id) VALUES(9, 1, 7)",
+            [],
+        ).unwrap();
+        drop(conn);
+
+        let store = Store::open(&path).unwrap();
+        store.delete_cached_files(1, &["old.wav".into()]).unwrap();
+        store.add_files(1, &[PathBuf::from("new.wav")]).unwrap();
+        let file_id: i64 = store.conn.query_row(
+            "SELECT id FROM files WHERE path='new.wav'", [], |row| row.get(0),
+        ).unwrap();
+        assert!(file_id > 7);
+        let event_id = store.add_manual_event(1, "new.wav", 0.0, 1.0, 1.0, 2.0).unwrap();
+        assert!(event_id > 9);
+        drop(store);
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
@@ -1000,6 +1447,8 @@ mod tests {
         let b = s.create_session(&NewSession {
             input_roots: "[\"/other\"]", output_dir: "/out", device: "cpu",
             concurrency: 1, theta_a: 0.0, theta_b: 0.53, species_name: None,
+            config_key: "other", worker_cmd: None, cwd: None, localizer_path: None,
+            classifier_path: None, classifier_c_path: None, f_min_hz: None, f_max_hz: None,
         }).unwrap();
         s.set_run_manifest(a, r#"{"a":1}"#).unwrap();
         assert_eq!(s.run_manifest(b).unwrap(), None);
@@ -1064,6 +1513,109 @@ mod tests {
         assert!(after.iter().all(|r| r.id != eid));
     }
 
+    #[test]
+    fn restore_event_preserves_scientific_and_curation_fields() {
+        let mut s = mem(); let sid = new_session(&s); make_events_for_file(&mut s, sid);
+        let original_id = s.list_events(sid, "/data/x.wav").unwrap()[0].id;
+        s.set_event_review(original_id, "confirmed", Some("buzz"), Some("clear")).unwrap();
+        let original = s.list_events(sid, "/data/x.wav").unwrap()
+            .into_iter().find(|r| r.id == original_id).unwrap();
+
+        s.delete_event(original_id).unwrap();
+        let restored_id = s.restore_event(sid, "/data/x.wav", &original).unwrap();
+        let restored = s.list_events(sid, "/data/x.wav").unwrap()
+            .into_iter().find(|r| r.id == restored_id).unwrap();
+
+        assert_eq!(restored.source, original.source);
+        assert_eq!(restored.review_status, original.review_status);
+        assert_eq!(restored.label, original.label);
+        assert_eq!(restored.note, original.note);
+        assert_eq!(restored.reviewed_at, original.reviewed_at);
+        assert_eq!(restored.stage_a_conf, original.stage_a_conf);
+        assert_eq!(restored.completeness_score, original.completeness_score);
+        assert_eq!(restored.completeness_label, original.completeness_label);
+        assert_eq!(restored.retained, original.retained);
+        assert_eq!(restored.stage_c_label, original.stage_c_label);
+        assert_eq!(restored.stage_c_score, original.stage_c_score);
+        assert!(restored_id > original_id, "a restored event must receive a never-before-used id");
+
+        let counts: (i64, i64, i64) = s.conn.query_row(
+            "SELECT n_events, n_complete, n_retained FROM files WHERE id=?1",
+            params![restored.file_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(counts, (2, 1, 1));
+    }
+
+    #[test]
+    fn stale_event_mutations_fail_instead_of_claiming_success() {
+        let mut s = mem(); let sid = new_session(&s); make_events_for_file(&mut s, sid);
+        let event_id = s.list_events(sid, "/data/x.wav").unwrap()[0].id;
+        s.delete_event(event_id).unwrap();
+        assert_eq!(
+            s.set_event_review(event_id, "confirmed", None, None).unwrap_err(),
+            rusqlite::Error::QueryReturnedNoRows,
+        );
+        assert_eq!(
+            s.update_event_bounds(event_id, 0.0, 1.0, 1000.0, 2000.0).unwrap_err(),
+            rusqlite::Error::QueryReturnedNoRows,
+        );
+        assert_eq!(
+            s.delete_event(event_id).unwrap_err(),
+            rusqlite::Error::QueryReturnedNoRows,
+        );
+    }
+
+    #[test]
+    fn sync_files_requeues_changed_audio_and_prunes_removed_audio() {
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let mut s = mem();
+        let sid = new_session(&s);
+        let path = std::env::temp_dir().join(format!(
+            "bird-audio-sync-{}-{}.wav",
+            std::process::id(),
+            now_ms(),
+        ));
+        File::create(&path).unwrap().write_all(b"first").unwrap();
+        assert_eq!(s.sync_files(sid, std::slice::from_ref(&path)).unwrap(), FileSync {
+            added: 1,
+            requeued: 0,
+            removed: 0,
+        });
+
+        let claimed = s.claim_next_pending(sid).unwrap().unwrap();
+        let event = crate::protocol::EventRecord {
+            t_start: 0.0,
+            t_end: 1.0,
+            duration: 1.0,
+            retained: Some(true),
+            completeness_label: Some("complete".into()),
+            ..Default::default()
+        };
+        s.record_success(
+            sid,
+            claimed.file_id,
+            &RecordedResult {
+                n_events: 1,
+                n_complete: 1,
+                n_retained: 1,
+                elapsed_ms: 1,
+                events: &[event],
+            },
+        ).unwrap();
+
+        File::create(&path).unwrap().write_all(b"changed-length").unwrap();
+        assert_eq!(s.sync_files(sid, std::slice::from_ref(&path)).unwrap().requeued, 1);
+        assert_eq!(s.file_status(claimed.file_id).unwrap().as_deref(), Some("pending"));
+        assert!(s.list_events(sid, &path.to_string_lossy()).unwrap().is_empty());
+
+        assert_eq!(s.sync_files(sid, &[]).unwrap().removed, 1);
+        assert!(s.list_files(sid).unwrap().is_empty());
+        fs::remove_file(path).unwrap();
+    }
+
     fn log_at(s: &Store, sid: i64, action: &str, event_id: Option<i64>, at_ms: i64) {
         s.log_review_event_at(
             &NewReviewEvent { session_id: sid, event_id, file_id: None, action, meta: None },
@@ -1113,6 +1665,8 @@ mod tests {
         let b = s.create_session(&NewSession {
             input_roots: "[\"/other\"]", output_dir: "/out", device: "cpu",
             concurrency: 1, theta_a: 0.0, theta_b: 0.53, species_name: None,
+            config_key: "other", worker_cmd: None, cwd: None, localizer_path: None,
+            classifier_path: None, classifier_c_path: None, f_min_hz: None, f_max_hz: None,
         }).unwrap();
         log_at(&s, a, "play", None, 1_000);
         log_at(&s, b, "play", None, 9_000);
@@ -1191,6 +1745,9 @@ mod tests {
             theta_a: 0.1,
             theta_b: 0.5,
             species_name: None,
+            config_key: "test", worker_cmd: None, cwd: None,
+            localizer_path: None, classifier_path: None, classifier_c_path: None,
+            f_min_hz: None, f_max_hz: None,
         }).unwrap();
         let species: String = store.conn.query_row(
             "SELECT species_name FROM sessions WHERE id = ?1",

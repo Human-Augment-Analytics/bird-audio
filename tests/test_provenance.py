@@ -49,6 +49,16 @@ def test_model_snapshot_reports_missing_without_raising(tmp_path):
     assert snap["localizer"]["bytes"] is None
 
 
+def test_model_snapshot_resolves_relative_paths_against_runtime_cwd(tmp_path):
+    model_dir = tmp_path / "custom-worker"
+    model_dir.mkdir()
+    weights = model_dir / "relative.pt"
+    weights.write_bytes(b"custom weights")
+    snap = provenance.model_snapshot({"localizer": "relative.pt"}, base_dir=model_dir)
+    assert snap["localizer"]["sha256"] == provenance.sha256_file(weights)
+    assert snap["localizer"]["bytes"] == len(b"custom weights")
+
+
 def test_session_snapshot_reads_config_and_counts(tmp_path):
     db = tmp_path / "batch.db"
     conn = sqlite3.connect(db)
@@ -103,13 +113,29 @@ def test_changed_constant_breaks_reproducibility():
     assert provenance.is_reproducible(diffs) is False
 
 
-def test_environment_drift_alone_stays_reproducible():
+def test_changed_analysis_configuration_breaks_reproducibility():
+    a = _manifest(analysis={"f_min_hz": 4125.0, "species_name": "warbler"})
+    b = copy.deepcopy(a)
+    b["analysis"]["f_min_hz"] = 5000.0
+    diffs = provenance.diff_manifests(a, b)
+    assert [d["field"] for d in diffs] == ["analysis.f_min_hz"]
+    assert provenance.is_reproducible(diffs) is False
+
+
+def test_environment_drift_breaks_exact_reproducibility():
     a = _manifest()
     b = copy.deepcopy(a)
     b["environment"]["packages"]["torch"] = "2.6.0"
     diffs = provenance.diff_manifests(a, b)
     assert len(diffs) == 1
-    assert provenance.is_reproducible(diffs) is True
+    assert provenance.is_reproducible(diffs) is False
+
+
+def test_git_commit_drift_breaks_exact_reproducibility():
+    a = _manifest()
+    b = copy.deepcopy(a)
+    b["git"]["commit"] = "different"
+    assert provenance.is_reproducible(provenance.diff_manifests(a, b)) is False
 
 
 def test_diff_orders_models_and_constants_first():

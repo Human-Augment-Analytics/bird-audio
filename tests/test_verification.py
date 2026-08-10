@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import sqlite3
 
 import pytest
 
 from birdpipe import verification as V
+from scripts import verification_planner
 
 
 def _ev(eid, conf, completeness=0.6, review="unreviewed", source="ml"):
@@ -16,6 +18,42 @@ def _ev(eid, conf, completeness=0.6, review="unreviewed", source="ml"):
         "source": source,
         "file_id": 1,
     }
+
+
+def test_verification_plan_queue_carries_recording_path(tmp_path):
+    db_path = tmp_path / "batch.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT NOT NULL)")
+    conn.execute(
+        "CREATE TABLE events (id INTEGER PRIMARY KEY, session_id INTEGER, file_id INTEGER, "
+        "stage_a_conf REAL, completeness_score REAL, completeness_label TEXT, retained INTEGER, "
+        "review_status TEXT, source TEXT)"
+    )
+    recording = "/recordings/PSL1_20250619_080000.WAV"
+    conn.execute("INSERT INTO files (id, path) VALUES (?, ?)", (7, recording))
+    conn.execute(
+        "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (42, 3, 7, 0.91, 0.72, "complete", 1, "unreviewed", "ml"),
+    )
+    conn.commit()
+    conn.close()
+
+    events = verification_planner.load_events(str(db_path), session_id=3)
+    args = argparse.Namespace(
+        db=str(db_path), session_id=3, threshold=0.5, confidence=0.95,
+        seconds_per_verification=8.0, target_half_width=0.1,
+        budget=1, strategy="uncertainty", seed=0, theta_b=0.5,
+        sweep=False, min_evidence=5,
+    )
+    report = verification_planner.build_report(events, args)
+
+    assert report["queue"] == [{
+        "id": 42,
+        "stage_a_conf": 0.91,
+        "completeness_score": 0.72,
+        "file_id": 7,
+        "path": recording,
+    }]
 
 
 # --- Wilson interval ---------------------------------------------------------

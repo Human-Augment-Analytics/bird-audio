@@ -16,17 +16,19 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from birdpipe.provenance import (  # noqa: E402
-    DEFAULT_MODEL_PATHS, build_manifest, diff_manifests, is_reproducible,
+    build_manifest, diff_manifests, is_reproducible,
     read_manifest, write_manifest,
 )
 
 
 def cmd_emit(args: argparse.Namespace) -> int:
-    model_paths = dict(DEFAULT_MODEL_PATHS)
+    model_paths = {}
     if args.localizer:
         model_paths["localizer"] = args.localizer
     if args.classifier:
         model_paths["classifier"] = args.classifier
+    if args.classifier_c:
+        model_paths["classifier_c"] = args.classifier_c
 
     manifest = build_manifest(
         db_path=args.db,
@@ -74,9 +76,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
         print(f"  {d['field']}\n    A: {d['left']}\n    B: {d['right']}")
     print()
     if reproducible:
-        print("REPRODUCIBLE: model weights and pipeline constants are identical.")
+        print("REPRODUCIBLE: determining code, runtime, configuration, and model weights are identical.")
         return 0
-    print("NOT REPRODUCIBLE: model weights or pipeline constants differ.")
+    print("NOT REPRODUCIBLE: determining code, runtime, configuration, or model weights differ.")
     return 1
 
 
@@ -87,6 +89,7 @@ def main() -> int:
     parser.add_argument("--out", type=str, default=None, help="Write manifest JSON here")
     parser.add_argument("--localizer", type=str, default=None, help="Override Stage A weights path")
     parser.add_argument("--classifier", type=str, default=None, help="Override Stage B weights path")
+    parser.add_argument("--classifier-c", type=str, default=None, help="Override Stage C weights path")
     parser.add_argument("--compare", nargs=2, metavar=("A", "B"), default=None,
                         help="Compare two manifests instead of emitting one")
     parser.add_argument("--json", action="store_true", help="Machine-readable stdout")

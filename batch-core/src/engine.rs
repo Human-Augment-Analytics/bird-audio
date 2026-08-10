@@ -33,6 +33,7 @@ pub struct EngineConfig {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Progress {
+    pub session_id: i64,
     pub total: i64,
     pub done: i64,
     pub failed: i64,
@@ -43,27 +44,69 @@ pub struct Progress {
     pub elapsed_ms_total: i64,
 }
 
-fn fail_or_requeue(store: &Arc<Mutex<Store>>, c: &Claimed, cfg: &EngineConfig, reason: &str) {
-    let s = store.lock().unwrap();
+fn lock_store(store: &Arc<Mutex<Store>>) -> std::sync::MutexGuard<'_, Store> {
+    store.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn fail_or_requeue(
+    store: &Arc<Mutex<Store>>,
+    c: &Claimed,
+    cfg: &EngineConfig,
+    reason: &str,
+) -> rusqlite::Result<()> {
+    let s = lock_store(store);
     if c.attempts >= cfg.max_attempts {
-        s.mark_failed(c.file_id, reason).expect("mark_failed");
+        s.mark_failed(c.file_id, reason)
     } else {
-        s.requeue(c.file_id).expect("requeue");
+        s.requeue(c.file_id)
     }
 }
 
 /// Persist what the first worker to come up reported loading. Losing the manifest
 /// costs provenance, not results, so a storage failure is logged and the run goes on.
-fn record_manifest(store: &Arc<Mutex<Store>>, session_id: i64, manifest: Option<&serde_json::Value>) {
+fn record_manifest(
+    store: &Arc<Mutex<Store>>,
+    session_id: i64,
+    manifest: Option<&serde_json::Value>,
+    cfg: &EngineConfig,
+) {
     let Some(value) = manifest else { return };
-    let text = match serde_json::to_string(value) {
+    let mut value = value.clone();
+    if let Some(root) = value.as_object_mut() {
+        let analysis = root
+            .entry("analysis")
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if let Some(analysis) = analysis.as_object_mut() {
+            analysis.insert("theta_a".into(), serde_json::json!(cfg.theta_a));
+            analysis.insert("theta_b".into(), serde_json::json!(cfg.theta_b));
+            if let Some(value) = cfg.f_min_hz {
+                analysis.insert("f_min_hz".into(), serde_json::json!(value));
+            }
+            if let Some(value) = cfg.f_max_hz {
+                analysis.insert("f_max_hz".into(), serde_json::json!(value));
+            }
+            if let Some(value) = &cfg.species_name {
+                analysis.insert("species_name".into(), serde_json::json!(value));
+            }
+        }
+    }
+    let effective_device = value
+        .pointer("/analysis/device")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let text = match serde_json::to_string(&value) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("run manifest: failed to serialize worker manifest: {e}");
             return;
         }
     };
-    let s = store.lock().unwrap();
+    let s = lock_store(store);
+    if let Some(device) = effective_device {
+        if let Err(e) = s.set_session_effective_device(session_id, &device) {
+            eprintln!("run manifest: failed to store effective device for session {session_id}: {e}");
+        }
+    }
     if let Err(e) = s.set_run_manifest(session_id, &text) {
         eprintln!("run manifest: failed to store for session {session_id}: {e}");
     }
@@ -75,7 +118,7 @@ fn worker_loop(
     cfg: Arc<EngineConfig>,
     progress: Option<Sender<Progress>>,
     start: std::time::Instant,
-) {
+) -> Result<(), String> {
     let mut worker: Option<Worker> = None;
     let mut last_elapsed_ms: Option<i64> = None;
     loop {
@@ -85,8 +128,9 @@ fn worker_loop(
             }
         }
         let claimed = {
-            let s = store.lock().unwrap();
-            s.claim_next_pending(session_id).expect("claim")
+            let s = lock_store(&store);
+            s.claim_next_pending(session_id)
+                .map_err(|error| format!("failed to claim the next file: {error}"))?
         };
         let c = match claimed {
             Some(c) => c,
@@ -96,11 +140,12 @@ fn worker_loop(
         if worker.is_none() {
             match Worker::spawn(&cfg.python, &cfg.worker_args, cfg.cwd.as_deref()) {
                 Ok(w) => {
-                    record_manifest(&store, session_id, w.manifest.as_ref());
+                    record_manifest(&store, session_id, w.manifest.as_ref(), &cfg);
                     worker = Some(w);
                 }
-                Err(_) => {
-                    fail_or_requeue(&store, &c, &cfg, "worker spawn failed");
+                Err(err) => {
+                    fail_or_requeue(&store, &c, &cfg, &format!("worker spawn failed: {err:?}"))
+                        .map_err(|error| format!("failed to record worker spawn failure: {error}"))?;
                     continue;
                 }
             }
@@ -133,39 +178,43 @@ fn worker_loop(
                 id, n_events, n_complete, n_retained, elapsed_ms, events, ..
             }) if id == c.file_id as u64 => {
                 last_elapsed_ms = Some(elapsed_ms as i64);
-                let mut s = store.lock().unwrap();
+                let mut s = lock_store(&store);
                 s.record_success(
                     session_id,
                     c.file_id,
                     &RecordedResult { n_events, n_complete, n_retained, elapsed_ms, events: &events },
                 )
-                .expect("record_success");
+                .map_err(|error| format!("failed to persist worker result: {error}"))?;
             }
             Ok(WorkerMsg::Error { message, .. }) => {
-                let s = store.lock().unwrap();
-                s.mark_failed(c.file_id, &message).expect("mark_failed");
+                fail_or_requeue(&store, &c, &cfg, &message)
+                    .map_err(|error| format!("failed to persist worker error: {error}"))?;
             }
             Ok(_other) => {
                 if let Some(mut bad) = worker.take() {
                     bad.kill();
                 }
-                fail_or_requeue(&store, &c, &cfg, "protocol/id mismatch");
+                fail_or_requeue(&store, &c, &cfg, "protocol/id mismatch")
+                    .map_err(|error| format!("failed to persist protocol failure: {error}"))?;
             }
-            Err(_) => {
+            Err(err) => {
                 if let Some(mut bad) = worker.take() {
                     bad.kill();
                 }
-                fail_or_requeue(&store, &c, &cfg, "timeout or worker died");
+                fail_or_requeue(&store, &c, &cfg, &format!("worker failed: {err:?}"))
+                    .map_err(|error| format!("failed to persist worker failure: {error}"))?;
             }
         }
 
         if let Some(tx) = &progress {
             let snap = {
-                let s = store.lock().unwrap();
-                s.summary(session_id).expect("summary")
+                let s = lock_store(&store);
+                s.summary(session_id)
+                    .map_err(|error| format!("failed to read progress summary: {error}"))?
             };
             let elapsed_total = start.elapsed().as_millis() as i64;
             let _ = tx.send(Progress {
+                session_id,
                 total: snap.total,
                 done: snap.done,
                 failed: snap.failed,
@@ -180,6 +229,7 @@ fn worker_loop(
     if let Some(mut w) = worker.take() {
         w.kill();
     }
+    Ok(())
 }
 
 /// Run all pending files for a session to completion; returns the final summary.
@@ -188,10 +238,15 @@ pub fn run_session(
     session_id: i64,
     cfg: EngineConfig,
     progress: Option<Sender<Progress>>,
-) -> Summary {
+) -> Result<Summary, String> {
     {
-        let s = store.lock().unwrap();
-        s.reset_in_progress(session_id).expect("reset_in_progress");
+        let s = lock_store(&store);
+        s.set_session_status(session_id, "running")
+            .map_err(|error| format!("failed to start session: {error}"))?;
+        s.reset_in_progress(session_id)
+            .map_err(|error| format!("failed to reset interrupted files: {error}"))?;
+        s.reset_failed(session_id)
+            .map_err(|error| format!("failed to reset failed files: {error}"))?;
     }
     let cfg = Arc::new(cfg);
     let mut handles = Vec::new();
@@ -202,10 +257,41 @@ pub fn run_session(
         let progress = progress.clone();
         handles.push(thread::spawn(move || worker_loop(store, session_id, cfg, progress, start)));
     }
+    let mut worker_error: Option<String> = None;
     for h in handles {
-        let _ = h.join();
+        match h.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                worker_error.get_or_insert(error);
+            }
+            Err(_) => {
+                worker_error.get_or_insert_with(|| "worker thread panicked".into());
+            }
+        }
     }
-    let s = store.lock().unwrap();
-    s.set_session_status(session_id, "done").ok();
-    s.summary(session_id).expect("summary")
+    let s = lock_store(&store);
+    let was_cancelled = cfg.cancel.as_ref().is_some_and(|flag| {
+        flag.load(std::sync::atomic::Ordering::Relaxed)
+    });
+    let final_counts = s
+        .summary(session_id)
+        .map_err(|error| format!("failed to read terminal summary: {error}"))?;
+    let status = if worker_error.is_some() {
+        "failed"
+    } else if was_cancelled {
+        "cancelled"
+    } else if final_counts.failed > 0 {
+        "failed"
+    } else {
+        "done"
+    };
+    s.set_session_status(session_id, status)
+        .map_err(|error| format!("failed to store terminal session status: {error}"))?;
+    let summary = s
+        .summary(session_id)
+        .map_err(|error| format!("failed to read final session summary: {error}"))?;
+    if let Some(error) = worker_error {
+        return Err(error);
+    }
+    Ok(summary)
 }

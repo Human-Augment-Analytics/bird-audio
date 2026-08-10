@@ -187,6 +187,45 @@ def test_files_without_events_still_contribute_effort():
     assert rows["PSH02"]["rate_per_hour"] == pytest.approx(0.0)
 
 
+def test_default_loaders_skip_failed_latest_session_and_reject_it_when_explicit():
+    conn = make_db([("/data/PSL01/old.WAV", [{"duration": 1.0}])])
+    conn.execute(
+        "INSERT INTO sessions(id, theta_a, theta_b, total_files, status) VALUES (2, 0.3, 0.7, 3, 'failed')"
+    )
+    conn.executemany(
+        "INSERT INTO files(id, session_id, path, status) VALUES (?, 2, ?, ?)",
+        [
+            (10, "/data/PSH01/done.WAV", "done"),
+            (11, "/data/PSH01/pending.WAV", "pending"),
+            (12, "/data/PSH01/failed.WAV", "failed"),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO events(id, session_id, file_id, t_start, t_end, duration, f_low, f_high, "
+        "center_freq, stage_a_conf, completeness_score, completeness_label, retained, n_members, "
+        "review_status, source) VALUES (20, 2, 10, 0, 1, 1, 6500, 7700, 7100, 0.9, 0.9, "
+        "'complete', 1, 2, 'unreviewed', 'ml')"
+    )
+    conn.execute(
+        "INSERT INTO events(id, session_id, file_id, t_start, t_end, duration, f_low, f_high, "
+        "center_freq, stage_a_conf, completeness_score, completeness_label, retained, n_members, "
+        "review_status, source) VALUES (21, 2, 11, 0, 1, 1, 6500, 7700, 7100, 0.9, 0.9, "
+        "'complete', 1, 2, 'unreviewed', 'ml')"
+    )
+    conn.commit()
+
+    records = eco.load_event_records(conn)
+    assert [record["session_id"] for record in records] == [1]
+    assert eco.load_file_paths(conn) == ["/data/PSL01/old.WAV"]
+    assert eco.session_thetas(conn) == {"theta_a": 0.2, "theta_b": 0.5}
+    with pytest.raises(ValueError, match="requires a completed session"):
+        eco.load_event_records(conn, session_id=2)
+    with pytest.raises(ValueError, match="requires a completed session"):
+        eco.load_file_paths(conn, session_id=2)
+    with pytest.raises(ValueError, match="requires a completed session"):
+        eco.session_thetas(conn, session_id=2)
+
+
 def test_effort_hours_per_file_is_configurable():
     files = [("/data/PSL01/a.WAV", [{"duration": 1.0}, {"duration": 1.0}])]
     conn = make_db(files)
