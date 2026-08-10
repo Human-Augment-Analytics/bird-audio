@@ -2,7 +2,7 @@ import math
 import pytest
 
 from birdpipe import ecology, research
-from scripts.research_analysis import _threshold_grid
+from scripts.research_analysis import _threshold_grid, _write_csv
 
 
 def _event(event_id, *, source="ml", review="unreviewed", retained=True, conf=0.8, quality=0.8):
@@ -45,7 +45,7 @@ def test_exact_poisson_interval_handles_zero_counts():
 
 
 def test_activity_normalizes_each_bin_by_actual_exposure():
-    rows = [_event(1), {**_event(2), "t_start": 400.0}]
+    rows = [{**_event(1), "path": "a.wav"}, {**_event(2), "path": "a.wav", "t_start": 400.0}]
     activity = research.activity_by_recording_time(
         rows, {"a.wav": 10 / 60, "b.wav": 5 / 60}, bin_minutes=5
     )
@@ -54,6 +54,21 @@ def test_activity_normalizes_each_bin_by_actual_exposure():
     assert math.isclose(activity[1]["exposure_hours"], 5 / 60)
     assert activity[0]["rate_per_hour"] == 6.0
     assert activity[1]["rate_per_hour"] == 12.0
+
+
+def test_activity_excludes_events_beyond_their_own_recording():
+    rows = [{**_event(1), "path": "short.wav", "t_start": 400.0}]
+    activity = research.activity_by_recording_time(
+        rows, {"short.wav": 5 / 60, "long.wav": 10 / 60}, bin_minutes=5
+    )
+    assert sum(row["n_events"] for row in activity) == 0
+    assert activity[0]["invalid_events_excluded"] == 1
+
+
+def test_exact_poisson_interval_matches_reference_value():
+    low, high = research.poisson_rate_interval(5, 2.0)
+    assert low == pytest.approx(0.8117, abs=0.0001)
+    assert high == pytest.approx(5.8341, abs=0.0001)
 
 
 def test_file_rows_include_zero_detection_recordings_and_covariates():
@@ -76,6 +91,17 @@ def test_adjusted_model_refuses_too_few_recorder_clusters():
     assert "10 recorders" in result["reason"]
 
 
+def test_adjusted_model_refuses_zero_events_without_overflow():
+    rows = [{"path": f"PSL{i:02d}_20250115_060000.wav", "recorder_id": f"PSL{i:02d}",
+             "site_id": None, "elevation_m": float(i), "effort_hours": 0.25,
+             "n_events": 0, "season": "winter", "temperature_c": None,
+             "precipitation_mm": None, "wind_mps": None, "humidity_pct": None}
+            for i in range(20)]
+    result = research.fit_adjusted_rate_model(rows)
+    assert result["status"] == "not_fitted"
+    assert "5 valid detector events" in result["reason"]
+
+
 def test_duplicate_device_metadata_is_rejected(tmp_path):
     path = tmp_path / "metadata.csv"
     path.write_text("device_id,site_id,elevation_m\nPSL01,A,10\nPSL01,B,20\n", encoding="utf-8")
@@ -86,3 +112,9 @@ def test_duplicate_device_metadata_is_rejected(tmp_path):
 def test_threshold_grid_stays_unique_at_candidate_floor():
     assert _threshold_grid(0.0, floor=0.25) == [0.25, 0.3, 0.35, 0.4, 0.45]
     assert len(set(_threshold_grid(0.98))) == 5
+
+
+def test_empty_csv_keeps_declared_schema(tmp_path):
+    path = tmp_path / "empty.csv"
+    _write_csv(path, [], ["event_id", "path"])
+    assert path.read_text(encoding="utf-8") == "event_id,path\n"

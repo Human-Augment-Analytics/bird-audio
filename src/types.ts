@@ -173,6 +173,8 @@ export interface ResearchRateBin {
   n_events: number;
   n_files_at_risk: number;
   n_recorders_at_risk: number;
+  n_unattributed_files_at_risk: number;
+  invalid_events_excluded: number;
   exposure_hours: number;
   rate_per_hour: number | null;
   ci_low: number | null;
@@ -214,5 +216,5 @@ export interface ResearchAnalysis {
   sensitivity: Array<{ theta_a: number; theta_b: number; n_events: number; rate_per_hour: number | null; ci_low: number | null; ci_high: number | null; identifiable: boolean; model_status: string; elevation_rate_ratio: number | null; elevation_ci_low: number | null; elevation_ci_high: number | null }>;
   thresholds: { theta_a: number; theta_b: number };
   outputs: { curated_events_csv: string; model_ready_recordings_csv: string; analysis_json: string; research_spec_json: string };
-  spec: { schema_version: number; session_id: number; event_set: string; theta_a: number; theta_b: number; activity_bin_minutes: number; alpha: number; effort_fallback_hours: number; metadata_sha256: string | null; spec_sha256: string; curated_data_sha256: string };
+  spec: { schema_version: number; session_id: number; event_set: string; theta_a: number; theta_b: number; activity_bin_minutes: number; alpha: number; effort_fallback_hours: number; effort_reader: string; metadata_sha256: string | null; spec_sha256: string; curated_data_sha256: string };
 }

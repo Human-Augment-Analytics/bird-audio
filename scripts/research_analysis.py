@@ -16,9 +16,9 @@ if str(_ROOT) not in sys.path:
 from birdpipe import ecology, research
 
 
-def _write_csv(path, rows):
+def _write_csv(path, rows, fields=None):
     rows = list(rows)
-    fields = sorted({key for row in rows for key in row})
+    fields = list(fields or sorted({key for row in rows for key in row}))
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -42,7 +42,10 @@ def build(args):
     # an exhaustive-search flag they cannot safely augment a detection-rate
     # numerator used for inference.
     inferential = [row for row in curated if row.get("source") != "manual"]
-    effort = ecology.measure_effort_hours(files)
+    if args.effort_json:
+        effort = json.loads(Path(args.effort_json).read_text(encoding="utf-8"))
+    else:
+        effort = ecology.measure_effort_hours(files)
     activity = research.activity_by_recording_time(inferential, effort["hours"], args.bin_minutes)
     file_rows = research.build_file_rows(inferential, files, effort["hours"], metadata)
     model = research.fit_adjusted_rate_model(file_rows, args.alpha)
@@ -71,10 +74,19 @@ def build(args):
     out.mkdir(parents=True, exist_ok=True)
     curated_path = out / "final_curated_events.csv"
     file_path = out / "model_ready_recordings.csv"
-    _write_csv(curated_path, curated)
-    _write_csv(file_path, file_rows)
-    _write_csv(out / "manual_annotations.csv", [row for row in curated if row.get("source") == "manual"])
-    _write_csv(out / "curated_detector_events.csv", inferential)
+    event_fields = sorted({key for row in base + curated for key in row}) or [
+        "event_id", "path", "t_start", "t_end", "duration", "f_low", "f_high",
+        "center_freq", "stage_a_conf", "completeness_score", "retained",
+        "review_status", "source", "label", "note", "curation_basis",
+    ]
+    file_fields = sorted({key for row in file_rows for key in row}) or [
+        "path", "recorder_id", "site_id", "recording_date", "season", "elevation_m",
+        "effort_hours", "n_events", *research.WEATHER_FIELDS,
+    ]
+    _write_csv(curated_path, curated, event_fields)
+    _write_csv(file_path, file_rows, file_fields)
+    _write_csv(out / "manual_annotations.csv", [row for row in curated if row.get("source") == "manual"], event_fields)
+    _write_csv(out / "curated_detector_events.csv", inferential, event_fields)
     metadata_hash = None
     if args.metadata:
         metadata_hash = hashlib.sha256(Path(args.metadata).read_bytes()).hexdigest()
@@ -84,13 +96,16 @@ def build(args):
         "theta_a": args.theta_a, "theta_b": args.theta_b,
         "activity_bin_minutes": args.bin_minutes, "alpha": args.alpha,
         "effort_fallback_hours": ecology.DEFAULT_EFFORT_HOURS_PER_FILE,
+        "effort_reader": effort.get("reader", "python-soundfile"),
         "metadata_sha256": metadata_hash,
     }
     spec_bytes = json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()
-    data_bytes = json.dumps([
-        [row.get("event_id"), row.get("path"), row.get("review_status"), row.get("source"), row.get("curation_basis")]
-        for row in curated
-    ], sort_keys=True, separators=(",", ":")).encode()
+    data_bytes = json.dumps({
+        "curated_events": curated,
+        "model_ready_recordings": file_rows,
+        "effort": effort,
+        "metadata_sha256": metadata_hash,
+    }, sort_keys=True, separators=(",", ":"), default=str).encode()
     spec["spec_sha256"] = hashlib.sha256(spec_bytes).hexdigest()
     spec["curated_data_sha256"] = hashlib.sha256(data_bytes).hexdigest()
     (out / "research_spec.json").write_text(json.dumps(spec, indent=2), encoding="utf-8")
@@ -116,6 +131,7 @@ def main():
     parser.add_argument("--db", required=True)
     parser.add_argument("--session-id", type=int, required=True)
     parser.add_argument("--metadata")
+    parser.add_argument("--effort-json")
     parser.add_argument("--out", required=True)
     parser.add_argument("--theta-a", type=float, required=True)
     parser.add_argument("--theta-b", type=float, required=True)

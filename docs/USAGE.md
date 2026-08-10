@@ -2,7 +2,7 @@
 
 A step-by-step guide to a full session: **install → run a batch → review detections → export a clean dataset.**
 
-The app is a [Tauri](https://tauri.app/) desktop application (React frontend, Rust + Python backend) for detecting and curating bird vocalizations from field recordings, optimized for the **Hume's Leaf Warbler** (*Phylloscopus humei*). It has two modes — **Batch** (run the ML pipeline over a folder) and **Review** (curate the detections on a spectrogram).
+The app is a [Tauri](https://tauri.app/) desktop application (React frontend, Rust + Python backend) for detecting and curating bird vocalizations from field recordings, optimized for the **Hume's Leaf Warbler** (*Phylloscopus humei*). It has four workspaces: **Batch**, **Review**, **Analytics**, and **Research**. See the [feature guide](feature-guide.md) for screenshots and interpretation.
 
 > _Walkthrough video — to be added._
 
@@ -61,7 +61,7 @@ On first launch the app runs a **health check** of the Python environment and th
 
 The pipeline processes every audio file in the folder, showing **per-file progress**, a **clock-time ETA**, and running **buzz counts**. Results are aggregated into `batch.db` as it goes.
 
-The database is the durable checkpoint: runs are **resumable and idempotent**. Stop and re-run on the same folder and already-processed files are skipped — you pick up where you left off.
+The database is the durable checkpoint. On resume, unchanged completed files are skipped, changed files are reprocessed with stale detections replaced, and removed inputs are pruned.
 
 ---
 
@@ -127,7 +127,7 @@ The application supports exporting analysis-ready datasets directly from the com
 *   **Confirmed only:** Toggle this on to limit exports to events that were reviewed and marked as `confirmed` (including manually added ones).
 *   **Deployment Metadata Join:** Optionally browse and select a metadata CSV file containing recorder deployment parameters (`device_id`, `site_id`, `elevation_m`, `lat`, `lon`, `deploy_date`). When chosen:
     1.  The exported file will automatically join the `site_id`, `elevation_m`, `lat`, and `lon` fields to each event row by identifying the `device_id` from the filename.
-    2.  A secondary site-level summary CSV (`<export_filename>_summary.csv`) will be generated, containing session-level aggregations (`site_id`, `session_datetime`, `elevation_m`, `n_events`, `duration_mean`, `duration_median`, `center_freq_mean`, `effort_hours` assuming 15 mins/file).
+    2.  A secondary site-level summary CSV (`<export_filename>_summary.csv`) will be generated, containing session-level aggregations (`site_id`, `session_datetime`, `elevation_m`, `n_events`, `duration_mean`, `duration_median`, `center_freq_mean`, `effort_hours`). Effort uses measured WAV/FLAC/MP3 duration when readable and a disclosed 0.25-hour fallback otherwise.
 
 ### Headless CLI (batch only)
 

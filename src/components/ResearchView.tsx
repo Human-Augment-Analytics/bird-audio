@@ -117,6 +117,9 @@ export function ResearchView({
           {analysis.effort.defaulted_files != null && analysis.effort.defaulted_files > 0 && (
             <div className="analytics-callout analytics-callout--warning"><strong>Estimated exposure:</strong> {analysis.effort.defaulted_files} files still use 0.25 hours. Interpret rates conditionally and repair unreadable audio before publication.</div>
           )}
+          {(analysis.activity[0]?.invalid_events_excluded ?? 0) > 0 && (
+            <div className="analytics-callout analytics-callout--warning"><strong>Invalid event timing:</strong> {analysis.activity[0].invalid_events_excluded} events fell outside their own recording duration and were excluded from activity rates.</div>
+          )}
           <div className="analytics-callout"><strong>Scientific scope:</strong> these are pipeline detection rates, not abundance, occupancy, or true call rates. Confidence intervals do not account for imperfect detection.</div>
         </section>
 
@@ -134,7 +137,7 @@ export function ResearchView({
             <div><dt>Threshold retained, unreviewed</dt><dd>{analysis.curation_basis.threshold_retained_unreviewed ?? 0}</dd></div>
           </dl>
           <p className="analytics-callout"><strong>Inference rule:</strong> {analysis.inferential_event_set}.</p>
-          <div className="research-paths"><span>Events: {analysis.outputs.curated_events_csv}</span><span>Recording rows: {analysis.outputs.model_ready_recordings_csv}</span><span>Analysis: {analysis.outputs.analysis_json}</span><span>Locked spec: {analysis.outputs.research_spec_json} · {analysis.spec.spec_sha256.slice(0, 12)}</span></div>
+          <div className="research-paths"><span>Events: {analysis.outputs.curated_events_csv}</span><span>Recording rows: {analysis.outputs.model_ready_recordings_csv}</span><span>Analysis: {analysis.outputs.analysis_json}</span><span>Spec fingerprint: {analysis.outputs.research_spec_json} · {analysis.spec.spec_sha256.slice(0, 12)}</span></div>
         </section>
 
         <section className="analytics-panel research-activity">
@@ -149,7 +152,7 @@ export function ResearchView({
                   <div className="research-interval-point" style={{ left: `${(rate / activityMax) * 100}%` }} />
                 </div>
                 <strong className="mono">{number(rate, 1)}/h</strong>
-                <small className="mono">n={row.n_events}, {number(row.exposure_hours, 2)}h · {row.n_recorders_at_risk} rec.</small>
+                <small className="mono">n={row.n_events}, {number(row.exposure_hours, 2)}h · {row.n_recorders_at_risk} known rec.</small>
               </div>;
             })}
           </div>
@@ -167,7 +170,7 @@ export function ResearchView({
           </section>
 
           <section className="analytics-panel">
-            <div className="analytics-panel__head"><div><h3>Threshold sensitivity</h3><p>Two-dimensional Stage A × Stage B grid at and above the stored-candidate floor. Color shows pipeline detections per hour.</p></div><span className="analytics-panel__total">25 fits</span></div>
+            <div className="analytics-panel__head"><div><h3>Threshold sensitivity</h3><p>Two-dimensional Stage A × Stage B grid at and above the stored-candidate floor. Color shows pipeline detections per hour.</p></div><span className="analytics-panel__total">25 cells</span></div>
             <div className="research-heatmap" role="table" aria-label="Threshold sensitivity grid">
               {analysis.sensitivity.map((cell) => {
                 const fraction = ((cell.rate_per_hour ?? 0) - sensitivityMinMax.min) / Math.max(0.0001, sensitivityMinMax.max - sensitivityMinMax.min);

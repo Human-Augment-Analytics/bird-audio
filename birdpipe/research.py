@@ -65,11 +65,16 @@ def activity_by_recording_time(
     max_seconds = max((hours * 3600.0 for hours in effort_by_path.values()), default=0.0)
     n_bins = max(1, int(math.ceil(max_seconds / bin_seconds)))
     counts = [0] * n_bins
+    invalid_events = 0
     for rec in records:
         start = rec.get("t_start")
-        if start is None or not math.isfinite(float(start)) or float(start) < 0:
+        path = str(rec.get("path") or "")
+        duration_seconds = float(effort_by_path.get(path, 0.0)) * 3600.0
+        if (start is None or not math.isfinite(float(start)) or float(start) < 0
+                or duration_seconds <= 0 or float(start) >= duration_seconds):
+            invalid_events += 1
             continue
-        index = min(n_bins - 1, int(float(start) // bin_seconds))
+        index = int(float(start) // bin_seconds)
         counts[index] += 1
 
     rows = []
@@ -80,13 +85,19 @@ def activity_by_recording_time(
         at_risk = [path for path, hours in effort_by_path.items() if hours * 3600.0 > start]
         exposure = exposed_seconds / 3600.0
         low, high = poisson_rate_interval(count, exposure)
+        known_recorders = {ecology.parse_recorder_id(path) for path in at_risk}
+        known_recorders.discard(None)
         rows.append({
             "bin_start_minutes": start / 60.0,
             "bin_end_minutes": end / 60.0,
             "n_events": count,
             "exposure_hours": exposure,
             "n_files_at_risk": len(at_risk),
-            "n_recorders_at_risk": len({ecology.parse_recorder_id(path) or path for path in at_risk}),
+            "n_recorders_at_risk": len(known_recorders),
+            "n_unattributed_files_at_risk": sum(
+                ecology.parse_recorder_id(path) is None for path in at_risk
+            ),
+            "invalid_events_excluded": invalid_events,
             "rate_per_hour": count / exposure if exposure > 0 else None,
             "ci_low": low,
             "ci_high": high,
@@ -198,21 +209,36 @@ def fit_adjusted_rate_model(rows: Sequence[Dict], alpha: float = 0.05) -> Dict:
 
     X = np.column_stack(columns)
     y = np.array([float(r["n_events"]) for r in usable])
+    if not np.isfinite(y).all() or np.any(y < 0) or y.sum() < 5:
+        return {"status": "not_fitted", "reason": "Need at least 5 valid detector events for a stable rate model.",
+                "n_recordings": len(usable), "n_recorders": len(recorders), "terms": names}
+    positive_clusters = {
+        row.get("recorder_id") or row["path"] for row, count in zip(usable, y) if count > 0
+    }
+    if len(positive_clusters) < 2:
+        return {"status": "not_fitted", "reason": "Events must occur in at least 2 recorder clusters.",
+                "n_recordings": len(usable), "n_recorders": len(recorders), "terms": names}
     offset = np.log(np.array([float(r["effort_hours"]) for r in usable]))
-    if X.shape[1] >= len(usable) - 2 or np.linalg.matrix_rank(X) < X.shape[1]:
+    condition_number = float(np.linalg.cond(X))
+    if (X.shape[1] >= len(usable) - 2 or np.linalg.matrix_rank(X) < X.shape[1]
+            or not math.isfinite(condition_number) or condition_number > 1e8):
         return {"status": "not_fitted", "reason": "Available controls are rank-deficient for this dataset.",
                 "n_recordings": len(usable), "n_recorders": len(recorders), "terms": names}
 
     beta = np.zeros(X.shape[1])
     beta[0] = math.log(max(y.sum(), 0.5) / max(np.exp(offset).sum(), 1e-9))
     try:
+        converged = False
         for _ in range(200):
             mu = np.exp(np.clip(X @ beta + offset, -30, 30))
             bread_inv = np.linalg.inv(X.T @ (X * mu[:, None]))
             step = bread_inv @ (X.T @ (y - mu))
             beta += step
             if np.max(np.abs(step)) < 1e-9:
+                converged = True
                 break
+        if not converged or not np.isfinite(beta).all() or np.max(np.abs(beta)) > 30:
+            raise FloatingPointError("model did not converge to finite, stable coefficients")
         mu = np.exp(np.clip(X @ beta + offset, -30, 30))
         bread_inv = np.linalg.inv(X.T @ (X * mu[:, None]))
     except (np.linalg.LinAlgError, ValueError, FloatingPointError) as exc:
@@ -227,10 +253,17 @@ def fit_adjusted_rate_model(rows: Sequence[Dict], alpha: float = 0.05) -> Dict:
     correction = (clusters / (clusters - 1)) * ((len(usable) - 1) / (len(usable) - X.shape[1]))
     covariance = correction * bread_inv @ meat @ bread_inv
     se = np.sqrt(np.maximum(np.diag(covariance), 0))
+    if not np.isfinite(covariance).all() or not np.isfinite(se).all():
+        return {"status": "not_fitted", "reason": "Clustered uncertainty was not finite for this dataset.",
+                "n_recordings": len(usable), "n_recorders": len(recorders)}
     zcrit = stats.norm.ppf(1 - alpha / 2)
     terms = []
     for name, estimate, stderr in zip(names, beta, se):
         z = estimate / stderr if stderr > 0 else None
+        bounds = np.array([estimate, estimate - zcrit * stderr, estimate + zcrit * stderr])
+        if not np.isfinite(bounds).all() or np.max(np.abs(bounds)) > 700:
+            return {"status": "not_fitted", "reason": "Model effect estimates were numerically unstable.",
+                    "n_recordings": len(usable), "n_recorders": len(recorders)}
         terms.append({
             "term": name, "estimate": float(estimate), "se": float(stderr),
             "rate_ratio": float(math.exp(estimate)),

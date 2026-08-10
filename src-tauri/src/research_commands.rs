@@ -1,8 +1,13 @@
 //! Tauri bridge for the reproducible research-analysis bundle.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::active_learning_commands::run_script;
+use batch_core::audio::audio_duration_hours;
+use batch_core::store::Store;
+
+const DEFAULT_FILE_EFFORT_HOURS: f64 = 0.25;
 
 #[tauri::command]
 pub async fn run_research_analysis(
@@ -24,6 +29,29 @@ pub async fn run_research_analysis(
         return Err("Activity bin size must be positive".to_string());
     }
     let analysis_dir = Path::new(&output_dir).join("research").join(format!("session-{session_id}"));
+    let db_for_effort = db_path.clone();
+    let effort = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let store = Store::open(Path::new(&db_for_effort)).map_err(|error| error.to_string())?;
+        let files = store.list_files(session_id).map_err(|error| error.to_string())?;
+        let mut hours = BTreeMap::new();
+        let mut n_measured = 0;
+        let mut n_defaulted = 0;
+        for file in files.into_iter().filter(|file| file.status == "done") {
+            let value = match audio_duration_hours(Path::new(&file.path)) {
+                Some(value) => { n_measured += 1; value }
+                None => { n_defaulted += 1; DEFAULT_FILE_EFFORT_HOURS }
+            };
+            hours.insert(file.path, value);
+        }
+        Ok(serde_json::json!({
+            "hours": hours, "n_measured": n_measured, "n_defaulted": n_defaulted,
+            "available": true, "reader": "batch-core/symphonia-frame-scan"
+        }))
+    }).await.map_err(|error| format!("Duration worker failed: {error}"))??;
+    std::fs::create_dir_all(&analysis_dir).map_err(|error| error.to_string())?;
+    let effort_path = analysis_dir.join("effort.json");
+    std::fs::write(&effort_path, serde_json::to_vec_pretty(&effort).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
     let mut args = vec![
         "--db".into(), db_path,
         "--session-id".into(), session_id.to_string(),
@@ -31,6 +59,7 @@ pub async fn run_research_analysis(
         "--theta-a".into(), theta_a.to_string(),
         "--theta-b".into(), theta_b.to_string(),
         "--bin-minutes".into(), bin_minutes.to_string(),
+        "--effort-json".into(), effort_path.to_string_lossy().into_owned(),
     ];
     if let Some(path) = metadata_path.filter(|value| !value.trim().is_empty()) {
         if !Path::new(&path).exists() {
