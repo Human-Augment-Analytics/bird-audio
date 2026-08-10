@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EventRow, FileRow, StartOpts, StartResult } from "../types";
 import {
-  addManualEvent, audioSrc, deleteEvent, listEvents, logReviewAction, prepareReview, setEventReview, updateEventBounds,
+  addManualEvent, audioSrc, deleteEvent, listEvents, logReviewAction, prepareReview, restoreEvent,
+  setEventReview, updateEventBounds,
 } from "../api";
 import { AudioVisualizer } from "./AudioVisualizer";
 import { EventTable } from "./EventTable";
@@ -12,6 +13,19 @@ export interface ReviewViewProps {
   start: StartResult;
   opts: StartOpts;
   rows: FileRow[];
+}
+
+type BoxBounds = { tStart: number; tEnd: number; fLow: number; fHigh: number };
+type BoxAction =
+  | { type: "ADD"; eventId: number; path: string; bounds: BoxBounds }
+  | { type: "DELETE"; eventId: number; path: string; eventRow: EventRow };
+
+function remapActionId(action: BoxAction, path: string, oldId: number, newId: number): BoxAction {
+  if (action.path !== path || action.eventId !== oldId) return action;
+  if (action.type === "DELETE") {
+    return { ...action, eventId: newId, eventRow: { ...action.eventRow, id: newId } };
+  }
+  return { ...action, eventId: newId };
 }
 
 export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
@@ -27,6 +41,11 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showShortcuts, setShowShortcuts] = useState(false);
   const currentPathRef = useRef<string | null>(null);
+  const eventRequestId = useRef(0);
+  const [history, setHistory] = useState<BoxAction[]>([]);
+  const [redoStack, setRedoStack] = useState<BoxAction[]>([]);
+  const mutationBusyRef = useRef(false);
+  const [mutationBusy, setMutationBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,40 +54,61 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   }, [dir, sid]);
 
   const fetchEvents = useCallback(async (path: string, showLoading = false) => {
-    currentPathRef.current = path;
+    if (currentPathRef.current !== path) return null;
+    const requestId = ++eventRequestId.current;
     if (showLoading) {
       setLoadingEvents(true);
     }
     try {
       const result = await listEvents(dir, sid, path);
-      if (currentPathRef.current === path) setEvents(result);
+      if (currentPathRef.current === path && eventRequestId.current === requestId) {
+        setEvents(result);
+        return result;
+      }
     } catch (e) {
-      if (currentPathRef.current === path) setNotice(`Failed to load events: ${String(e)}`);
+      if (currentPathRef.current === path && eventRequestId.current === requestId) {
+        setNotice(`Failed to load events: ${String(e)}`);
+      }
     } finally {
-      if (currentPathRef.current === path && showLoading) {
+      if (currentPathRef.current === path && eventRequestId.current === requestId && showLoading) {
         setLoadingEvents(false);
       }
     }
+    return null;
   }, [dir, sid]);
 
   const refreshEvents = useCallback(async () => {
     if (selectedPath) await fetchEvents(selectedPath, false);
   }, [selectedPath, fetchEvents]);
 
-  const selectFile = useCallback((path: string) => {
-    if (path === selectedPath) return;
+  const selectFile = useCallback((path: string, targetEventId?: number) => {
+    if (mutationBusyRef.current) {
+      setNotice("Wait for the current bounding-box edit to finish before switching recordings.");
+      return;
+    }
+    if (path === selectedPath) {
+      if (targetEventId !== undefined) setSelectedId(targetEventId);
+      return;
+    }
+    currentPathRef.current = path;
+    eventRequestId.current += 1;
     setSelectedPath(path); setSelectedId(null); setEvents([]); setNotice(null);
+    setHistory([]); setRedoStack([]);
     void logReviewAction(dir, sid, "open_file", null, { path });
-    fetchEvents(path, true);
+    void fetchEvents(path, true).then((loaded) => {
+      if (targetEventId === undefined) return;
+      if (loaded?.some((event) => event.id === targetEventId)) {
+        setSelectedId(targetEventId);
+      } else {
+        setNotice(`Verification event #${targetEventId} was not found in ${path}.`);
+      }
+    });
   }, [selectedPath, fetchEvents, dir, sid]);
 
   const currentStatus = useCallback(
     (id: number): "unreviewed" | "confirmed" | "rejected" =>
       events.find((e) => e.id === id)?.review_status ?? "unreviewed",
     [events]);
-
-  const [history, setHistory] = useState<Array<{ type: 'ADD' | 'DELETE'; eventId?: number; path: string; bounds?: { tStart: number; tEnd: number; fLow: number; fHigh: number }; eventRow?: EventRow }>>([]);
-  const [redoStack, setRedoStack] = useState<Array<{ type: 'ADD' | 'DELETE'; eventId?: number; path: string; bounds?: { tStart: number; tEnd: number; fLow: number; fHigh: number }; eventRow?: EventRow }>>([]);
 
   const handleSelectEvent = useCallback((id: number) => setSelectedId(id), []);
   const handleSetReview = useCallback(async (id: number, status: "confirmed" | "rejected" | "unreviewed") => {
@@ -81,6 +121,9 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   }, [dir, refreshEvents]);
   const handleAddEvent = useCallback(async (e: { t_start: number; t_end: number; f_low: number; f_high: number }) => {
     if (!selectedPath) return;
+    if (mutationBusyRef.current) return;
+    mutationBusyRef.current = true;
+    setMutationBusy(true);
     try {
       const bounds = { tStart: e.t_start, tEnd: e.t_end, fLow: e.f_low, fHigh: e.f_high };
       const newId = await addManualEvent(dir, sid, selectedPath, bounds);
@@ -88,20 +131,32 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
       setHistory((h) => [...h, { type: 'ADD', eventId: newId, path: selectedPath, bounds }]);
       setRedoStack([]);
       setNotice("Added new event bounding box.");
-    } catch (err) { setNotice(`Add event failed: ${String(err)}`); }
+    } catch (err) {
+      setNotice(`Add event failed: ${String(err)}`);
+    } finally {
+      mutationBusyRef.current = false;
+      setMutationBusy(false);
+    }
   }, [dir, sid, selectedPath, refreshEvents]);
   const handleDelete = useCallback(async (id: number) => {
+    if (mutationBusyRef.current) return;
+    mutationBusyRef.current = true;
+    setMutationBusy(true);
     try {
       const ev = events.find((item) => item.id === id);
+      if (!ev || !selectedPath) throw new Error(`Event #${id} is not loaded in the current recording.`);
       await deleteEvent(dir, id);
       if (selectedId === id) setSelectedId(null);
       await refreshEvents();
-      if (ev && selectedPath) {
-        setHistory((h) => [...h, { type: 'DELETE', eventId: id, path: selectedPath, eventRow: ev }]);
-        setRedoStack([]);
-      }
+      setHistory((h) => [...h, { type: 'DELETE', eventId: id, path: selectedPath, eventRow: ev }]);
+      setRedoStack([]);
       setNotice(`Deleted bounding box #${id}.`);
-    } catch (e) { setNotice(`Delete failed: ${String(e)}`); }
+    } catch (e) {
+      setNotice(`Delete failed: ${String(e)}`);
+    } finally {
+      mutationBusyRef.current = false;
+      setMutationBusy(false);
+    }
   }, [dir, selectedId, events, selectedPath, refreshEvents]);
   const handleEditLabelNote = useCallback(async (id: number, label: string, note: string) => {
     try { await setEventReview(dir, id, currentStatus(id), label, note); await refreshEvents(); }
@@ -109,50 +164,87 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   }, [dir, currentStatus, refreshEvents]);
 
   const handleUndo = useCallback(async () => {
-    if (history.length === 0) return;
+    if (history.length === 0 || mutationBusyRef.current) return;
     const lastAction = history[history.length - 1];
-    setHistory((h) => h.slice(0, -1));
-    setRedoStack((r) => [...r, lastAction]);
-
-    if (lastAction.type === 'ADD' && lastAction.eventId) {
-      await deleteEvent(dir, lastAction.eventId);
-      if (selectedId === lastAction.eventId) setSelectedId(null);
+    mutationBusyRef.current = true;
+    setMutationBusy(true);
+    try {
+      let redoAction = lastAction;
+      if (lastAction.type === 'ADD') {
+        await deleteEvent(dir, lastAction.eventId);
+        if (selectedId === lastAction.eventId) setSelectedId(null);
+        setNotice("Undo: Removed added bounding box.");
+      } else {
+        const restoredId = await restoreEvent(dir, sid, lastAction.path, lastAction.eventRow);
+        const restoredRow = { ...lastAction.eventRow, id: restoredId };
+        redoAction = { ...lastAction, eventId: restoredId, eventRow: restoredRow };
+        setSelectedId(restoredId);
+        setNotice("Undo: Restored deleted bounding box.");
+        setHistory((h) => h.slice(0, -1).map((action) =>
+          remapActionId(action, lastAction.path, lastAction.eventId, restoredId)));
+        setRedoStack((r) => [
+          ...r.map((action) => remapActionId(action, lastAction.path, lastAction.eventId, restoredId)),
+          redoAction,
+        ]);
+      }
       await refreshEvents();
-      setNotice("Undo: Removed added bounding box.");
-    } else if (lastAction.type === 'DELETE' && lastAction.eventRow) {
-      const ev = lastAction.eventRow;
-      const restoredId = await addManualEvent(dir, sid, lastAction.path, {
-        tStart: ev.t_start, tEnd: ev.t_end, fLow: ev.f_low, fHigh: ev.f_high
-      });
-      await refreshEvents();
-      setSelectedId(restoredId);
-      setNotice("Undo: Restored deleted bounding box.");
+      if (lastAction.type === 'ADD') {
+        setHistory((h) => h.slice(0, -1));
+        setRedoStack((r) => [...r, redoAction]);
+      }
+    } catch (error) {
+      setNotice(`Undo failed: ${String(error)}`);
+    } finally {
+      mutationBusyRef.current = false;
+      setMutationBusy(false);
     }
   }, [history, dir, sid, selectedId, refreshEvents]);
 
   const handleRedo = useCallback(async () => {
-    if (redoStack.length === 0) return;
+    if (redoStack.length === 0 || mutationBusyRef.current) return;
     const lastRedo = redoStack[redoStack.length - 1];
-    setRedoStack((r) => r.slice(0, -1));
-    setHistory((h) => [...h, lastRedo]);
-
-    if (lastRedo.type === 'ADD' && lastRedo.bounds) {
-      const restoredId = await addManualEvent(dir, sid, lastRedo.path, lastRedo.bounds);
+    mutationBusyRef.current = true;
+    setMutationBusy(true);
+    try {
+      let historyAction = lastRedo;
+      if (lastRedo.type === 'ADD') {
+        const restoredId = await addManualEvent(dir, sid, lastRedo.path, lastRedo.bounds);
+        historyAction = { ...lastRedo, eventId: restoredId };
+        setSelectedId(restoredId);
+        setNotice("Redo: Re-created bounding box.");
+        setRedoStack((r) => r.slice(0, -1).map((action) =>
+          remapActionId(action, lastRedo.path, lastRedo.eventId, restoredId)));
+        setHistory((h) => [
+          ...h.map((action) => remapActionId(action, lastRedo.path, lastRedo.eventId, restoredId)),
+          historyAction,
+        ]);
+      } else {
+        await deleteEvent(dir, lastRedo.eventId);
+        if (selectedId === lastRedo.eventId) setSelectedId(null);
+        setNotice("Redo: Deleted bounding box.");
+      }
       await refreshEvents();
-      setSelectedId(restoredId);
-      setNotice("Redo: Re-created bounding box.");
-    } else if (lastRedo.type === 'DELETE' && lastRedo.eventId) {
-      await deleteEvent(dir, lastRedo.eventId);
-      if (selectedId === lastRedo.eventId) setSelectedId(null);
-      await refreshEvents();
-      setNotice("Redo: Deleted bounding box.");
+      if (lastRedo.type === 'DELETE') {
+        setRedoStack((r) => r.slice(0, -1));
+        setHistory((h) => [...h, historyAction]);
+      }
+    } catch (error) {
+      setNotice(`Redo failed: ${String(error)}`);
+    } finally {
+      mutationBusyRef.current = false;
+      setMutationBusy(false);
     }
   }, [redoStack, dir, sid, selectedId, refreshEvents]);
+
+  const handleVerificationSelect = useCallback((id: number, path: string) => {
+    selectFile(path, id);
+  }, [selectFile]);
 
   useEffect(() => {
     const handleKeyDown = (ev: KeyboardEvent) => {
       const isText = ev.target instanceof HTMLElement &&
-        (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA" || ev.target.isContentEditable);
+        (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA" ||
+          ev.target.tagName === "SELECT" || ev.target.isContentEditable);
       if (isText) return;
 
       const isCmdOrCtrl = ev.metaKey || ev.ctrlKey;
@@ -250,11 +342,11 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
             const isSelected = selectedPath === row.path;
             const basename = row.path.split("/").pop() || row.path;
             return (
-              <button key={row.path} className="ba-file" disabled={!isDone} onClick={() => isDone && selectFile(row.path)} title={row.path}
+              <button key={row.path} className="ba-file" disabled={!isDone || mutationBusy} onClick={() => isDone && selectFile(row.path)} title={row.path}
                 style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "6px 12px",
                   background: isSelected ? "var(--surface-2)" : "transparent", border: "none",
                   borderLeft: isSelected ? "3px solid var(--amber)" : "3px solid transparent",
-                  cursor: isDone ? "pointer" : "default", opacity: isDone ? 1 : 0.4, textAlign: "left", minWidth: 0 }}>
+                  cursor: isDone && !mutationBusy ? "pointer" : "default", opacity: isDone ? 1 : 0.4, textAlign: "left", minWidth: 0 }}>
                 <span style={{ flex: 1, fontFamily: "var(--mono)", fontSize: 11.5, color: isSelected ? "var(--text)" : "var(--text-dim)",
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{basename}</span>
                 {isDone && <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-faint)", border: "1px solid var(--line)", borderRadius: 999, padding: "1px 7px", fontVariantNumeric: "tabular-nums" }}>{row.n_events}</span>}
@@ -282,12 +374,12 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
             </span>
             <button
               onClick={handleUndo}
-              disabled={history.length === 0}
+              disabled={history.length === 0 || mutationBusy}
               style={{
                 background: 'none', border: '1px solid var(--line)', borderRadius: 6,
                 padding: '2px 8px', color: history.length > 0 ? 'var(--amber)' : 'var(--text-faint)',
-                cursor: history.length > 0 ? 'pointer' : 'default', fontFamily: 'var(--mono)', fontSize: 10.5,
-                opacity: history.length > 0 ? 1 : 0.4
+                cursor: history.length > 0 && !mutationBusy ? 'pointer' : 'default', fontFamily: 'var(--mono)', fontSize: 10.5,
+                opacity: history.length > 0 && !mutationBusy ? 1 : 0.4
               }}
               title="Undo last bounding box action (Cmd+Z)"
             >
@@ -295,12 +387,12 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
             </button>
             <button
               onClick={handleRedo}
-              disabled={redoStack.length === 0}
+              disabled={redoStack.length === 0 || mutationBusy}
               style={{
                 background: 'none', border: '1px solid var(--line)', borderRadius: 6,
                 padding: '2px 8px', color: redoStack.length > 0 ? 'var(--amber)' : 'var(--text-faint)',
-                cursor: redoStack.length > 0 ? 'pointer' : 'default', fontFamily: 'var(--mono)', fontSize: 10.5,
-                opacity: redoStack.length > 0 ? 1 : 0.4
+                cursor: redoStack.length > 0 && !mutationBusy ? 'pointer' : 'default', fontFamily: 'var(--mono)', fontSize: 10.5,
+                opacity: redoStack.length > 0 && !mutationBusy ? 1 : 0.4
               }}
               title="Redo bounding box action (Cmd+Shift+Z / Cmd+Y)"
             >
@@ -327,7 +419,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
           </div>
         )}
         <VerificationPanel dbPath={dbPath} sessionId={sid} thetaA={opts.thetaA} thetaB={opts.thetaB}
-          onSelectEvent={handleSelectEvent} onLogAction={logAction} />
+          onSelectEvent={handleVerificationSelect} onLogAction={logAction} />
         {!selectedPath ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", fontFamily: "var(--serif)", fontStyle: "italic", fontSize: "1.05rem" }}>
             Select a completed recording to review its events.
@@ -341,7 +433,8 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
           <>
             <div className="reveal" style={{ animationDelay: "40ms" }}>
               <AudioVisualizer src={src} events={events} selectedId={selectedId}
-                onSelectEvent={handleSelectEvent} onUpdateBounds={handleUpdateBounds} onAddEvent={handleAddEvent} onDeleteEvent={handleDelete} />
+                onSelectEvent={handleSelectEvent} onUpdateBounds={handleUpdateBounds} onAddEvent={handleAddEvent}
+                onDeleteEvent={handleDelete} frequencyMax={opts.fMaxHz} />
             </div>
             <div className="reveal" style={{ animationDelay: "130ms" }}>
               <EventTable events={events} selectedId={selectedId} onSelect={handleSelectEvent}

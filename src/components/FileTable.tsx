@@ -18,6 +18,8 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function FileTable({ rows }: { rows: FileRow[] }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  // TanStack Virtual intentionally returns imperative helpers; React Compiler safely skips this hook.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const v = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,

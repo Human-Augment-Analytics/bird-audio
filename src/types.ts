@@ -24,6 +24,7 @@ export interface StartResult {
 }
 
 export interface Progress {
+  session_id: number;
   total: number;
   done: number;
   failed: number;
@@ -35,6 +36,8 @@ export interface Progress {
 }
 
 export interface Summary {
+  session_id: number;
+  status: "running" | "done" | "cancelled" | "failed" | string;
   total: number;
   pending: number;
   in_progress: number;
@@ -123,6 +126,7 @@ export interface VerificationQueueItem {
   stage_a_conf: number;
   completeness_score: number | null;
   file_id: number;
+  path: string;
 }
 
 export interface VerificationPlan {
@@ -158,5 +162,7 @@ export interface EventRow {
   source: "ml" | "manual";
   label: string | null;
   note: string | null;
+  reviewed_at: string | null;
+  stage_c_label: string | null;
+  stage_c_score: number | null;
 }
-

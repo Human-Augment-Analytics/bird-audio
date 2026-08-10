@@ -336,7 +336,8 @@ input[type="checkbox"]:checked::after {
   height: 100%;
   border-radius: 99px;
   background: var(--spectrogram);
-  background-size: 220px 100%;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
   transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
 }
 /* scrubbing playhead glow at the leading edge while live */
@@ -787,5 +788,4 @@ input[type="checkbox"]:checked::after {
   border-color: var(--coral);
   color: var(--coral);
 }
-
 

@@ -12,6 +12,7 @@ interface Props {
   throughput: number; // files/sec
   onExport: (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => void;
   onCancel: () => void;
+  cancelled: boolean;
   outputDir: string;
 }
 
@@ -19,7 +20,7 @@ interface Props {
 function useCountUp(target: number, run: boolean, duration = 1000) {
   const [val, setVal] = useState(0);
   useEffect(() => {
-    if (!run) { setVal(0); return; }
+    if (!run) return;
     let raf = 0;
     const start = performance.now();
     const tick = (now: number) => {
@@ -31,7 +32,7 @@ function useCountUp(target: number, run: boolean, duration = 1000) {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [target, run, duration]);
-  return val;
+  return run ? val : 0;
 }
 
 function Stat({ label, value, color }: { label: string; value: number | string; color?: string }) {
@@ -49,40 +50,43 @@ const FILTERS: { key: "all" | "done" | "failed"; label: string }[] = [
   { key: "failed", label: "Failed" },
 ];
 
-export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel, outputDir }: Props) {
+export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel, cancelled, outputDir }: Props) {
   const [filter, setFilter] = useState<"all" | "done" | "failed">("all");
   const [metadataPath, setMetadataPath] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<string>("csv");
   const [exportCompleteOnly, setExportCompleteOnly] = useState<boolean>(false);
   const [exportConfirmedOnly, setExportConfirmedOnly] = useState<boolean>(false);
-  const [events, setEvents] = useState<ExportedEvent[]>([]);
-  const [loadingEvents, setLoadingEvents] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
   const done = summary !== null;
+  const completed = summary?.status === "done";
+  const failed = summary?.status === "failed";
+  const eventRequestKey = done && start.session_id ? `${outputDir}:${start.session_id}` : null;
+  const [eventResult, setEventResult] = useState<{
+    key: string;
+    events: ExportedEvent[];
+    error: string | null;
+  } | null>(null);
 
   useEffect(() => {
-    if (done && start.session_id) {
-      setLoadingEvents(true);
-      getSessionEvents(outputDir, start.session_id)
-        .then((evs) => {
-          setEvents(evs);
-          setLoadingEvents(false);
-        })
-        .catch((err) => {
-          console.error("Failed to load session events:", err);
-          setLoadError(String(err));
-          setLoadingEvents(false);
-        });
-    } else {
-      setEvents([]);
-    }
-  }, [done, start.session_id, outputDir]);
-  const total = progress?.total ?? summary?.total ?? start.total_files;
-  const doneN = progress?.done ?? summary?.done ?? 0;
-  const failedN = progress?.failed ?? summary?.failed ?? 0;
-  const pendingN = progress?.pending ?? summary?.pending ?? 0;
-  const inProg = progress?.in_progress ?? summary?.in_progress ?? 0;
+    if (!eventRequestKey) return;
+    let active = true;
+    getSessionEvents(outputDir, start.session_id)
+      .then((events) => {
+        if (active) setEventResult({ key: eventRequestKey, events, error: null });
+      })
+      .catch((err) => {
+        console.error("Failed to load session events:", err);
+        if (active) setEventResult({ key: eventRequestKey, events: [], error: String(err) });
+      });
+    return () => { active = false; };
+  }, [eventRequestKey, start.session_id, outputDir]);
+  const events = eventResult?.key === eventRequestKey ? eventResult.events : [];
+  const loadingEvents = eventRequestKey !== null && eventResult?.key !== eventRequestKey;
+  const loadError = eventResult?.key === eventRequestKey ? eventResult.error : null;
+  const total = summary?.total ?? progress?.total ?? start.total_files;
+  const doneN = summary?.done ?? progress?.done ?? 0;
+  const failedN = summary?.failed ?? progress?.failed ?? 0;
+  const pendingN = summary?.pending ?? progress?.pending ?? 0;
+  const inProg = summary?.in_progress ?? progress?.in_progress ?? 0;
   const pct = total > 0 ? Math.round(((doneN + failedN) / total) * 100) : 0;
   const eta = throughput > 0 ? Math.round(pendingN / throughput) : null;
   const lastMs = progress?.last_elapsed_ms ?? null;
@@ -123,13 +127,14 @@ export default function RunView({ start, progress, summary, rows, throughput, on
     <div className="card reveal" style={{ display: "grid", gap: 18 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
         <h2 style={{ fontSize: 24, display: "flex", alignItems: "center", gap: 12 }}>
-          {!done && <span className="dot dot--ok" />}
-          {done ? "Analysis complete" : "Listening to recordings…"}
+          {!done && <span className={`dot ${cancelled ? "dot--bad" : "dot--ok"}`} />}
+          {completed ? "Analysis complete" : failed ? "Analysis completed with file failures" :
+            done || cancelled ? (done ? "Analysis cancelled" : "Cancelling analysis…") : "Listening to recordings…"}
         </h2>
         <span className="eyebrow">session {start.session_id} · {pct}%</span>
       </div>
 
-      <div className={`progress ${done ? "progress--done" : ""}`}>
+      <div className={`progress ${completed ? "progress--done" : ""}`}>
         <div className="progress__fill" style={{ width: `${pct}%` }} />
       </div>
 
@@ -275,7 +280,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
           </button>
         ))}
         <span style={{ flex: 1 }} />
-        {!done && <button onClick={onCancel}>Cancel run</button>}
+        {!done && <button onClick={onCancel} disabled={cancelled}>{cancelled ? "Cancelling…" : "Cancel run"}</button>}
       </div>
 
       <FileTable rows={filtered} />

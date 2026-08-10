@@ -18,7 +18,7 @@ export interface VerificationPanelProps {
   thetaA: number;
   /** Completeness operating point (θ_B), used by the completeness strategy. */
   thetaB: number;
-  onSelectEvent: (id: number) => void;
+  onSelectEvent: (id: number, path: string) => void;
   onLogAction: (action: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -111,13 +111,13 @@ export default function VerificationPanel({
     }
   }, [dbPath, sessionId, threshold, targetHalfWidth, strategy, budget, thetaB, onLogAction]);
 
-  const pickEvent = useCallback((id: number) => {
+  const pickEvent = useCallback((id: number, path: string) => {
     try {
-      onLogAction("verification_queue_pick", { eventId: id, strategy });
+      onLogAction("verification_queue_pick", { eventId: id, path, strategy });
     } catch {
       // Telemetry is best-effort and must never block selection.
     }
-    onSelectEvent(id);
+    onSelectEvent(id, path);
   }, [onSelectEvent, onLogAction, strategy]);
 
   const p = plan?.precision;
@@ -239,10 +239,10 @@ export default function VerificationPanel({
                 ) : (
                   <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
                     {plan.queue.map((q) => (
-                      <button key={q.id} onClick={() => pickEvent(q.id)}
+                      <button key={q.id} onClick={() => pickEvent(q.id, q.path)}
                         title={`conf ${q.stage_a_conf.toFixed(4)}` +
                           (q.completeness_score === null ? ", completeness n/a" : `, completeness ${q.completeness_score.toFixed(4)}`) +
-                          `, file ${q.file_id}`}
+                          `, file ${q.path}`}
                         style={{ fontFamily: "var(--mono)", fontSize: 11, padding: "3px 9px",
                           borderRadius: 999, border: "1px solid var(--line)", background: "var(--bg-deep)",
                           color: "var(--text-dim)", cursor: "pointer", fontVariantNumeric: "tabular-nums" }}>
@@ -252,7 +252,7 @@ export default function VerificationPanel({
                   </div>
                 )}
                 <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>
-                  Queued events may sit in other recordings; open that recording to see the selection.
+                  Selecting a queued event opens its recording and highlights the detection.
                 </div>
               </div>
             </>

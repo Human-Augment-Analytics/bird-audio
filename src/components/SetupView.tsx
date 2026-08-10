@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { checkHealth, pickFile, pickFolder, prepareSystem, startSession, checkCache, getConcurrencySuggestion, getFeatureFlags } from "../api";
 import type { StartOpts, StartResult, HealthStatus } from "../types";
 import ManageCache from "./ManageCache";
@@ -30,7 +30,7 @@ function Field({ label, children, hint }: { label: ReactNode; children: ReactNod
 
 export default function SetupView({ onStarted }: Props) {
   const [input, setInput] = useState("");
-  const [hasCache, setHasCache] = useState(false);
+  const [cacheResult, setCacheResult] = useState<{ input: string; hasCache: boolean } | null>(null);
   const [thetaA, setThetaA] = useState(0); // Sensitivity
   const [thetaB, setThetaB] = useState(0.530306); // Quality
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -50,7 +50,7 @@ export default function SetupView({ onStarted }: Props) {
   const [concurrency, setConcurrency] = useState("1");
   const [logicalCores, setLogicalCores] = useState<number | null>(null);
   const [recommendedConcurrency, setRecommendedConcurrency] = useState<number | null>(null);
-  const [featureFlags, setFeatureFlags] = useState<Record<string, any> | null>(null);
+  const [featureFlags, setFeatureFlags] = useState<Record<string, boolean> | null>(null);
   const [workerCmd, setWorkerCmd] = useState("uv run python scripts/ml_engine.py --worker");
   const [cwd, setCwd] = useState("");
   const [timeoutSecs, setTimeoutSecs] = useState(600);
@@ -58,44 +58,78 @@ export default function SetupView({ onStarted }: Props) {
   
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const deviceWasSelected = useRef(false);
+  const cacheRequestId = useRef(0);
+  const healthRequestId = useRef(0);
+  const inputRef = useRef(input);
+  useEffect(() => { inputRef.current = input; }, [input]);
+  const updateInput = useCallback((value: string) => {
+    inputRef.current = value;
+    setInput(value);
+  }, []);
 
   useEffect(() => {
+    let active = true;
+    const requestId = ++healthRequestId.current;
     checkHealth(cwd || undefined, {
       localizer: localizer.trim() || null,
       classifier: classifier.trim() || null,
       classifierC: classifierC.trim() || null,
     }).then(h => {
+      if (!active || healthRequestId.current !== requestId) return;
       setHealth(h);
-      if (h?.internal_device) {
+      if (h?.internal_device && !deviceWasSelected.current) {
         setDevice(h.internal_device);
       }
-    }).catch(() => setHealth(null));
+    }).catch(() => { if (active && healthRequestId.current === requestId) setHealth(null); });
+    return () => { active = false; };
   }, [cwd, localizer, classifier, classifierC]);
 
   useEffect(() => {
+    let active = true;
     // Fetch concurrency suggestion for the selected processor
     getConcurrencySuggestion(device).then(info => {
+      if (!active) return;
       setLogicalCores(info.logical);
       setRecommendedConcurrency(info.recommended);
     }).catch(() => {
+      if (!active) return;
       setLogicalCores(null);
       setRecommendedConcurrency(null);
     });
     // fetch feature flags
     getFeatureFlags(cwd || undefined).then(f => {
-      setFeatureFlags(f || {});
-    }).catch(() => setFeatureFlags({}));
+      if (active) setFeatureFlags(f || {});
+    }).catch(() => { if (active) setFeatureFlags({}); });
+    return () => { active = false; };
   }, [device, cwd]);
 
-  useEffect(() => {
-    if (input) {
-      checkCache(input).then(setHasCache).catch(() => setHasCache(false));
-    } else {
-      setHasCache(false);
+  const refreshCache = useCallback((path: string) => {
+    const requestId = ++cacheRequestId.current;
+    if (!path) {
+      queueMicrotask(() => {
+        if (cacheRequestId.current === requestId) setCacheResult(null);
+      });
+      return;
     }
-  }, [input]);
+    checkCache(path)
+      .then((hasCache) => {
+        if (cacheRequestId.current === requestId) setCacheResult({ input: path, hasCache });
+      })
+      .catch(() => {
+        if (cacheRequestId.current === requestId) setCacheResult({ input: path, hasCache: false });
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshCache(input);
+    return () => { cacheRequestId.current += 1; };
+  }, [input, refreshCache]);
+
+  const hasCache = cacheResult?.input === input && cacheResult.hasCache;
 
   const handlePrepare = async () => {
+    const requestId = ++healthRequestId.current;
     setBusy(true);
     try {
       await prepareSystem(cwd || undefined);
@@ -104,12 +138,13 @@ export default function SetupView({ onStarted }: Props) {
         classifier: classifier.trim() || null,
         classifierC: classifierC.trim() || null,
       });
+      if (healthRequestId.current !== requestId) return;
       setHealth(h);
-      if (h?.internal_device) {
+      if (h?.internal_device && !deviceWasSelected.current) {
         setDevice(h.internal_device);
       }
     } catch (e) {
-      setError(String(e));
+      if (healthRequestId.current === requestId) setError(String(e));
     } finally {
       setBusy(false);
     }
@@ -126,12 +161,35 @@ export default function SetupView({ onStarted }: Props) {
     if (!input) { setError("Please select a recording folder."); return; }
     const fMin = optionalNumber(fMinHz);
     const fMax = optionalNumber(fMaxHz);
+    if ((fMinHz.trim() && fMin === null) || (fMaxHz.trim() && fMax === null)) {
+      setError("Frequency bounds must be valid numbers or left blank.");
+      return;
+    }
+    if ((fMin !== null && fMin < 0) || (fMax !== null && fMax <= 0)) {
+      setError("Frequency bounds must be positive (the low bound may be zero).");
+      return;
+    }
     if (fMin !== null && fMax !== null && fMin >= fMax) {
       setError("Frequency band is empty: the low bound must be below the high bound.");
       return;
     }
     setBusy(true);
     const concurrencyNum = concurrency.trim() === "" ? 0 : Number(concurrency);
+    if (![thetaA, thetaB].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)) {
+      setError("Detection and quality thresholds must be between 0 and 1.");
+      setBusy(false);
+      return;
+    }
+    if (!Number.isInteger(concurrencyNum) || concurrencyNum < 0) {
+      setError("Parallel tasks must be a non-negative whole number (0 selects automatic).");
+      setBusy(false);
+      return;
+    }
+    if (!Number.isFinite(timeoutSecs) || timeoutSecs <= 0 || !Number.isInteger(maxAttempts) || maxAttempts < 1) {
+      setError("Timeout must be positive and the retry limit must be a positive whole number.");
+      setBusy(false);
+      return;
+    }
     const opts: StartOpts = {
       input,
       outputDir: input,
@@ -189,16 +247,17 @@ export default function SetupView({ onStarted }: Props) {
       <Field label={<><span className="section-num">1</span>Select recording folder</>}>
         <div style={{ display: "flex", gap: 8 }}>
           <input style={{ flex: 1 }} value={input} readOnly placeholder="Browse to a folder of field recordings…" />
-          <button onClick={async () => { const f = await pickFolder(); if(f) setInput(f); }}>Browse…</button>
+          <button onClick={async () => { const f = await pickFolder(); if(f) updateInput(f); }}>Browse…</button>
         </div>
         <div style={{ marginTop: '8px' }}>
           <label style={{ fontSize: '0.85rem', color: 'var(--text-faint)' }}>Quick Sural Dataset Preset:</label>
           <select
             className="select-input"
             style={{ marginTop: '4px', width: '100%' }}
+            value={SURAL_PRESETS.some((preset) => preset.path === input) ? input : ""}
             onChange={(e) => {
               if (e.target.value) {
-                setInput(e.target.value);
+                updateInput(e.target.value);
               }
             }}
           >
@@ -211,8 +270,9 @@ export default function SetupView({ onStarted }: Props) {
         {hasCache && (
           <ManageCache
             outputDir={input}
-            onCleared={() => {
-              checkCache(input).then(setHasCache).catch(() => setHasCache(false));
+            onCleared={(clearedDir) => {
+              if (inputRef.current !== clearedDir) return;
+              refreshCache(clearedDir);
               setError("Selected results cleared from cache.");
             }}
           />
@@ -288,7 +348,10 @@ export default function SetupView({ onStarted }: Props) {
               <div className="internals">
                  <Field label="Worker process command"><input value={workerCmd} onChange={e => setWorkerCmd(e.target.value)} /></Field>
                  <Field label="Processing engine">
-                    <select value={device} onChange={e => setDevice(e.target.value)}>
+                    <select value={device} onChange={e => {
+                      deviceWasSelected.current = true;
+                      setDevice(e.target.value);
+                    }}>
                       <option value="cpu">System Processor (CPU)</option>
                       <option value="cuda">NVIDIA Graphics Card (CUDA)</option>
                       <option value="mps">Apple Silicon (MPS)</option>

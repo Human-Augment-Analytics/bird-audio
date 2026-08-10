@@ -1,13 +1,36 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import Spectrogram from 'wavesurfer.js/dist/plugins/spectrogram.esm.js';
-import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
+import RegionsPlugin, { type Region } from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
 import { Play, Pause, ZoomIn, ZoomOut, Volume2, VolumeX, Plus } from 'lucide-react';
 import type { EventRow } from '../types';
 
 const FREQ_MIN = 0;
-const FREQ_MAX = 11025;
+const DEFAULT_FREQ_MAX = 11625;
+const INITIAL_ZOOM = 50;
+
+function spectrogramScrollElement(container: HTMLElement | null): HTMLElement | null {
+  if (!container) return null;
+  return container.firstElementChild instanceof HTMLElement ? container.firstElementChild : null;
+}
+
+function syncSpectrogramScroll(container: HTMLElement | null, scrollLeft: number) {
+  const wrapper = spectrogramScrollElement(container);
+  if (wrapper) wrapper.scrollLeft = scrollLeft;
+}
+
+function applyRegionStyle(region: Region, border: string, selected: boolean) {
+  if (!region.element) return;
+  Object.assign(region.element.style, {
+    borderLeft: `2px solid ${border}`,
+    borderRight: `2px solid ${border}`,
+    transition: 'background-color .18s ease, box-shadow .18s ease',
+    outline: selected ? `2px solid ${border}` : '',
+    outlineOffset: selected ? '-1px' : '',
+    boxShadow: selected ? `0 0 16px -3px ${border}, inset 0 0 24px -10px ${border}` : '',
+  });
+}
 
 function regionColorForStatus(status: EventRow['review_status'], selected: boolean): string {
   const alpha = selected ? 0.55 : 0.25;
@@ -33,11 +56,16 @@ interface AudioVisualizerProps {
   onUpdateBounds?: (id: number, t_start: number, t_end: number, f_low: number, f_high: number) => void;
   onAddEvent?: (e: { t_start: number; t_end: number; f_low: number; f_high: number }) => void;
   onDeleteEvent?: (id: number) => void;
+  frequencyMax?: number | null;
 }
 
 export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   src, events, selectedId, onSelectEvent, onUpdateBounds, onAddEvent, onDeleteEvent,
+  frequencyMax,
 }) => {
+  const maxFrequency = frequencyMax && Number.isFinite(frequencyMax) && frequencyMax > 0
+    ? frequencyMax
+    : DEFAULT_FREQ_MAX;
   const containerRef = useRef<HTMLDivElement>(null);
   const specRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -47,12 +75,18 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const regionToEventId = useRef<Map<string, number>>(new Map());
 
   const [isPlaying, setIsPlaying] = useState(false);
-  const [zoom, setZoom] = useState(50);
+  const [zoom, setZoom] = useState(INITIAL_ZOOM);
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [isMuted, setIsMuted] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [wsReady, setWsReady] = useState(false);
+  const playbackKey = src ? `${src}\u0000${maxFrequency}` : null;
+  const [readyKey, setReadyKey] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const wsReady = readyKey === playbackKey;
+  const readyInstance = useRef<WaveSurfer | null>(null);
+  const instanceReady = wsReady;
+  const lastCenteredSelection = useRef<string | null>(null);
 
   // 2D Spectrogram Bounding Box Drag State
   const [isDrawMode, setIsDrawMode] = useState(false);
@@ -72,51 +106,84 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   useEffect(() => { onAddEventRef.current = onAddEvent; }, [onAddEvent]);
 
   const [scrollLeft, setScrollLeft] = useState(0);
+  const [spectrogramWidth, setSpectrogramWidth] = useState(1200);
+  const contentWidth = Math.max(spectrogramWidth, duration * zoom);
+  const pixelsPerSecond = duration > 0 ? contentWidth / duration : zoom;
+
+  useEffect(() => {
+    const container = specRef.current;
+    if (!container) return;
+    const updateWidth = () => setSpectrogramWidth(container.clientWidth || 1200);
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [src]);
 
   useEffect(() => {
     if (!src) return;
-    setWsReady(false);
-    setScrollLeft(0);
-    if (!containerRef.current || !specRef.current || !timelineRef.current) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setIsPlaying(false);
+      setCurrentTime(0);
+      setDuration(0);
+      setScrollLeft(0);
+      setLoadError(null);
+      setReadyKey(null);
+    });
+    const waveformContainer = containerRef.current;
+    const spectrogramContainer = specRef.current;
+    const timelineContainer = timelineRef.current;
+    if (!waveformContainer || !spectrogramContainer || !timelineContainer) return;
     if (wavesurfer.current) {
       wavesurfer.current.destroy();
       wavesurfer.current = null; regionsPlugin.current = null; regionToEventId.current.clear();
     }
-    specRef.current.innerHTML = '';
-    containerRef.current.innerHTML = '';
-    timelineRef.current.innerHTML = '';
+    readyInstance.current = null;
+    spectrogramContainer.innerHTML = '';
+    waveformContainer.innerHTML = '';
+    timelineContainer.innerHTML = '';
 
     const wsRegions = RegionsPlugin.create();
+    const eventIdMap = regionToEventId.current;
     regionsPlugin.current = wsRegions;
     const wsTimeline = TimelinePlugin.create({
-      container: timelineRef.current,
+      container: timelineContainer,
       style: { color: 'var(--text-dim)', fontSize: '10px' },
     });
     const ws = WaveSurfer.create({
-      container: containerRef.current,
+      container: waveformContainer,
       waveColor: '#6f6253', progressColor: '#f4a23a', cursorColor: '#f06a4e',
-      height: 90, minPxPerSec: zoom, autoCenter: true,
+      height: 90, minPxPerSec: INITIAL_ZOOM, autoCenter: true,
       plugins: [
         wsRegions, wsTimeline,
-        Spectrogram.create({ container: specRef.current, labels: true, height: 180,
-          splitChannels: false, frequencyMin: FREQ_MIN }),
+        Spectrogram.create({ container: spectrogramContainer, labels: true, height: 180,
+          splitChannels: false, frequencyMin: FREQ_MIN, frequencyMax: maxFrequency }),
       ],
     });
     wavesurfer.current = ws;
     ws.on('play', () => setIsPlaying(true));
     ws.on('pause', () => setIsPlaying(false));
     ws.on('timeupdate', (time) => setCurrentTime(time));
-    ws.on('scroll', (px) => setScrollLeft(px));
-    ws.on('ready', (dur) => { setDuration(dur); setCurrentTime(0); setScrollLeft(ws.getScroll()); setWsReady(true); });
+    ws.on('scroll', (_visibleStart, _visibleEnd, px) => setScrollLeft(px));
+    ws.on('ready', (dur) => {
+      if (!active) return;
+      setDuration(dur);
+      setCurrentTime(0);
+      setScrollLeft(ws.getScroll());
+      readyInstance.current = ws;
+      setReadyKey(playbackKey);
+    });
 
     wsRegions.enableDragSelection({ color: 'rgba(244,162,58,0.22)' });
-    wsRegions.on('region-created', (region: any) => {
-      if (suppressNewRegion.current || !isDrawModeRef.current) {
+    wsRegions.on('region-created', (region) => {
+      if (suppressNewRegion.current) return;
+      if (!isDrawModeRef.current) {
         region.remove();
         return;
       }
       const cur = eventsRef.current;
-      let f_low = FREQ_MIN, f_high = FREQ_MAX;
+      let f_low = FREQ_MIN, f_high = maxFrequency;
       if (cur.length > 0) {
         const sorted = [...cur].sort((a, b) => a.center_freq - b.center_freq);
         const mid = sorted[Math.floor(sorted.length / 2)];
@@ -125,7 +192,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       onAddEventRef.current?.({ t_start: region.start, t_end: region.end, f_low, f_high });
       region.remove();
     });
-    wsRegions.on('region-updated', (region: any) => {
+    wsRegions.on('region-updated', (region) => {
       const eventId = regionToEventId.current.get(region.id);
       if (eventId === undefined) return;
       const ev = eventsRef.current.find((e) => e.id === eventId);
@@ -134,131 +201,114 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         onUpdateBoundsRef.current?.(eventId, region.start, region.end, ev.f_low, ev.f_high);
       }
     });
-    wsRegions.on('region-clicked', (region: any, e: MouseEvent) => {
+    wsRegions.on('region-clicked', (region, e) => {
       e.stopPropagation();
       const eventId = regionToEventId.current.get(region.id);
       if (eventId !== undefined) onSelectEventRef.current?.(eventId);
     });
 
-    ws.load(src).catch((err) => {
-      if (err.name !== 'AbortError') {
+    ws.load(src).catch((err: unknown) => {
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
         console.error("WaveSurfer load error:", err);
+        if (active) setLoadError(String(err));
       }
     });
     return () => {
+      active = false;
       ws.destroy();
-      if (specRef.current) specRef.current.innerHTML = '';
-      if (containerRef.current) containerRef.current.innerHTML = '';
-      if (timelineRef.current) timelineRef.current.innerHTML = '';
-      wavesurfer.current = null; regionsPlugin.current = null; regionToEventId.current.clear();
-      setWsReady(false);
+      if (readyInstance.current === ws) readyInstance.current = null;
+      spectrogramContainer.innerHTML = '';
+      waveformContainer.innerHTML = '';
+      timelineContainer.innerHTML = '';
+      wavesurfer.current = null; regionsPlugin.current = null; eventIdMap.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src]);
+  }, [src, maxFrequency, playbackKey]);
 
   useEffect(() => {
     const wsRegions = regionsPlugin.current;
-    if (!wsRegions || !wsReady) return;
+    if (!wsRegions || !instanceReady || readyInstance.current !== wavesurfer.current) return;
 
     suppressNewRegion.current = true;
+    try {
+      const currentRegions = wsRegions.getRegions();
+      const newEventIds = new Set(events.map(ev => String(ev.id)));
 
-    // Get current regions in wavesurfer
-    const currentRegions = wsRegions.getRegions();
-    const newEventIds = new Set(events.map(ev => String(ev.id)));
+      currentRegions.forEach(region => {
+        if (!newEventIds.has(region.id)) {
+          region.remove();
+          regionToEventId.current.delete(region.id);
+        }
+      });
 
-    // 1. Remove regions that are no longer in events
-    currentRegions.forEach(region => {
-      if (!newEventIds.has(region.id)) {
-        region.remove();
-        regionToEventId.current.delete(region.id);
-      }
-    });
-
-    // 2. Add or update regions
-    events.forEach(ev => {
-      const regionId = String(ev.id);
-      const isSelected = ev.id === selectedId;
-      const border = borderColorForStatus(ev.review_status);
-      const color = regionColorForStatus(ev.review_status, isSelected);
-      const style = {
-        borderLeft: `2px solid ${border}`,
-        borderRight: `2px solid ${border}`,
-        transition: 'background-color .18s ease, box-shadow .18s ease',
-        ...(isSelected
-          ? { outline: `2px solid ${border}`, outlineOffset: '-1px', boxShadow: `0 0 16px -3px ${border}, inset 0 0 24px -10px ${border}` }
-          : {}),
-      };
-
-      const existingRegion = currentRegions.find(r => r.id === regionId);
-      if (!existingRegion) {
-        // Create new region
-        wsRegions.addRegion({
-          id: regionId,
-          start: ev.t_start,
-          end: ev.t_end,
-          color,
-          drag: true,
-          resize: true,
-          content: ev.label ?? undefined,
-          // @ts-ignore
-          style,
-        });
-        regionToEventId.current.set(regionId, ev.id);
-      } else {
-        // Update existing region options
-        const startDiff = Math.abs(existingRegion.start - ev.t_start) > 0.001;
-        const endDiff = Math.abs(existingRegion.end - ev.t_end) > 0.001;
-        
-        // We compare basic options to minimize DOM reflow
-        // @ts-ignore
-        const colorDiff = existingRegion.color !== color;
-        // @ts-ignore
-        const contentDiff = existingRegion.content !== (ev.label ?? '');
-
-        if (startDiff || endDiff || colorDiff || contentDiff) {
-          existingRegion.setOptions({
+      events.forEach(ev => {
+        const regionId = String(ev.id);
+        const isSelected = ev.id === selectedId;
+        const border = borderColorForStatus(ev.review_status);
+        const color = regionColorForStatus(ev.review_status, isSelected);
+        const existingRegion = currentRegions.find(r => r.id === regionId);
+        if (!existingRegion) {
+          const region = wsRegions.addRegion({
+            id: regionId,
             start: ev.t_start,
             end: ev.t_end,
             color,
+            drag: true,
+            resize: true,
             content: ev.label ?? undefined,
-            // @ts-ignore
-            style,
           });
-        }
-      }
-    });
+          regionToEventId.current.set(regionId, ev.id);
+          applyRegionStyle(region, border, isSelected);
+        } else {
+          const startDiff = Math.abs(existingRegion.start - ev.t_start) > 0.001;
+          const endDiff = Math.abs(existingRegion.end - ev.t_end) > 0.001;
+          const colorDiff = existingRegion.color !== color;
+          const contentDiff = existingRegion.getContent() !== (ev.label ?? undefined);
 
-    suppressNewRegion.current = false;
-  }, [events, selectedId, wsReady]);
+          if (startDiff || endDiff || colorDiff || contentDiff) {
+            existingRegion.setOptions({
+              start: ev.t_start,
+              end: ev.t_end,
+              color,
+            });
+            if (contentDiff) existingRegion.setContent(ev.label ?? undefined);
+          }
+          applyRegionStyle(existingRegion, border, isSelected);
+        }
+      });
+    } finally {
+      suppressNewRegion.current = false;
+    }
+  }, [events, selectedId, instanceReady]);
+
+  useEffect(() => { if (wavesurfer.current && instanceReady) wavesurfer.current.zoom(zoom); }, [zoom, instanceReady]);
 
   useEffect(() => {
-    if (selectedId === null || !wavesurfer.current || !wsReady) return;
+    const selectionKey = playbackKey && selectedId !== null ? `${playbackKey}\u0000${selectedId}` : null;
+    if (selectionKey === null) {
+      lastCenteredSelection.current = null;
+      return;
+    }
+    if (!wavesurfer.current || !instanceReady || readyInstance.current !== wavesurfer.current || lastCenteredSelection.current === selectionKey) return;
     const ev = events.find((e) => e.id === selectedId);
     if (ev) {
+      lastCenteredSelection.current = selectionKey;
       wavesurfer.current.setTime(ev.t_start);
       const specContainer = specRef.current;
       const containerWidth = specContainer ? specContainer.clientWidth : 800;
-      const targetScroll = Math.max(0, ev.t_start * zoom - containerWidth / 3);
+      const targetScroll = Math.max(0, ev.t_start * pixelsPerSecond - containerWidth / 3);
       wavesurfer.current.setScroll(targetScroll);
-      setScrollLeft(targetScroll);
-      if (specContainer) {
-        const wrapper = specContainer.querySelector('.spectrogram') || (specContainer.firstElementChild as HTMLElement | null);
-        if (wrapper) wrapper.scrollLeft = targetScroll;
-      }
+      const actualScroll = wavesurfer.current.getScroll();
+      setScrollLeft(actualScroll);
+      syncSpectrogramScroll(specContainer, actualScroll);
     }
-  }, [selectedId, events, wsReady, zoom]);
+  }, [playbackKey, selectedId, events, instanceReady, pixelsPerSecond]);
 
   useEffect(() => {
-    if (!specRef.current) return;
-    const wrapper = specRef.current.querySelector('.spectrogram') || (specRef.current.firstElementChild as HTMLElement | null);
-    if (wrapper) {
-      wrapper.scrollLeft = scrollLeft;
-    }
+    syncSpectrogramScroll(specRef.current, scrollLeft);
   }, [scrollLeft]);
 
-  useEffect(() => { if (wavesurfer.current && wsReady) wavesurfer.current.zoom(zoom); }, [zoom, wsReady]);
-  useEffect(() => { if (wavesurfer.current && wsReady) wavesurfer.current.setPlaybackRate(playbackRate); }, [playbackRate, wsReady]);
-  useEffect(() => { if (wavesurfer.current && wsReady) wavesurfer.current.setMuted(isMuted); }, [isMuted, wsReady]);
+  useEffect(() => { if (wavesurfer.current && instanceReady) wavesurfer.current.setPlaybackRate(playbackRate); }, [playbackRate, instanceReady]);
+  useEffect(() => { if (wavesurfer.current && instanceReady) wavesurfer.current.setMuted(isMuted); }, [isMuted, instanceReady]);
 
   const togglePlay = () => wavesurfer.current?.playPause();
   const formatTime = (t: number) => {
@@ -270,25 +320,19 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const [panStart, setPanStart] = useState<{ x: number; scrollLeft: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  const getCanvasCoordsFromClient = (clientX: number, clientY: number) => {
+  const getCanvasCoordsFromClient = useCallback((clientX: number, clientY: number) => {
     const specContainer = specRef.current;
     if (!specContainer) return null;
-    const canvasList = specContainer.querySelectorAll('canvas');
-    if (canvasList.length === 0) return null;
-    const canvas = canvasList[canvasList.length - 1];
-    const rect = canvas.getBoundingClientRect();
-    const scrollParent = canvas.parentElement;
-    const sLeft = scrollParent ? scrollParent.scrollLeft : 0;
-    
-    const x = clientX - rect.left;
+    const rect = specContainer.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
     const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
-    
-    const totalX = x + sLeft;
-    const t = Math.max(0, totalX / zoom);
+    const totalX = x + (wavesurfer.current?.getScroll() ?? 0);
+    const t = Math.max(0, Math.min(duration, totalX / pixelsPerSecond));
     const fRatio = 1 - (y / rect.height);
-    const f = Math.max(FREQ_MIN, Math.min(FREQ_MAX, FREQ_MIN + fRatio * (FREQ_MAX - FREQ_MIN)));
+    const f = Math.max(FREQ_MIN, Math.min(maxFrequency, FREQ_MIN + fRatio * (maxFrequency - FREQ_MIN)));
     return { x, y, t, f, rect };
-  };
+  }, [duration, maxFrequency, pixelsPerSecond]);
 
   const handleSpecMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('button')) return;
@@ -307,6 +351,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (!wavesurfer.current) return;
+    e.preventDefault();
     const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
     const currentScroll = wavesurfer.current.getScroll();
     wavesurfer.current.setScroll(Math.max(0, currentScroll + delta));
@@ -326,12 +371,13 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       }
     };
 
-    const handleWindowMouseUp = () => {
-      if (isDrawModeRef.current && drawStart && drawCurrent) {
-        const tStart = Math.min(drawStart.t, drawCurrent.t);
-        const tEnd = Math.max(drawStart.t, drawCurrent.t);
-        const fLow = Math.min(drawStart.f, drawCurrent.f);
-        const fHigh = Math.max(drawStart.f, drawCurrent.f);
+    const handleWindowMouseUp = (ev: MouseEvent) => {
+      const end = getCanvasCoordsFromClient(ev.clientX, ev.clientY) ?? drawCurrent;
+      if (isDrawModeRef.current && drawStart && end) {
+        const tStart = Math.min(drawStart.t, end.t);
+        const tEnd = Math.max(drawStart.t, end.t);
+        const fLow = Math.min(drawStart.f, end.f);
+        const fHigh = Math.max(drawStart.f, end.f);
 
         if (Math.abs(tEnd - tStart) > 0.05) {
           onAddEventRef.current?.({ t_start: tStart, t_end: tEnd, f_low: fLow, f_high: fHigh });
@@ -349,7 +395,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       window.removeEventListener('mousemove', handleWindowMouseMove);
       window.removeEventListener('mouseup', handleWindowMouseUp);
     };
-  }, [isDragging, drawStart, drawCurrent, panStart, zoom]);
+  }, [isDragging, drawStart, drawCurrent, panStart, getCanvasCoordsFromClient]);
 
   if (!src) {
     return (
@@ -418,11 +464,11 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', minWidth: 54, textAlign: 'center', color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums' }}>{zoom} px/s</span>
             <button onClick={() => setZoom((z) => Math.min(500, z + 15))} title="Zoom in" style={{ padding: '0.35rem' }}><ZoomIn size={16} /></button>
           </div>
-          <select value={playbackRate} onChange={(e) => setPlaybackRate(Number(e.target.value))}
+          <select defaultValue="1" onChange={(e) => setPlaybackRate(Number(e.target.value))}
             style={{ backgroundColor: 'var(--bg-deep)', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: '0.74rem',
               border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '0.35rem 0.5rem' }}>
             <option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="0.75">0.75x</option>
-            <option value="1.0">1.0x</option><option value="1.5">1.5x</option><option value="2.0">2.0x</option>
+            <option value="1">1.0x</option><option value="1.5">1.5x</option><option value="2">2.0x</option>
           </select>
           <button onClick={() => setIsMuted((m) => !m)} title={isMuted ? 'Unmute' : 'Mute'} style={{ padding: '0.4rem 0.6rem' }}>
             {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
@@ -442,7 +488,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
           onMouseDown={handleSpecMouseDown}
           onWheel={handleWheel}
         >
-          {!wsReady && (
+          {!instanceReady && (
             <div style={{
               position: 'absolute',
               top: 0,
@@ -461,20 +507,20 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
               borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--line)'
             }}>
-              <div className="loading-spinner" style={{ width: 28, height: 28 }} />
+              {!loadError && <div className="loading-spinner" style={{ width: 28, height: 28 }} />}
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--amber)', letterSpacing: '0.08em', fontWeight: 600 }}>
-                  GENERATING FFT SPECTROGRAM…
+                  {loadError ? 'AUDIO LOAD FAILED' : 'GENERATING FFT SPECTROGRAM…'}
                 </span>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', color: 'var(--text-faint)' }}>
-                  Decoding Audio Waveform Track
+                  {loadError || 'Decoding Audio Waveform Track'}
                 </span>
               </div>
             </div>
           )}
           <div ref={specRef} style={{ width: '100%', overflow: 'hidden', backgroundColor: 'var(--bg-deep)' }} />
           {previewStyle && <div style={previewStyle} />}
-          
+
           {/* Render 2D Bounding Box Overlay for Events directly on the Spectrogram */}
           <div
             style={{
@@ -493,17 +539,18 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
               const border = borderColorForStatus(ev.review_status);
               const color = regionColorForStatus(ev.review_status, isSelected);
 
-              const fLow = (ev.f_low && ev.f_low > 0) ? ev.f_low : (ev.center_freq ? Math.max(0, ev.center_freq - 1500) : 500);
-              const fHigh = (ev.f_high && ev.f_high > fLow) ? ev.f_high : (ev.center_freq ? Math.min(FREQ_MAX, ev.center_freq + 1500) : 10000);
+              const fLow = Number.isFinite(ev.f_low) && ev.f_low >= 0
+                ? ev.f_low
+                : (ev.center_freq ? Math.max(0, ev.center_freq - 1500) : 500);
+              const fHigh = (ev.f_high && ev.f_high > fLow) ? ev.f_high : (ev.center_freq ? Math.min(maxFrequency, ev.center_freq + 1500) : maxFrequency);
 
-              const left = ev.t_start * zoom;
-              const width = Math.max(10, (ev.t_end - ev.t_start) * zoom);
-              const top = 180 * (1 - (fHigh / FREQ_MAX));
-              const height = Math.max(12, 180 * ((fHigh - fLow) / FREQ_MAX));
+              const left = ev.t_start * pixelsPerSecond;
+              const width = Math.max(10, (ev.t_end - ev.t_start) * pixelsPerSecond);
+              const top = 180 * (1 - (Math.min(maxFrequency, fHigh) / maxFrequency));
+              const height = Math.max(12, 180 * ((Math.min(maxFrequency, fHigh) - Math.max(0, fLow)) / maxFrequency));
 
-              const containerWidth = specRef.current?.clientWidth || 1200;
               const viewLeft = scrollLeft - 150;
-              const viewRight = scrollLeft + containerWidth + 150;
+              const viewRight = scrollLeft + spectrogramWidth + 150;
               if (left + width < viewLeft || left > viewRight) return null; // Outside viewport
 
               return (
@@ -513,6 +560,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
                     e.stopPropagation();
                     onSelectEvent?.(ev.id);
                   }}
+                  onMouseDown={(e) => e.stopPropagation()}
                   style={{
                     position: 'absolute',
                     left,
@@ -603,6 +651,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
           ))}
         <span style={{ marginLeft: 'auto', color: 'var(--amber)', fontWeight: 500, fontStyle: 'italic' }}>
           ⚡ Click "+ Draw Bounding Box" or click & drag directly on the spectrogram image to draw 2D time/frequency bounding boxes.
+        </span>
+        <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-faint)' }}>
+          display 0–{(maxFrequency / 1000).toFixed(3)} kHz
         </span>
       </div>
     </div>

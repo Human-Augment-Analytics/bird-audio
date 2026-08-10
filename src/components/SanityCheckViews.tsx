@@ -6,6 +6,21 @@ interface Props {
 }
 
 type TabType = "elevation" | "timeline" | "sites";
+type ElevationData = Record<
+  "Low" | "Medium" | "High",
+  { stats: ReturnType<typeof calculateBoxStats>; raw: number[] }
+>;
+interface TimelineBin {
+  start: number;
+  end: number;
+  count: number;
+}
+interface TimelineData {
+  bins: TimelineBin[];
+  formatType: "absolute" | "relative";
+  minTime?: number;
+  binSizeMs?: number;
+}
 
 // Extractor helpers matching Rust logic
 function findDeviceId(path: string): string | null {
@@ -115,16 +130,23 @@ export default function SanityCheckViews({ events }: Props) {
   const timelineData = useMemo(() => {
     if (events.length === 0) return { bins: [], formatType: "relative" as const };
 
-    const eventTimes = events.map((e) => {
+    const parsedTimes = events.map((e) => {
       const baseDate = parseSessionDatetime(e.path);
       return {
         hasAbs: baseDate !== null,
-        timeMs: baseDate ? baseDate.getTime() + e.t_start * 1000 : e.t_start * 1000,
+        absoluteTimeMs: baseDate ? baseDate.getTime() + e.t_start * 1000 : null,
+        relativeTimeMs: e.t_start * 1000,
         event: e,
       };
     });
 
-    const hasAbsoluteTimes = eventTimes.some((et) => et.hasAbs);
+    // Never mix epoch timestamps with relative clip offsets. A partially named
+    // deployment would otherwise collapse every dated event into the last bin.
+    const hasAbsoluteTimes = parsedTimes.every((et) => et.hasAbs);
+    const eventTimes = parsedTimes.map((et) => ({
+      ...et,
+      timeMs: hasAbsoluteTimes ? et.absoluteTimeMs as number : et.relativeTimeMs,
+    }));
     const times = eventTimes.map((et) => et.timeMs);
     const minTime = Math.min(...times);
     const maxTime = Math.max(...times);
@@ -380,7 +402,7 @@ function ElevationPlot({
   onHover,
   onLeave,
 }: {
-  data: ReturnType<typeof SanityCheckViews> extends any ? any : any;
+  data: ElevationData;
   onHover: (e: React.MouseEvent, title: string, content: string[]) => void;
   onLeave: () => void;
 }) {
@@ -601,11 +623,11 @@ function TimelinePlot({
   onHover,
   onLeave,
 }: {
-  data: ReturnType<typeof SanityCheckViews> extends any ? any : any;
+  data: TimelineData;
   onHover: (e: React.MouseEvent, title: string, content: string[]) => void;
   onLeave: () => void;
 }) {
-  const { bins, formatType, minTime } = data;
+  const { bins, formatType, minTime = 0 } = data;
 
   const width = 580;
   const height = 200;
@@ -613,7 +635,7 @@ function TimelinePlot({
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
 
-  const maxCount = bins.length > 0 ? Math.max(...bins.map((b: any) => b.count)) : 0;
+  const maxCount = bins.length > 0 ? Math.max(...bins.map((b) => b.count)) : 0;
   const maxScale = Math.max(1, maxCount);
 
   const getBarHeight = (count: number) => {
@@ -675,7 +697,7 @@ function TimelinePlot({
       })}
 
       {/* Histogram Bars */}
-      {bins.map((bin: any, idx: number) => {
+      {bins.map((bin, idx) => {
         const x = getBarX(idx);
         const barH = getBarHeight(bin.count);
         const y = height - padding.bottom - barH;

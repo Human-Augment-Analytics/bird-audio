@@ -4,7 +4,7 @@ import RunView from "./components/RunView";
 import ReviewView from "./components/ReviewView";
 import { EcologyView } from "./components/EcologyView";
 import appIcon from "./assets/app-icon.png";
-import { cancelSession, exportSession, getSummary, listFiles, onDone, onProgress, pickSavePath } from "./api";
+import { cancelSession, exportSession, getSummary, listFiles, onBatchError, onDone, onProgress, pickSavePath } from "./api";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
 export default function App() {
@@ -21,28 +21,47 @@ export default function App() {
   const tRef = useRef<{ t: number; done: number } | null>(null);
 
   useEffect(() => {
-    let active = true;
-    if (view === "run" && start && opts && !summary) {
-      // Check if we missed the 'done' event due to a race
-      getSummary(opts.outputDir, start.session_id).then((s) => {
-        if (active && s.pending === 0 && s.in_progress === 0) {
-          setSummary(s);
-          listFiles(opts.outputDir, start.session_id).then((r) => {
-            if (active) setRows(r);
-          }).catch(() => {});
-        }
-      });
-    }
-    return () => { active = false; };
-  }, [view, start, opts, summary]);
-
-  useEffect(() => {
     if (view !== "run" || !start || !opts) return;
     let active = true;
+    let terminal = false;
+    let terminalRowsLoaded = false;
+    let refreshInFlight = false;
     let unP: (() => void) | undefined;
     let unD: (() => void) | undefined;
+    let unE: (() => void) | undefined;
+    const sessionId = start.session_id;
+    const acceptSummary = (next: Summary) => {
+      if (!active || next.session_id !== sessionId) return;
+      if (["done", "cancelled", "failed"].includes(next.status)) {
+        terminal = true;
+        setSummary(next);
+      }
+    };
+    const refresh = async () => {
+      if (!active || refreshInFlight || (terminal && terminalRowsLoaded)) return;
+      refreshInFlight = true;
+      try {
+        const [nextSummary, nextRows] = await Promise.all([
+          getSummary(opts.outputDir, sessionId),
+          listFiles(opts.outputDir, sessionId),
+        ]);
+        if (!active) return;
+        setRows(nextRows);
+        acceptSummary(nextSummary);
+        if (["done", "cancelled", "failed"].includes(nextSummary.status)) {
+          terminalRowsLoaded = true;
+        }
+        setNotice((current) => current?.startsWith("Session refresh failed:") || current?.startsWith("File refresh failed:") ? null : current);
+      } catch (reason) {
+        if (active) setNotice(`Session refresh failed: ${String(reason)}`);
+      } finally {
+        refreshInFlight = false;
+      }
+    };
     (async () => {
-      unP = await onProgress((p) => {
+      const [progressUnlisten, doneUnlisten, errorUnlisten] = await Promise.all([
+        onProgress((p) => {
+        if (!active || p.session_id !== sessionId) return;
         setProgress(p);
         const now = Date.now();
         const prev = tRef.current;
@@ -51,30 +70,41 @@ export default function App() {
           setThroughput((cur) => (cur === 0 ? Math.max(rate, 0) : cur * 0.7 + Math.max(rate, 0) * 0.3));
         }
         tRef.current = { t: now, done: p.done };
-      });
-      unD = await onDone((s) => {
-        setSummary(s);
-        listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
-      });
+        }),
+        onDone((s) => {
+          if (!active || s.session_id !== sessionId) return;
+          acceptSummary(s);
+          terminalRowsLoaded = false;
+          void refresh();
+        }),
+        onBatchError((message) => {
+          if (!active) return;
+          setNotice(`Session failed internally: ${message}`);
+          void refresh();
+        }),
+      ]);
+      unP = progressUnlisten;
+      unD = doneUnlisten;
+      unE = errorUnlisten;
       if (!active) {
         unP?.();
         unD?.();
+        unE?.();
+        return;
       }
-    })();
-    // Only poll listFiles if the run is active and not complete/cancelled
-    let iv: any;
-    if (!summary && !cancelled) {
-      iv = setInterval(() => {
-        listFiles(opts.outputDir, start.session_id).then(setRows).catch(() => {});
-      }, 2000);
-    }
+      await refresh();
+    })().catch((reason) => {
+      if (active) setNotice(`Session listener failed: ${String(reason)}`);
+    });
+    const iv = setInterval(() => { void refresh(); }, 1000);
     return () => {
       active = false;
       unP?.();
       unD?.();
-      if (iv) clearInterval(iv);
+      unE?.();
+      clearInterval(iv);
     };
-  }, [view, start, opts, summary, cancelled]);
+  }, [view, start, opts]);
 
   const onStarted = (result: StartResult, o: StartOpts) => {
     setStart(result);
@@ -89,9 +119,14 @@ export default function App() {
     setView("run");
   };
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
     setCancelled(true);
-    cancelSession();
+    try {
+      await cancelSession();
+    } catch (reason) {
+      setCancelled(false);
+      setNotice(`Cancellation failed: ${String(reason)}`);
+    }
   };
 
   const doExport = async (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => {
@@ -110,6 +145,8 @@ export default function App() {
       setNotice(`Export failed: ${String(e)}`);
     }
   };
+
+  const noticeIsError = notice !== null && /failed|error/i.test(notice);
 
   return (
     <main style={{ padding: "44px 24px 64px", maxWidth: 1040, margin: "0 auto" }}>
@@ -137,12 +174,12 @@ export default function App() {
       {section === "batch" && view === "setup" && <SetupView onStarted={onStarted} />}
       {section === "batch" && view === "run" && start && (
         <>
-          <button className="backlink reveal" style={{ marginBottom: 14 }} disabled={summary === null && !cancelled} onClick={() => setView("setup")}>
+          <button className="backlink reveal" style={{ marginBottom: 14 }} disabled={summary === null} onClick={() => setView("setup")}>
             ← Start a new session
           </button>
           {notice && (
             <div className="notice reveal">
-              <span className="dot dot--ok" /> {notice}
+              <span className={`dot ${noticeIsError ? "dot--bad" : "dot--ok"}`} /> {notice}
             </div>
           )}
           <RunView
@@ -153,6 +190,7 @@ export default function App() {
             throughput={throughput}
             onExport={doExport}
             onCancel={handleCancel}
+            cancelled={cancelled}
             outputDir={opts?.outputDir || ""}
           />
         </>
