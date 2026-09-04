@@ -2,19 +2,18 @@
 
 A desktop app for automated detection and curation of bird vocalizations from field recordings, optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
 
-Built with Tauri + React (frontend) and Rust + Python (backend). One app, four workspaces:
+Built with Tauri + React (frontend) and Rust + Python (backend). One app, three workspaces:
 
 - **Batch mode** — pick a folder, set thresholds, run the ML pipeline across all recordings.
 - **Review mode** — step through files, inspect detections on a spectrogram, confirm/reject/edit ML events and add manual annotations.
 - **Analytics** — inspect completeness, event distributions, effort-normalized recorder summaries, and review coverage.
-- **Research** — freeze a curated dataset, normalize activity by exposure, fit guarded comparisons, and test threshold sensitivity.
 
 > 📖 **Guides & Tutorials:**
 > - **[Usage Tutorial](docs/USAGE.md)** — Installation, basic controls, and troubleshooting.
 > - **[Your First Analysis Session](docs/tutorial-first-analysis.md)** — Guided end-to-end lab walkthrough of running and curating a batch.
 > - **[Active Learning Loop Tutorial](docs/tutorial-active-learning.md)** — Guided workflow to improve the model on your own data.
 > - **[Export Cookbook](docs/tutorial-export-cookbook.md)** — Copy-paste code recipes for Python, R (warbleR), and Cornell Raven Pro.
-> - **[Feature & Research Guide](docs/feature-guide.md)** — Packaged-app screenshots, feature uses, and scientific limits using a bounded Sural AudioMoth sample.
+> - **[Feature Guide](docs/feature-guide.md)** — Packaged-app screenshots, feature uses, and scientific limits using a bounded Sural AudioMoth sample.
 
 ## Technical Architecture
 

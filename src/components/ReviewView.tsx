@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CompletenessSuggestion, EventRow, FileRow, ManualCompletenessDecision, StartOpts, StartResult } from "../types";
+import type { EventRow, FileRow, StartOpts, StartResult } from "../types";
 import {
   addManualEvent, audioSrc, deleteEvent, listEvents, logReviewAction, prepareReview, restoreEvent,
-  scoreManualCompleteness, setEventReview, setManualCompleteness, updateEventBounds,
+  setEventReview, updateEventBounds,
 } from "../api";
 import { AudioVisualizer } from "./AudioVisualizer";
 import { EventTable } from "./EventTable";
@@ -19,11 +19,6 @@ type BoxBounds = { tStart: number; tEnd: number; fLow: number; fHigh: number };
 type BoxAction =
   | { type: "ADD"; eventId: number; path: string; bounds: BoxBounds; eventRow: EventRow }
   | { type: "DELETE"; eventId: number; path: string; eventRow: EventRow };
-type ManualDialog =
-  | { phase: "choose"; bounds: BoxBounds }
-  | { phase: "scoring"; bounds: BoxBounds; eventId: number }
-  | { phase: "suggestion"; bounds: BoxBounds; eventId: number; suggestion: CompletenessSuggestion };
-
 function remapActionId(action: BoxAction, path: string, oldId: number, newId: number): BoxAction {
   if (action.path !== path || action.eventId !== oldId) return action;
   return { ...action, eventId: newId, eventRow: { ...action.eventRow, id: newId } };
@@ -47,7 +42,6 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   const [redoStack, setRedoStack] = useState<BoxAction[]>([]);
   const mutationBusyRef = useRef(false);
   const [mutationBusy, setMutationBusy] = useState(false);
-  const [manualDialog, setManualDialog] = useState<ManualDialog | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,90 +116,32 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
     try { await updateEventBounds(dir, id, t_start, t_end, f_low, f_high); await refreshEvents(); }
     catch (e) { setNotice(`Bounds update failed: ${String(e)}`); }
   }, [dir, refreshEvents]);
-  const handleAddEvent = useCallback((e: { t_start: number; t_end: number; f_low: number; f_high: number }) => {
+  const handleAddEvent = useCallback(async (e: { t_start: number; t_end: number; f_low: number; f_high: number }) => {
     if (!selectedPath) return;
     if (mutationBusyRef.current) return;
-    setManualDialog({
-      phase: "choose",
-      bounds: { tStart: e.t_start, tEnd: e.t_end, fLow: e.f_low, fHigh: e.f_high },
-    });
-  }, [selectedPath]);
-
-  const updateAddedHistoryRow = useCallback((eventId: number, row: EventRow) => {
-    setHistory((historyRows) => historyRows.map((action) =>
-      action.type === "ADD" && action.eventId === eventId ? { ...action, eventRow: row } : action));
-  }, []);
-
-  const commitManualEvent = useCallback(async (decision: ManualCompletenessDecision) => {
-    if (!selectedPath || manualDialog?.phase !== "choose" || mutationBusyRef.current) return;
-    const bounds = manualDialog.bounds;
     mutationBusyRef.current = true;
     setMutationBusy(true);
     try {
       const path = selectedPath;
-      const newId = await addManualEvent(dir, sid, path, bounds, decision);
+      const bounds = { tStart: e.t_start, tEnd: e.t_end, fLow: e.f_low, fHigh: e.f_high };
+      // Manual boxes are recorded with completeness left unresolved; no model or human
+      // judgment is implied by drawing alone.
+      const newId = await addManualEvent(dir, sid, path, bounds, "unsure");
       const loaded = await refreshEvents();
       const eventRow = loaded?.find((event) => event.id === newId);
       if (!eventRow) throw new Error(`New manual event #${newId} was not returned by the database.`);
       setSelectedId(newId);
       setHistory((h) => [...h, { type: 'ADD', eventId: newId, path, bounds, eventRow }]);
       setRedoStack([]);
-      if (decision !== "unsure") {
-        setManualDialog(null);
-        setNotice(`Added manual event marked ${decision}.`);
-        return;
-      }
-
-      setManualDialog({ phase: "scoring", bounds, eventId: newId });
-      const suggestion = await scoreManualCompleteness(
-        path, opts.classifier, opts.device, bounds, opts.thetaB, opts.fMinHz, opts.fMaxHz,
-      );
-      await setManualCompleteness(dir, newId, "unsure", null, "unresolved", suggestion.score);
-      const scored = await refreshEvents();
-      const scoredRow = scored?.find((event) => event.id === newId);
-      if (scoredRow) updateAddedHistoryRow(newId, scoredRow);
-      setManualDialog({ phase: "suggestion", bounds, eventId: newId, suggestion });
-      setNotice("Stage B scored the uncertain manual window; choose whether to accept its suggestion.");
+      setNotice("Added manual event bounding box.");
     } catch (err) {
-      setManualDialog(null);
-      setNotice(`Manual completeness check failed: ${String(err)} The event remains unresolved.`);
+      setNotice(`Add event failed: ${String(err)}`);
     } finally {
       mutationBusyRef.current = false;
       setMutationBusy(false);
     }
-  }, [dir, sid, selectedPath, manualDialog, opts, refreshEvents, updateAddedHistoryRow]);
+  }, [dir, sid, selectedPath, refreshEvents]);
 
-  const resolveManualSuggestion = useCallback(async (
-    mode: "accept" | "complete" | "incomplete" | "unresolved",
-  ) => {
-    if (manualDialog?.phase !== "suggestion" || mutationBusyRef.current) return;
-    if (mode === "unresolved") {
-      setManualDialog(null);
-      setNotice("Manual event kept unresolved; the Stage B score remains recorded as a suggestion.");
-      return;
-    }
-    const { eventId, suggestion } = manualDialog;
-    const humanDecision: ManualCompletenessDecision = mode === "accept" ? "unsure" : mode;
-    const finalLabel = mode === "accept" ? suggestion.label : mode;
-    const source = mode === "accept" ? "stage_b_accepted" : "human";
-    mutationBusyRef.current = true;
-    setMutationBusy(true);
-    try {
-      await setManualCompleteness(dir, eventId, humanDecision, finalLabel, source, suggestion.score);
-      const loaded = await refreshEvents();
-      const row = loaded?.find((event) => event.id === eventId);
-      if (row) updateAddedHistoryRow(eventId, row);
-      setManualDialog(null);
-      setNotice(mode === "accept"
-        ? `Accepted Stage B suggestion: ${suggestion.label}.`
-        : `Human marked the event ${mode}; Stage B remains recorded as supporting information.`);
-    } catch (error) {
-      setNotice(`Completeness update failed: ${String(error)}`);
-    } finally {
-      mutationBusyRef.current = false;
-      setMutationBusy(false);
-    }
-  }, [dir, manualDialog, refreshEvents, updateAddedHistoryRow]);
   const handleDelete = useCallback(async (id: number) => {
     if (mutationBusyRef.current) return;
     mutationBusyRef.current = true;
@@ -310,13 +246,6 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
 
   useEffect(() => {
     const handleKeyDown = (ev: KeyboardEvent) => {
-      if (manualDialog) {
-        if (ev.key === "Escape" && manualDialog.phase === "choose" && !mutationBusyRef.current) {
-          ev.preventDefault();
-          setManualDialog(null);
-        }
-        return;
-      }
       const isText = ev.target instanceof HTMLElement &&
         (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA" ||
           ev.target.tagName === "SELECT" || ev.target.isContentEditable);
@@ -342,7 +271,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo, handleDelete, selectedId, manualDialog]);
+  }, [handleUndo, handleRedo, handleDelete, selectedId]);
 
   const logAction = useCallback((action: string, meta?: Record<string, unknown>) => {
     const eventId = typeof meta?.eventId === "number" ? meta.eventId : null;
@@ -352,7 +281,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
   useReviewShortcuts({
     events,
     selectedId,
-    enabled: !!selectedPath && !loadingEvents && !manualDialog,
+    enabled: !!selectedPath && !loadingEvents,
     onSelect: handleSelectEvent,
     onDecide: handleSetReview,
     onToggleHelp: () => setShowShortcuts((v) => !v),
@@ -518,64 +447,6 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
           </>
         )}
       </section>
-      {manualDialog && (
-        <div role="presentation" style={{
-          position: "fixed", inset: 0, zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start",
-          background: "rgba(4, 7, 10, 0.78)", backdropFilter: "blur(4px)", padding: "28px 20px", overflowY: "auto",
-        }}>
-          <section role="dialog" aria-modal="true" aria-labelledby="manual-completeness-title"
-            style={{ width: "min(600px, 100%)", border: "1px solid var(--line-2)", borderRadius: "var(--radius)",
-              background: "var(--surface)", boxShadow: "0 24px 80px rgba(0,0,0,.55)", padding: 22, maxHeight: "calc(100vh - 56px)", overflowY: "auto" }}>
-            <div className="eyebrow">Manual annotation</div>
-            <h2 id="manual-completeness-title" style={{ margin: "6px 0 8px", fontFamily: "var(--serif)" }}>
-              {manualDialog.phase === "suggestion" ? "Stage B completeness suggestion" : "Is this a complete buzz?"}
-            </h2>
-            <p style={{ color: "var(--text-dim)", margin: "0 0 14px", lineHeight: 1.5 }}>
-              Window {manualDialog.bounds.tStart.toFixed(2)}–{manualDialog.bounds.tEnd.toFixed(2)} s · {Math.round(manualDialog.bounds.fLow)}–{Math.round(manualDialog.bounds.fHigh)} Hz
-            </p>
-
-            {manualDialog.phase === "choose" && <>
-              <p style={{ color: "var(--text-dim)", lineHeight: 1.55 }}>
-                Record your judgment separately from the model. If you are unsure, Stage B will score this exact finalized window and you can accept or override its suggestion.
-              </p>
-              <div style={{ display: "grid", gap: 9, marginTop: 18 }}>
-                <button className="primary" onClick={() => void commitManualEvent("complete")}>Complete buzz</button>
-                <button className="backlink" onClick={() => void commitManualEvent("incomplete")}>Incomplete buzz</button>
-                <button className="backlink" onClick={() => void commitManualEvent("unsure")}>Not sure — check with Stage B</button>
-                <button className="backlink" onClick={() => setManualDialog(null)}>Cancel annotation</button>
-              </div>
-            </>}
-
-            {manualDialog.phase === "scoring" && (
-              <div role="status" style={{ display: "flex", alignItems: "center", gap: 12, padding: "18px 0", color: "var(--text-dim)" }}>
-                <span className="loading-spinner" /> Scoring the finalized window with Stage B…
-              </div>
-            )}
-
-            {manualDialog.phase === "suggestion" && <>
-              <div className="analytics-callout" style={{ margin: "14px 0" }}>
-                <strong>Stage B suggests {manualDialog.suggestion.label}</strong>
-                <div className="mono" style={{ marginTop: 5 }}>
-                  score {manualDialog.suggestion.score.toFixed(3)} · threshold {manualDialog.suggestion.threshold.toFixed(3)}
-                </div>
-              </div>
-              <p style={{ color: "var(--text-dim)", lineHeight: 1.55 }}>
-                This is an assistive model result, not a human decision. Manual windows may differ from the detector-aligned windows used to train Stage B.
-              </p>
-              <div style={{ display: "grid", gap: 9, marginTop: 18 }}>
-                <button className="primary" onClick={() => void resolveManualSuggestion("accept")}>
-                  Accept “{manualDialog.suggestion.label}”
-                </button>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
-                  <button className="backlink" onClick={() => void resolveManualSuggestion("complete")}>Human: complete</button>
-                  <button className="backlink" onClick={() => void resolveManualSuggestion("incomplete")}>Human: incomplete</button>
-                </div>
-                <button className="backlink" onClick={() => void resolveManualSuggestion("unresolved")}>Leave unresolved</button>
-              </div>
-            </>}
-          </section>
-        </div>
-      )}
     </div>
   );
 }

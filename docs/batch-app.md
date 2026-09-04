@@ -112,10 +112,6 @@ stderr in the error string on a non-zero exit.
 - Shows per-file progress via `FileTable`.
 - **Cancel** triggers `cancel_session`.
 - On completion, shows summary counts (`n_events`, `n_complete`, `n_retained`).
-- **Interactive Sanity Checks** (`src/components/SanityCheckViews.tsx`) — Renders three interactive diagnostic dashboards upon completion using `get_session_events`:
-  1. *Elevation vs. Duration Plot*: A box-plot distribution showing the duration profile of detected events across Low (PSL), Medium (PSM), and High (PSH/H) altitude bands (extracted from filename recorder prefixes).
-  2. *Bout Activity Timeline*: A histogram visualizing density over time in 5-minute bins, helping spot activity peaks/bouts.
-  3. *Sortable Site Summaries*: A tabular breakdown of recorders/sites showing event count, mean duration, and median frequency, sortable to identify anomalies.
 - **Export Control Card**: Select file formats (CSV, JSON, warbleR CSV, Raven Selection Table `.txt`), optionally upload a deployment metadata CSV to join `elevation_m`, `lat`, `lon`, and `site_id` attributes (generating a summary CSV per site/session as well), and choose to export confirmed events only.
 
 **ManageCache** (`src/components/ManageCache.tsx`)

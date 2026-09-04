@@ -32,19 +32,12 @@ pruned from the resumed inventory.
 
 ![Review workspace with a selected event](screenshots/research-features/02-review-sural-event.png)
 
-![Stage B suggestion for an uncertain manual annotation](screenshots/research-features/08-manual-stage-b-suggestion.jpg)
-
-When a reviewer chooses **Not sure**, the dialog shows Stage B's score and the
-session threshold side by side. The reviewer must then accept the suggestion,
-override it, or leave the event unresolved; the model never silently supplies a
-human decision.
-
 | Feature | What it does | Why it is useful | Important limit |
 |---|---|---|---|
 | Spectrogram and playback | Displays sound energy over time and frequency and plays the corresponding audio. | Lets a reviewer combine visual and auditory evidence. | A spectrogram view is a review aid, not an independent validation sample. |
 | Confirm, reject, unreviewed | Stores a reviewer decision without deleting the detector record. | Preserves false positives for error analysis and makes curation auditable. | Convenience or uncertainty-ranked review does not provide population-representative precision. |
 | Edit bounds | Corrects event start/end and frequency bounds. | Improves duration and frequency measurements for accepted events. | Boundary consistency still depends on a documented annotation protocol. |
-| Manual completeness decision | After a box is drawn, records complete, incomplete, or not sure. “Not sure” scores the finalized box with Stage B, then requires the reviewer to accept, override, or leave the suggestion unresolved. Human judgment, model score, and final-label source are stored separately; editing an assisted box invalidates its old score. | Captures false negatives without forcing uncertain reviewers to guess, while keeping model assistance auditable. | Stage B is assistive, was trained on detector-aligned crops, and does not establish species identity; opportunistic manual finds must not augment a full-effort inferential rate unless all audio was searched systematically. |
+| Manual event | Draws a new box for a call the detector missed; completeness is left unresolved. | Captures false negatives without forcing a judgment at draw time. | Opportunistic manual finds must not augment a full-effort inferential rate unless all audio was searched systematically. |
 | Delete, Undo, Redo | Removes an event and restores or reapplies the edit. | Makes curation reversible while preserving scientific fields when restored. | Prefer rejection when a detector error should remain available for model improvement. |
 
 ## 3. Analytics overview
@@ -82,41 +75,6 @@ warnings.
 | Rate by elevation band | Divides retained detections by measured recording hours within path-inferred bands. | Provides a descriptive screen for large differences worth investigating. | Pooled band rates can be confounded by site, season, weather, placement, recorder, and detectability. |
 | Recorder table | Shows effort, all/retained events, rate/hour, review coverage, duration, and frequency per recorder. | Finds outlier recorders and separates high counts from high effort. | Rates based on little effort are unstable; fallback effort is disclosed separately. |
 
-## 6. Research dataset and activity
-
-![Research inputs, curated dataset, and normalized activity](screenshots/research-features/06-research-sural-dataset-activity.png)
-
-Research answers **“What exact data and assumptions support a claim?”** It only
-runs for a completed session.
-
-| Feature | What it does | Why it is useful | Important limit |
-|---|---|---|---|
-| Research scope | Defines the estimand as pipeline detections per audio hour and displays the thresholds and interval convention. | Prevents detection rate from being mislabeled as abundance, occupancy, or true calling rate. | Imperfect detection is not estimated. |
-| Metadata and bin inputs | Accepts deployment covariates and 1/5/10/15-minute activity bins; changing an input clears old results. | Makes assumptions explicit and prevents stale results after a specification change. | Current metadata is recorder-level; repeated deployments and time-varying weather need preprocessing. |
-| Curated dataset rule | Includes non-rejected manual annotations in the descriptive catalog; inferential rates use accepted detector events only. | Produces an auditable event receipt and keeps opportunistic finds out of the inferential numerator. | Manual annotations can enter inference only under exhaustive, standardized search coverage. |
-| Provenance files | Exports curated events, model-ready recordings including zero-event files, analysis JSON, and a spec/data fingerprint. | Makes a result reviewable and rerunnable. | A fingerprint proves identity, not scientific validity. |
-| Exposure-normalized activity | Divides each elapsed-time bin by the audio duration actually covering that bin and reports exact Poisson intervals. | Fixes the denominator problem in the raw Analytics offset chart. | Repeated bouts and recorder clustering can make Poisson reference intervals too narrow. |
-
-WAV, FLAC, and MP3 effort is measured by the shared Rust duration reader. Files
-that cannot be read use the disclosed 0.25-hour fallback and increment the
-estimated-file counter. Events outside their own recording duration are excluded
-and reported rather than moved into a valid bin.
-
-## 7. Formal model and threshold sensitivity
-
-![Model readiness and two-dimensional threshold sensitivity](screenshots/research-features/07-research-sural-model-sensitivity.png)
-
-| Feature | What it does | Why it is useful | Important limit |
-|---|---|---|---|
-| Adjusted rate model | Fits an effort-offset Poisson count model with an elevation term and recorder-clustered uncertainty when readiness gates pass. | Supports a formal comparison while accounting for repeated recordings and available declared covariates. | Associations are not causal; fewer than 20 recorder clusters and overdispersion remain exploratory. |
-| Readiness refusal | Returns a human-readable “not fitted” result for incomplete elevation, too little replication, too few events, rank deficiency, or numerical instability. | Prevents a coefficient from being shown merely because software could produce one. | A fitted status still does not resolve confounding or detectability. |
-| Stage A × Stage B sensitivity | Repeats curation, rate calculation, and model fitting over a 5×5 threshold grid. | Shows whether the apparent result changes under nearby detector cutoffs. | Stability does not prove accuracy or causality; lower-than-stored candidates require rerunning inference. |
-
-For this four-recording documentation sample the model correctly reports **not
-fitted**: formal clustered inference requires at least 20 recordings across 10
-recorders, complete and varying elevation metadata, and enough detector events.
-That refusal is expected and is part of the feature.
-
 ## Recommended research workflow
 
 1. Run and finish a declared inventory; resolve failed or unreadable files.
@@ -124,8 +82,7 @@ That refusal is expected and is part of the feature.
 3. Prepare unambiguous deployment and file-level covariates at the right grain.
 4. Freeze the event-set rule, thresholds, effort policy, and metadata.
 5. Inspect normalized activity and recorder-level QA before modeling.
-6. Interpret coefficients with intervals, replication, dispersion, and limitations.
-7. Report threshold sensitivity and keep the exported spec/data bundle with the result.
+6. Report thresholds, effort policy, and limitations alongside any rate.
 
 The app measures **pipeline detection rates**. Claims about abundance, occupancy,
 calling rate, or causal elevation effects require an additional study design that

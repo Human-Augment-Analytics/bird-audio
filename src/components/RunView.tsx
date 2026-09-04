@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import type { FileRow, Progress, StartResult, Summary, ExportedEvent } from "../types";
+import { useMemo, useState } from "react";
+import type { FileRow, Progress, StartResult, Summary } from "../types";
 import FileTable from "./FileTable";
-import { pickFile, getSessionEvents } from "../api";
-import SanityCheckViews from "./SanityCheckViews";
+import { pickFile } from "../api";
 
 interface Props {
   start: StartResult;
@@ -13,7 +12,6 @@ interface Props {
   onExport: (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => void;
   onCancel: () => void;
   cancelled: boolean;
-  outputDir: string;
 }
 
 function Stat({ label, value, color }: { label: string; value: number | string; color?: string }) {
@@ -31,7 +29,7 @@ const FILTERS: { key: "all" | "done" | "failed"; label: string }[] = [
   { key: "failed", label: "Failed" },
 ];
 
-export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel, cancelled, outputDir }: Props) {
+export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel, cancelled }: Props) {
   const [filter, setFilter] = useState<"all" | "done" | "failed">("all");
   const [metadataPath, setMetadataPath] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<string>("csv");
@@ -42,29 +40,6 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   const failed = summary?.status === "failed";
   const doneN = summary?.done ?? progress?.done ?? rows.filter((r) => r.status === "done").length;
   const hasCompletedFiles = done || doneN > 0;
-  const eventRequestKey = hasCompletedFiles && start.session_id ? `${outputDir}:${start.session_id}:${doneN}` : null;
-  const [eventResult, setEventResult] = useState<{
-    key: string;
-    events: ExportedEvent[];
-    error: string | null;
-  } | null>(null);
-
-  useEffect(() => {
-    if (!eventRequestKey) return;
-    let active = true;
-    getSessionEvents(outputDir, start.session_id)
-      .then((events) => {
-        if (active) setEventResult({ key: eventRequestKey, events, error: null });
-      })
-      .catch((err) => {
-        console.error("Failed to load session events:", err);
-        if (active) setEventResult({ key: eventRequestKey, events: [], error: String(err) });
-      });
-    return () => { active = false; };
-  }, [eventRequestKey, start.session_id, outputDir]);
-  const events = eventResult?.key === eventRequestKey ? eventResult.events : [];
-  const loadingEvents = eventRequestKey !== null && eventResult?.key !== eventRequestKey;
-  const loadError = eventResult?.key === eventRequestKey ? eventResult.error : null;
   const total = summary?.total ?? progress?.total ?? start.total_files;
   const failedN = summary?.failed ?? progress?.failed ?? 0;
   // Progress events only fire when a file finishes, so between files the snapshot says
@@ -239,23 +214,6 @@ export default function RunView({ start, progress, summary, rows, throughput, on
               Export Session Detections
             </button>
           </div>
-        </div>
-      )}
-
-      {hasCompletedFiles && !loadingEvents && !loadError && events.length > 0 && (
-        <SanityCheckViews events={events} />
-      )}
-
-      {hasCompletedFiles && loadingEvents && (
-        <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 32, textAlign: "center", color: "var(--text-dim)", background: "var(--surface)", borderRadius: "var(--radius)", border: "1px solid var(--line)", boxShadow: "var(--shadow)" }}>
-          <div className="loading-spinner" />
-          <div style={{ fontSize: "11px", fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>LOADING DIAGNOSTIC EVENTS…</div>
-        </div>
-      )}
-
-      {hasCompletedFiles && loadError && (
-        <div className="card" style={{ padding: 20, textAlign: "center", color: "var(--coral)" }}>
-          Failed to load diagnostics: {loadError}
         </div>
       )}
 

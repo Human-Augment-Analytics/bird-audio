@@ -2,7 +2,7 @@
 
 A step-by-step guide to a full session: **install → run a batch → review detections → export a clean dataset.**
 
-The app is a [Tauri](https://tauri.app/) desktop application (React frontend, Rust + Python backend) for detecting and curating bird vocalizations from field recordings, optimized for the **Hume's Leaf Warbler** (*Phylloscopus humei*). It has four workspaces: **Batch**, **Review**, **Analytics**, and **Research**. See the [feature guide](feature-guide.md) for screenshots and interpretation.
+The app is a [Tauri](https://tauri.app/) desktop application (React frontend, Rust + Python backend) for detecting and curating bird vocalizations from field recordings, optimized for the **Hume's Leaf Warbler** (*Phylloscopus humei*). It has three workspaces: **Batch**, **Review**, and **Analytics**. See the [feature guide](feature-guide.md) for screenshots and interpretation.
 
 > _Walkthrough video — to be added._
 
@@ -78,14 +78,10 @@ After a batch run, switch to **Review** to turn raw ML output into a verified da
    - **Reject** — a false positive (kept in the DB, marked rejected).
    - **Reset** — back to *unreviewed*.
 4. **Fix the bounds.** Drag the edges of an event box to correct its time/frequency extent.
-5. **Add a manual event.** Draw a new box on the spectrogram for a call the model missed, then record whether it is a **complete buzz**, **incomplete buzz**, or **not sure**. “Not sure” sends that finalized window to Stage B. The app shows the score and threshold, then asks you to accept the suggestion, override it with a human decision, or leave it unresolved. Stage B never silently becomes a human label.
+5. **Add a manual event.** Draw a new box on the spectrogram for a call the model missed. Manual boxes are stored with completeness left unresolved; they are kept separate from pipeline detections.
 6. **Delete** an event entirely to remove a false positive from the data.
 
 Decisions are saved to `batch.db` and accumulate across Review sessions — stop and resume curation any time.
-Human completeness, the Stage B score, and the source of the final label are stored separately. If you
-change the bounds of a Stage-B-assisted manual box, its old model result is invalidated because it no
-longer describes the same window. Manual annotations remain separate from pipeline detections in
-research-rate numerators unless exhaustive standardized search coverage is declared.
 
 ### Keyboard shortcuts
 
@@ -115,12 +111,9 @@ rather than a guess. Export it with `batch --export-telemetry <path>` or the app
 
 ---
 
-## 4. In-App Sanity Check Views
+## 4. Analytics
 
-Once a batch run is complete, the app automatically pulls the session results to render three interactive diagnostic visualizations on the complete card:
-*   **Elevation vs. Duration Plot:** Displays the distribution of event durations across Low (PSL), Medium (PSM), and High (PSH/H) altitude bands. The app categorizes events by parsing the recorder ID prefix (e.g. `PSL2`, `PSM5`) from the audio filenames.
-*   **Bout Activity Timeline:** A density histogram displaying event frequencies in 5-minute bins across the session duration, highlighting burst behaviors.
-*   **Sortable Site Summaries:** A detailed table summarizing event count, mean duration, and median frequency for each unique site/recorder. You can sort columns to quickly identify outliers.
+Once at least one file has finished, the **Analytics** tab summarises the session: coverage and effort, retention, review coverage, detections by recording offset, score and shape distributions, rates by elevation band (inferred from `PSL`/`PSM`/`PSH` recorder prefixes in the file paths), and a per-recorder table. It refreshes as files complete.
 
 ---
 

@@ -1,7 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile, ExportedEvent, EventRow, VerificationPlan, VerificationStrategy, ManualCompletenessDecision, ManualCompletenessSource, CompletenessSuggestion } from "./types";
+import type { StartOpts, StartResult, Summary, FileRow, Progress, HealthStatus, CachedFile, ExportedEvent, EventRow, VerificationPlan, VerificationStrategy, ManualCompletenessDecision } from "./types";
 
 export const checkHealth = (
   cwd?: string,
@@ -82,25 +82,6 @@ export const addManualEvent = (
   b: { tStart: number; tEnd: number; fLow: number; fHigh: number },
   humanCompleteness: ManualCompletenessDecision,
 ) => invoke<number>("add_manual_event", { outputDir, sessionId, path, tStart: b.tStart, tEnd: b.tEnd, fLow: b.fLow, fHigh: b.fHigh, humanCompleteness });
-export const setManualCompleteness = (
-  outputDir: string, eventId: number, humanCompleteness: ManualCompletenessDecision,
-  completenessLabel: "complete" | "incomplete" | null,
-  completenessSource: ManualCompletenessSource, completenessScore: number | null,
-) => invoke<void>("set_manual_completeness", {
-  outputDir, eventId, humanCompleteness, completenessLabel, completenessSource, completenessScore,
-});
-export const scoreManualCompleteness = async (
-  audioPath: string, classifier: string | null | undefined, device: string,
-  bounds: { tStart: number; tEnd: number; fLow: number; fHigh: number },
-  thetaB: number, fMinHz?: number | null, fMaxHz?: number | null,
-): Promise<CompletenessSuggestion> => {
-  const raw = await invoke<string>("score_manual_completeness", {
-    audioPath, classifier: classifier ?? null, device,
-    tStart: bounds.tStart, tEnd: bounds.tEnd, fLow: bounds.fLow, fHigh: bounds.fHigh,
-    thetaB, fMinHz: fMinHz ?? null, fMaxHz: fMaxHz ?? null,
-  });
-  return JSON.parse(raw) as CompletenessSuggestion;
-};
 export const deleteEvent = (outputDir: string, eventId: number) =>
   invoke<void>("delete_event", { outputDir, eventId });
 export const restoreEvent = (
@@ -139,17 +120,3 @@ export const getReviewTelemetry = (outputDir: string, sessionId: number) =>
   invoke<Record<string, unknown>>("get_review_telemetry", { outputDir, sessionId });
 export const audioSrc = (path: string): string => convertFileSrc(path);
 
-export const runResearchAnalysis = async (
-  dbPath: string,
-  sessionId: number,
-  outputDir: string,
-  metadataPath: string | null,
-  thetaA: number,
-  thetaB: number,
-  binMinutes: number,
-) => {
-  const raw = await invoke<string>('run_research_analysis', {
-    dbPath, sessionId, outputDir, metadataPath, thetaA, thetaB, binMinutes,
-  });
-  return JSON.parse(raw) as import('./types').ResearchAnalysis;
-};
