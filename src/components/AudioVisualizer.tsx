@@ -156,8 +156,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       container: timelineContainer,
       style: { color: 'var(--text-dim)', fontSize: '10px' },
     });
+    // Linear scale: the bounding-box overlay maps Hz to pixels linearly, and the plugin's
+    // default mel scale left the 5-11 kHz buzz band blank on AudioMoth recordings.
     const wsSpectrogram = Spectrogram.create({ container: spectrogramContainer, labels: true, height: 180,
-      splitChannels: false, frequencyMin: FREQ_MIN, frequencyMax: maxFrequency });
+      splitChannels: false, frequencyMin: FREQ_MIN, frequencyMax: maxFrequency, scale: 'linear' });
     wsSpectrogram.on('ready', () => {
       if (active) setSpectrogramReadyKey(playbackKey);
     });
@@ -487,6 +489,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
           style={{
             position: 'relative',
             width: '100%',
+            // The spectrogram container is empty until the plugin paints, so reserve its
+            // height while loading; otherwise the absolute overlay has nothing to cover.
+            minHeight: instanceReady && spectrogramReady ? undefined : 180,
             overflow: 'hidden',
             cursor: isDrawMode ? 'crosshair' : (isDragging ? 'grabbing' : 'grab'),
             userSelect: 'none',
