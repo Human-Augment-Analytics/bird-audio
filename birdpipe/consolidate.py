@@ -274,6 +274,31 @@ def consolidate(dets: Sequence[RawDetection], p: ConsolidationParams = Consolida
             if merged_any:
                 break
 
+    # Phase 6: contained-singleton suppression. A singleton almost entirely inside an
+    # established (multi-window) track in the same band is a partial view of that track.
+    # It escaped phase 3 (its window is already in the track) and phase 5 (its duration is
+    # too short for the IoU gate). Fold it into the track: keep the track's boundaries,
+    # take the max confidence, count it as a member.
+    established = [e for e in events if len(e.members) >= 2]
+    kept: List[Event] = []
+    for ev in events:
+        if len(ev.members) != 1 or not established:
+            kept.append(ev)
+            continue
+        best, best_key = None, None
+        for track in established:
+            _, c_t, c_f = g.containment(ev, track)
+            if c_t >= p.contained_time and c_f >= p.contained_freq:
+                key = (c_t, c_f)
+                if best_key is None or key > best_key:
+                    best, best_key = track, key
+        if best is None:
+            kept.append(ev)
+        else:
+            best.members = sorted(set(best.members) | set(ev.members))
+            best.conf = max(best.conf, ev.conf)
+    events = kept
+
     events.sort(key=lambda e: e.t_start)
     return events
 

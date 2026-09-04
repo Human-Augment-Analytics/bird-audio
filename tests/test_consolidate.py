@@ -153,3 +153,43 @@ def test_duplicate_merging_iterative_disjoint_window_chains():
     lens = sorted([len(ev.members) for ev in events])
     assert lens == [1, 2]
 
+
+
+def test_contained_singleton_is_folded_into_track():
+    # Windows 0 and 1 form a strong track spanning 0.0-2.0 s. A lone box from window 1
+    # covering only 1.2-2.0 s cannot be absorbed (its window is already in the track) and
+    # has time IoU 0.4 (< 0.75), so it used to survive as a duplicate row.
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.4, norm_right=0.6)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
+    dup = make_det(1.2, 2.0, 5100, 5900, conf=0.95, window=1, norm_left=0.7, norm_right=0.95)
+    events = cons.consolidate([a, b, dup], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1, 2]
+    assert events[0].conf == 0.95
+    assert (events[0].t_start, events[0].t_end) == (0.0, 2.0)  # track boundaries unchanged
+
+
+def test_contained_singleton_in_other_band_is_kept():
+    # Same geometry in time, but a different frequency band: a distinct simultaneous call.
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.4, norm_right=0.6)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
+    other = make_det(1.2, 2.0, 8000, 9000, conf=0.8, window=1, norm_left=0.7, norm_right=0.95)
+    events = cons.consolidate([a, b, other], P)
+    assert len(events) == 2
+
+
+def test_partially_contained_singleton_is_kept():
+    # Only half of the singleton lies inside the track: below the 0.90 containment gate.
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.4, norm_right=0.6)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
+    tail = make_det(1.6, 2.4, 5000, 6000, conf=0.8, window=1, norm_left=0.8, norm_right=1.0)
+    events = cons.consolidate([a, b, tail], P)
+    assert len(events) == 2
+
+
+def test_two_singletons_never_suppress_each_other():
+    # Suppression only folds into established multi-window tracks.
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0)
+    inner = make_det(0.5, 1.5, 5000, 6000, conf=0.8, window=0)
+    events = cons.consolidate([a, inner], P)
+    assert len(events) == 2

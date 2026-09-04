@@ -80,6 +80,12 @@ class ConsolidationParams:
     absorb_score: float = 0.72
     absorb_margin: float = 0.08
     absorption: AbsorptionWeights = AbsorptionWeights()
+    # contained-singleton suppression (post duplicate merge): a lone window-level box whose
+    # time span sits inside an established multi-window track of the same call is a partial
+    # view of that track, not a second buzz. Time IoU is too low to merge it (short vs long),
+    # and phase-3 absorption skips windows the track already covers, so it needs its own gate.
+    contained_time: float = 0.90     # fraction of the singleton's duration inside the track
+    contained_freq: float = 0.50     # fraction of the singleton's bandwidth inside the track
 
 
 @dataclass(frozen=True)
