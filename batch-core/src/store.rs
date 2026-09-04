@@ -69,6 +69,7 @@ pub struct FileRow {
     pub status: String,
     pub n_events: i64,
     pub n_complete: i64,
+    pub n_retained: i64,
     pub error: Option<String>,
 }
 
@@ -756,23 +757,40 @@ impl Store {
     }
 
     /// Most-recent session for these roots and this exact analysis configuration.
+    /// Find a session over the same inputs whose analysis configuration produces the same
+    /// results as `config_key` (see [`crate::identity::results_key`]). Among matches, prefer
+    /// the one with the most completed files (most cached work), then the newest.
     pub fn find_resumable(&self, input_roots: &str, config_key: &str, requested_device: &str) -> rusqlite::Result<Option<i64>> {
-        self.conn
-            .query_row(
-                "SELECT id FROM sessions
-                 WHERE input_roots=?1 AND config_key=?2
-                   AND (effective_device IS NULL OR effective_device=?3)
-                 ORDER BY id DESC LIMIT 1",
-                params![input_roots, config_key, requested_device],
-                |r| r.get(0),
-            )
-            .optional()
+        let wanted = crate::identity::results_key(config_key);
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.config_key,
+                    (SELECT COUNT(*) FROM files f WHERE f.session_id=s.id AND f.status='done')
+             FROM sessions s
+             WHERE s.input_roots=?1
+               AND (s.effective_device IS NULL OR s.effective_device=?2)
+             ORDER BY s.id DESC",
+        )?;
+        let rows = stmt.query_map(params![input_roots, requested_device], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })?;
+        let mut best: Option<(i64, i64)> = None; // (done, id)
+        for row in rows {
+            let (id, key, done) = row?;
+            if !crate::identity::results_key(&key).compatible(&wanted) {
+                continue;
+            }
+            // Rows arrive newest-first, so a strict `>` keeps the newest among ties.
+            if best.map_or(true, |(best_done, _)| done > best_done) {
+                best = Some((done, id));
+            }
+        }
+        Ok(best.map(|(_, id)| id))
     }
 
     /// All files for a session as status rows (ordered by id).
     pub fn list_files(&self, session_id: i64) -> rusqlite::Result<Vec<FileRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, status, n_events, n_complete, error FROM files
+            "SELECT path, status, n_events, n_complete, n_retained, error FROM files
              WHERE session_id=?1 ORDER BY id",
         )?;
         let rows = stmt.query_map(params![session_id], |r| {
@@ -781,7 +799,8 @@ impl Store {
                 status: r.get(1)?,
                 n_events: r.get(2)?,
                 n_complete: r.get(3)?,
-                error: r.get(4)?,
+                n_retained: r.get(4)?,
+                error: r.get(5)?,
             })
         })?;
         rows.collect()
@@ -1382,6 +1401,40 @@ mod tests {
     }
 
     #[test]
+    fn find_resumable_prefers_session_with_most_completed_files() {
+        let mut s = mem();
+        let older = new_session(&s);
+        s.add_files(older, &[PathBuf::from("/data/a.wav"), PathBuf::from("/data/b.wav")]).unwrap();
+        let claim = s.claim_next_pending(older).unwrap().unwrap();
+        s.record_success(older, claim.file_id, &RecordedResult { n_events: 0, n_complete: 0, n_retained: 0, elapsed_ms: 1, events: &[] }).unwrap();
+        let newer = new_session(&s);
+        // Newest session has no completed work; the older one has one file done.
+        assert_eq!(s.find_resumable("[\"/data\"]", "test", "cpu").unwrap(), Some(older));
+        // Ties go to the newest session.
+        let claim = s.claim_next_pending(newer).unwrap_or(None);
+        assert!(claim.is_none(), "newer session has no files yet");
+        s.add_files(newer, &[PathBuf::from("/data/a.wav")]).unwrap();
+        let claim = s.claim_next_pending(newer).unwrap().unwrap();
+        s.record_success(newer, claim.file_id, &RecordedResult { n_events: 0, n_complete: 0, n_retained: 0, elapsed_ms: 1, events: &[] }).unwrap();
+        assert_eq!(s.find_resumable("[\"/data\"]", "test", "cpu").unwrap(), Some(newer));
+    }
+
+    #[test]
+    fn find_resumable_matches_legacy_keys_with_same_analysis() {
+        let s = mem();
+        let legacy_key = r#"{"app_version":"0.1.0","cwd":"/old","theta_a":0.0,"theta_b":0.53,"species_name":"x","f_min_hz":null,"f_max_hz":null,"model_identities":{"localizer":{"path":"m","size_bytes":1,"modified_ns":"1"}},"code_identities":{"application_binary":{"path":"/bin","size_bytes":1,"modified_ns":"2"},"scripts/ml_engine.py":{"path":"/old/scripts/ml_engine.py","size_bytes":3,"modified_ns":"4"}}}"#;
+        let sid = s.create_session(&NewSession {
+            input_roots: "[\"/data\"]", output_dir: "/out", device: "cpu", concurrency: 1, theta_a: 0.0, theta_b: 0.53,
+            species_name: Some("x"), config_key: legacy_key, worker_cmd: None, cwd: None, localizer_path: None,
+            classifier_path: None, classifier_c_path: None, f_min_hz: None, f_max_hz: None,
+        }).unwrap();
+        let current_key = r#"{"app_version":"0.1.1","cwd":"/new","theta_a":0.0,"theta_b":0.53,"species_name":"x","f_min_hz":null,"f_max_hz":null,"model_identities":{"localizer":{"path":"m","size_bytes":1,"modified_ns":"1"}},"code_identities":{"scripts/ml_engine.py":{"path":"/new/scripts/ml_engine.py","sha256":"abc"}}}"#;
+        assert_eq!(s.find_resumable("[\"/data\"]", current_key, "cpu").unwrap(), Some(sid));
+        let different_threshold = current_key.replace("\"theta_b\":0.53", "\"theta_b\":0.6");
+        assert_eq!(s.find_resumable("[\"/data\"]", &different_threshold, "cpu").unwrap(), None);
+    }
+
+    #[test]
     fn session_input_roots_returns_stored_json() {
         let s = mem();
         let sid = new_session(&s); // inserts input_roots = "[\"/data\"]"
@@ -1400,6 +1453,31 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|r| r.status == "failed" && r.error.as_deref() == Some("boom")));
         assert!(rows.iter().any(|r| r.status == "pending"));
+    }
+
+    #[test]
+    fn list_files_exposes_retained_count() {
+        let mut s = mem();
+        let sid = new_session(&s);
+        s.add_files(sid, &[PathBuf::from("/data/a.wav")]).unwrap();
+        let c = s.claim_next_pending(sid).unwrap().unwrap();
+        let mk = |t: f64, retained: bool| crate::protocol::EventRecord {
+            t_start: t, t_end: t + 0.5, duration: 0.5, f_low: 5000.0, f_high: 6000.0,
+            center_freq: 5500.0, stage_a_conf: 0.9, completeness_score: Some(0.5),
+            completeness_label: Some("complete".into()), retained: Some(retained), n_members: 1,
+            ..Default::default()
+        };
+        let events = vec![mk(1.0, true), mk(2.0, false), mk(3.0, false)];
+        s.record_success(
+            sid,
+            c.file_id,
+            &RecordedResult { n_events: 3, n_complete: 1, n_retained: 1, elapsed_ms: 5, events: &events },
+        )
+        .unwrap();
+        let rows = s.list_files(sid).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].n_events, 3);
+        assert_eq!(rows[0].n_retained, 1);
     }
 
     #[test]

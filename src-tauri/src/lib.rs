@@ -21,6 +21,7 @@ pub fn run() {
             commands::clear_cache,
             commands::get_cached_files,
             commands::delete_cached_files,
+            commands::open_existing_session,
             commands::concurrency_suggestion,
             commands::get_feature_flags,
             commands::get_session_events,

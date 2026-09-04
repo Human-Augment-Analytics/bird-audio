@@ -323,10 +323,9 @@ pub async fn get_ecological_summary(
     let session = store
         .summary(session_id)
         .map_err(|e| format!("Failed to read session: {e}"))?;
-    if !matches!(session.status.as_str(), "done" | "failed" | "cancelled") {
+    if session.done == 0 && !matches!(session.status.as_str(), "done" | "failed" | "cancelled") {
         return Err(format!(
-            "Analytics require a terminal session; session {session_id} is {}",
-            session.status
+            "Analytics require at least one completed file; session {session_id} has 0 completed files",
         ));
     }
     let (context, initial_total_files) = store

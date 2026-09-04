@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use batch_core::concurrency::resolve_concurrency;
 use batch_core::engine::{run_session, EngineConfig};
 use batch_core::enumerate::enumerate_audio;
+use batch_core::identity::{code_identities, model_identity};
 use batch_core::export::{export_csv, export_json, export_telemetry_csv, export_warbler, export_raven};
 use batch_core::store::{
     EventRow, FileRow, NewReviewEvent, NewSession, ReviewTelemetrySummary, Store, Summary,
@@ -26,70 +27,6 @@ fn db_path(output_dir: &str) -> PathBuf {
     PathBuf::from(output_dir).join("batch.db")
 }
 
-fn model_identity(
-    cwd: &std::path::Path,
-    configured: Option<&str>,
-    default_path: Option<&str>,
-) -> serde_json::Value {
-    let selected = configured
-        .filter(|value| !value.trim().is_empty())
-        .or(default_path);
-    let Some(selected) = selected else {
-        return serde_json::Value::Null;
-    };
-    let raw = PathBuf::from(selected);
-    let path = if raw.is_absolute() { raw } else { cwd.join(raw) };
-    let metadata = path.metadata().ok();
-    let size_bytes = metadata.as_ref().map(std::fs::Metadata::len);
-    let modified_ns = metadata
-        .and_then(|value| value.modified().ok())
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos().to_string());
-    serde_json::json!({
-        "path": path.to_string_lossy(),
-        "size_bytes": size_bytes,
-        "modified_ns": modified_ns,
-    })
-}
-
-fn code_identities(cwd: &std::path::Path, worker_cmd: &str) -> serde_json::Value {
-    let mut identities = serde_json::Map::new();
-    for relative in [
-        "scripts/ml_engine.py",
-        "scripts/score_completeness.py",
-        "birdpipe/audio.py",
-        "birdpipe/consolidate.py",
-        "birdpipe/constants.py",
-        "birdpipe/coords.py",
-        "birdpipe/records.py",
-        "birdpipe/stageb.py",
-        "birdpipe/worker.py",
-        "pyproject.toml",
-        "uv.lock",
-    ] {
-        identities.insert(relative.into(), model_identity(cwd, Some(relative), None));
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        identities.insert(
-            "application_binary".into(),
-            model_identity(cwd, executable.to_str(), None),
-        );
-    }
-    for (index, token) in worker_cmd.split_whitespace().enumerate() {
-        if token.starts_with('-') {
-            continue;
-        }
-        let raw = PathBuf::from(token);
-        let resolved = if raw.is_absolute() { raw } else { cwd.join(raw) };
-        if resolved.is_file() {
-            identities.insert(
-                format!("worker_arg_{index}"),
-                model_identity(cwd, resolved.to_str(), None),
-            );
-        }
-    }
-    serde_json::Value::Object(identities)
-}
 
 fn analysis_config_key(opts: &StartOpts, resolved_cwd: &std::path::Path) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
@@ -116,7 +53,7 @@ fn analysis_config_key(opts: &StartOpts, resolved_cwd: &std::path::Path) -> Resu
     .map_err(|e| format!("failed to serialize analysis configuration: {e}"))
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartOpts {
     pub input: String,
@@ -625,6 +562,78 @@ pub fn delete_cached_files(output_dir: String, paths: Vec<String>) -> Result<(),
     
     store.delete_cached_files(sid, &paths).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct OpenSessionResult {
+    pub start: StartResult,
+    pub opts: StartOpts,
+    pub summary: Summary,
+}
+
+#[tauri::command]
+pub fn open_existing_session(output_dir: String) -> Result<OpenSessionResult, String> {
+    let path = db_path(&output_dir);
+    if !path.exists() {
+        return Err(format!("No batch database found in {}", output_dir));
+    }
+    let store = Store::open(&path).map_err(|e| e.to_string())?;
+    let sid = store
+        .get_latest_session_id()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("No session records found in {}", path.display()))?;
+
+    let summary = store.summary(sid).map_err(|e| e.to_string())?;
+    let total_files = store.list_files(sid).map_err(|e| e.to_string())?.len();
+
+    let (device, theta_a, theta_b, species_name, f_min_hz, f_max_hz, localizer, classifier, classifier_c) = store
+        .conn
+        .query_row(
+            "SELECT device, theta_a, theta_b, species_name, f_min_hz, f_max_hz, localizer_path, classifier_path, classifier_c_path FROM sessions WHERE id=?1",
+            rusqlite::params![sid],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
+                    row.get::<_, Option<f64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("Failed to read session details: {e}"))?;
+
+    let opts = StartOpts {
+        input: output_dir.clone(),
+        output_dir,
+        device,
+        concurrency: 1,
+        worker_cmd: "uv run python scripts/ml_engine.py --worker".into(),
+        cwd: None,
+        theta_a,
+        theta_b,
+        timeout_secs: 600,
+        max_attempts: 2,
+        species_name,
+        f_min_hz,
+        f_max_hz,
+        localizer,
+        classifier,
+        classifier_c,
+    };
+
+    Ok(OpenSessionResult {
+        start: StartResult {
+            session_id: sid,
+            total_files,
+        },
+        opts,
+        summary,
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize)]

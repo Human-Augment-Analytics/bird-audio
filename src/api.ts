@@ -37,6 +37,8 @@ export const pickSavePath = async (defaultName: string): Promise<string | null> 
   return typeof result === "string" ? result : null;
 };
 export const startSession = (opts: StartOpts) => invoke<StartResult>("start_session", { opts });
+export const openExistingSession = (outputDir: string) =>
+  invoke<{ start: StartResult; opts: StartOpts; summary: Summary }>("open_existing_session", { outputDir });
 export const cancelSession = () => invoke<void>("cancel_session");
 export const getSummary = (outputDir: string, sessionId: number) =>
   invoke<Summary>("get_summary", { outputDir, sessionId });

@@ -47,6 +47,9 @@ export default function App() {
           listFiles(opts.outputDir, sessionId),
         ]);
         if (!active) return;
+        // The engine emits its first progress event before the listener above is attached,
+        // so seed the throughput baseline from the first summary we fetch instead.
+        if (!tRef.current) tRef.current = { t: Date.now(), done: nextSummary.done };
         setRows(nextRows);
         acceptSummary(nextSummary);
         if (["done", "cancelled", "failed"].includes(nextSummary.status)) {
@@ -107,11 +110,11 @@ export default function App() {
     };
   }, [view, start, opts]);
 
-  const onStarted = (result: StartResult, o: StartOpts) => {
+  const onStarted = (result: StartResult, o: StartOpts, initialSummary?: Summary | null) => {
     setStart(result);
     setOpts(o);
     setProgress(null);
-    setSummary(null);
+    setSummary(initialSummary && ["done", "cancelled", "failed"].includes(initialSummary.status) ? initialSummary : null);
     setRows([]);
     setThroughput(0);
     setNotice(null);
@@ -162,7 +165,10 @@ export default function App() {
   };
 
   const noticeIsError = notice !== null && /failed|error/i.test(notice);
-  const analyticsAvailable = summary !== null && ["done", "failed", "cancelled"].includes(summary.status);
+  const terminal = summary !== null && ["done", "failed", "cancelled"].includes(summary.status);
+  const completedFiles = Math.max(progress?.done ?? 0, rows.filter((r) => r.status === "done").length);
+  const analyticsAvailable = terminal || completedFiles > 0;
+  const researchAvailable = terminal;
 
   return (
     <main style={{ padding: "44px 24px 64px", maxWidth: 1040, margin: "0 auto" }}>
@@ -186,15 +192,15 @@ export default function App() {
           className={section === "ecology" ? "primary" : "backlink"}
           onClick={() => setSection("ecology")}
           disabled={!analyticsAvailable}
-          title={analyticsAvailable ? "Open session analytics" : "Available after the batch session reaches a terminal state"}
+          title={analyticsAvailable ? "Open session analytics" : "Available after at least one file has finished processing"}
         >
           Analytics
         </button>
         <button
           className={section === "research" ? "primary" : "backlink"}
           onClick={() => setSection("research")}
-          disabled={!analyticsAvailable}
-          title={analyticsAvailable ? "Open research analysis tools" : "Available after the batch session reaches a terminal state"}
+          disabled={!researchAvailable}
+          title={researchAvailable ? "Open research analysis tools" : "Available after the batch session reaches a terminal state"}
         >
           Research
         </button>
@@ -232,6 +238,7 @@ export default function App() {
           sessionId={start ? start.session_id : null}
           dbPath={opts ? `${opts.outputDir}/batch.db` : null}
           sessionStatus={summary?.status ?? null}
+          completedFiles={completedFiles}
         />
       )}
       {section === "research" && (

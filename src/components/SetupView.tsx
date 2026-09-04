@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { checkHealth, pickFile, pickFolder, prepareSystem, startSession, checkCache, getConcurrencySuggestion, getFeatureFlags } from "../api";
-import type { StartOpts, StartResult, HealthStatus } from "../types";
+import { checkHealth, pickFile, pickFolder, prepareSystem, startSession, openExistingSession, checkCache, getConcurrencySuggestion, getFeatureFlags } from "../api";
+import type { StartOpts, StartResult, HealthStatus, Summary } from "../types";
 import ManageCache from "./ManageCache";
 
 const SURAL_PRESETS = [
@@ -13,7 +13,7 @@ const SURAL_PRESETS = [
 ];
 
 interface Props {
-  onStarted: (result: StartResult, opts: StartOpts) => void;
+  onStarted: (result: StartResult, opts: StartOpts, initialSummary?: Summary | null) => void;
 }
 
 function Field({ label, children, hint }: { label: ReactNode; children: ReactNode; hint?: string }) {
@@ -150,6 +150,19 @@ export default function SetupView({ onStarted }: Props) {
     }
   };
 
+  const viewExisting = async () => {
+    if (!input) { setError("Please select a recording folder with saved results."); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await openExistingSession(input);
+      onStarted(data.start, data.opts, data.summary);
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  };
+
   const optionalNumber = (raw: string): number | null => {
     const trimmed = raw.trim();
     if (trimmed === "") return null;
@@ -218,21 +231,25 @@ export default function SetupView({ onStarted }: Props) {
   };
 
   const ready = health?.env_ok && health?.models_ok;
+  // Until the first health probe answers we know nothing; don't flash the red "setup required" state.
+  const checking = health === null;
 
   return (
     <div className="card reveal" style={{ display: "grid", gap: 22, maxWidth: 660, "--d": "0.06s" } as CSSProperties}>
       {/* Health Panel */}
-      <div className={`health ${ready ? "health--ok" : "health--bad"}`}>
+      <div className={`health ${ready ? "health--ok" : checking ? "" : "health--bad"}`}>
         <div>
           <div className="health__title">
-            <span className={`dot ${ready ? "dot--ok" : "dot--bad"}`} />
-            {ready ? "Instrument ready to listen" : "Setup required before listening"}
+            {checking
+              ? <span className="loading-spinner" style={{ width: 12, height: 12, borderWidth: 2 }} />
+              : <span className={`dot ${ready ? "dot--ok" : "dot--bad"}`} />}
+            {ready ? "Instrument ready to listen" : checking ? "Checking instrument…" : "Setup required before listening"}
           </div>
           <div className="health__meta">
-            engine {health?.device || "checking…"} · models {health?.models_ok ? "loaded" : "missing"}
+            engine {health?.device || "checking…"} · models {checking ? "checking…" : health?.models_ok ? "loaded" : "missing"}
           </div>
         </div>
-        {!ready && (
+        {!ready && !checking && (
           <button className="primary" onClick={handlePrepare} disabled={busy}>
             {busy ? (
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -388,14 +405,45 @@ export default function SetupView({ onStarted }: Props) {
 
       {error && <div className="error-text">{error}</div>}
 
-      <button className="primary" style={{ height: 52, fontSize: 15, letterSpacing: "0.01em" }} disabled={busy || !ready} onClick={start}>
-        {busy ? (
-          <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-            <span className="loading-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-            Initializing…
-          </span>
-        ) : "Begin Listening →"}
-      </button>
+      <div style={{ display: "grid", gridTemplateColumns: hasCache ? "1fr 1fr" : "1fr", gap: 12 }}>
+        {hasCache && (
+          <button
+            type="button"
+            className="backlink"
+            style={{
+              height: 52,
+              fontSize: 14,
+              fontWeight: 600,
+              border: "1px solid var(--line-2)",
+              background: "var(--surface)",
+              borderRadius: "var(--radius)",
+              color: "var(--text)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              cursor: "pointer",
+            }}
+            disabled={busy}
+            onClick={viewExisting}
+          >
+            📂 View Existing Results
+          </button>
+        )}
+        <button
+          className="primary"
+          style={{ height: 52, fontSize: 15, letterSpacing: "0.01em" }}
+          disabled={busy || !ready}
+          onClick={start}
+        >
+          {busy ? (
+            <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <span className="loading-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+              Initializing…
+            </span>
+          ) : hasCache ? "Re-run / Resume Batch →" : "Begin Listening →"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -169,10 +169,42 @@ fn worker_loop(
 
         let w = worker.as_mut().unwrap();
         let outcome = if w.send(&req).is_ok() {
-            w.recv_timeout(cfg.timeout)
+            let deadline = std::time::Instant::now() + cfg.timeout;
+            let mut got = Err(crate::worker::WorkerError::Timeout);
+            while std::time::Instant::now() < deadline {
+                if let Some(flag) = &cfg.cancel {
+                    if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        got = Err(crate::worker::WorkerError::Closed);
+                        break;
+                    }
+                }
+                match w.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(msg) => {
+                        got = Ok(msg);
+                        break;
+                    }
+                    Err(crate::worker::WorkerError::Timeout) => continue,
+                    Err(err) => {
+                        got = Err(err);
+                        break;
+                    }
+                }
+            }
+            got
         } else {
             Err(crate::worker::WorkerError::Closed)
         };
+
+        if let Some(flag) = &cfg.cancel {
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(mut bad) = worker.take() {
+                    bad.kill();
+                }
+                let s = lock_store(&store);
+                let _ = s.requeue(c.file_id);
+                break;
+            }
+        }
 
         match outcome {
             Ok(WorkerMsg::Result {
@@ -248,6 +280,25 @@ pub fn run_session(
             .map_err(|error| format!("failed to reset interrupted files: {error}"))?;
         s.reset_failed(session_id)
             .map_err(|error| format!("failed to reset failed files: {error}"))?;
+    }
+    if let Some(tx) = &progress {
+        let snap = {
+            let s = lock_store(&store);
+            s.summary(session_id).ok()
+        };
+        if let Some(snap) = snap {
+            let _ = tx.send(Progress {
+                session_id,
+                total: snap.total,
+                done: snap.done,
+                failed: snap.failed,
+                pending: snap.pending,
+                in_progress: snap.in_progress,
+                last_file: None,
+                last_elapsed_ms: None,
+                elapsed_ms_total: 0,
+            });
+        }
     }
     let cfg = Arc::new(cfg);
     let mut handles = Vec::new();

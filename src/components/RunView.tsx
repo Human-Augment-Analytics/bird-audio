@@ -40,7 +40,9 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   const done = summary !== null;
   const completed = summary?.status === "done";
   const failed = summary?.status === "failed";
-  const eventRequestKey = done && start.session_id ? `${outputDir}:${start.session_id}` : null;
+  const doneN = summary?.done ?? progress?.done ?? rows.filter((r) => r.status === "done").length;
+  const hasCompletedFiles = done || doneN > 0;
+  const eventRequestKey = hasCompletedFiles && start.session_id ? `${outputDir}:${start.session_id}:${doneN}` : null;
   const [eventResult, setEventResult] = useState<{
     key: string;
     events: ExportedEvent[];
@@ -64,18 +66,22 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   const loadingEvents = eventRequestKey !== null && eventResult?.key !== eventRequestKey;
   const loadError = eventResult?.key === eventRequestKey ? eventResult.error : null;
   const total = summary?.total ?? progress?.total ?? start.total_files;
-  const doneN = summary?.done ?? progress?.done ?? 0;
   const failedN = summary?.failed ?? progress?.failed ?? 0;
-  const pendingN = summary?.pending ?? progress?.pending ?? 0;
-  const inProg = summary?.in_progress ?? progress?.in_progress ?? 0;
+  // Progress events only fire when a file finishes, so between files the snapshot says
+  // "0 active / N pending" while a worker is already busy. Rows are polled every second
+  // and reflect the claimed file, so prefer them while the run is live.
+  const rowsLoaded = rows.length > 0;
+  const pendingN = summary?.pending ?? (rowsLoaded ? rows.filter((r) => r.status === "pending").length : progress?.pending ?? 0);
+  const inProg = summary?.in_progress ?? (rowsLoaded ? rows.filter((r) => r.status === "in_progress").length : progress?.in_progress ?? 0);
   const pct = total > 0 ? Math.round(((doneN + failedN) / total) * 100) : 0;
-  const eta = throughput > 0 ? Math.round(pendingN / throughput) : null;
+  const remainingN = pendingN + inProg;
+  const eta = throughput > 0 && remainingN > 0 ? Math.round(remainingN / throughput) : null;
   const lastMs = progress?.last_elapsed_ms ?? null;
   const elapsedTotalMs = progress?.elapsed_ms_total ?? null;
 
-  const nEvents = summary?.n_events ?? 0;
-  const nComplete = summary?.n_complete ?? 0;
-  const nRetained = summary?.n_retained ?? 0;
+  const nEvents = summary?.n_events ?? rows.reduce((acc, r) => acc + (r.n_events || 0), 0);
+  const nComplete = summary?.n_complete ?? rows.reduce((acc, r) => acc + (r.n_complete || 0), 0);
+  const nRetained = summary?.n_retained ?? rows.reduce((acc, r) => acc + (r.n_retained || 0), 0);
 
   const etaTime = useMemo(() => {
     if (!eta || eta <= 0) return null;
@@ -125,7 +131,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         <Stat label="Active" value={inProg} color="var(--amber)" />
         <Stat label="Remaining" value={pendingN} color="var(--text-dim)" />
         <Stat label="Total" value={total} />
-        <Stat label="Speed" value={`${throughput.toFixed(1)}/s`} />
+        <Stat label="Speed" value={throughput > 0 ? `${(throughput * 60).toFixed(1)}/min` : "—"} />
         <Stat label="Last (ms)" value={lastMs !== null ? String(lastMs) : "—"} />
         <Stat label="Elapsed" value={elapsedTotalMs != null ? `${Math.round(elapsedTotalMs / 1000)}s` : "—"} />
         <Stat label="ETA" value={etaTime || "—"} />
@@ -137,7 +143,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         </div>
       )}
 
-      {done && summary && (
+      {hasCompletedFiles && (
         <div className="summary">
           <div className="summary__cell">
             <div className="eyebrow">Detections found</div>
@@ -154,7 +160,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         </div>
       )}
 
-      {done && (
+      {hasCompletedFiles && (
         <div className="card" style={{ border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 10, padding: "16px 20px", background: "rgba(255, 255, 255, 0.01)", display: "grid", gap: 14 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Export Options</h3>
           
@@ -236,18 +242,18 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         </div>
       )}
 
-      {done && !loadingEvents && !loadError && events.length > 0 && (
+      {hasCompletedFiles && !loadingEvents && !loadError && events.length > 0 && (
         <SanityCheckViews events={events} />
       )}
 
-      {done && loadingEvents && (
+      {hasCompletedFiles && loadingEvents && (
         <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 32, textAlign: "center", color: "var(--text-dim)", background: "var(--surface)", borderRadius: "var(--radius)", border: "1px solid var(--line)", boxShadow: "var(--shadow)" }}>
           <div className="loading-spinner" />
           <div style={{ fontSize: "11px", fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>LOADING DIAGNOSTIC EVENTS…</div>
         </div>
       )}
 
-      {done && loadError && (
+      {hasCompletedFiles && loadError && (
         <div className="card" style={{ padding: 20, textAlign: "center", color: "var(--coral)" }}>
           Failed to load diagnostics: {loadError}
         </div>

@@ -82,8 +82,12 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const [duration, setDuration] = useState(0);
   const playbackKey = src ? `${src}\u0000${maxFrequency}` : null;
   const [readyKey, setReadyKey] = useState<string | null>(null);
+  // The spectrogram plugin computes its FFT after the audio is decoded; on a 15-minute
+  // recording that takes several seconds, during which the panel would otherwise sit blank.
+  const [spectrogramReadyKey, setSpectrogramReadyKey] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const wsReady = readyKey === playbackKey;
+  const spectrogramReady = spectrogramReadyKey === playbackKey;
   const readyInstance = useRef<WaveSurfer | null>(null);
   const instanceReady = wsReady;
   const lastCenteredSelection = useRef<string | null>(null);
@@ -130,6 +134,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       setScrollLeft(0);
       setLoadError(null);
       setReadyKey(null);
+      setSpectrogramReadyKey(null);
     });
     const waveformContainer = containerRef.current;
     const spectrogramContainer = specRef.current;
@@ -151,15 +156,16 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       container: timelineContainer,
       style: { color: 'var(--text-dim)', fontSize: '10px' },
     });
+    const wsSpectrogram = Spectrogram.create({ container: spectrogramContainer, labels: true, height: 180,
+      splitChannels: false, frequencyMin: FREQ_MIN, frequencyMax: maxFrequency });
+    wsSpectrogram.on('ready', () => {
+      if (active) setSpectrogramReadyKey(playbackKey);
+    });
     const ws = WaveSurfer.create({
       container: waveformContainer,
       waveColor: '#6f6253', progressColor: '#f4a23a', cursorColor: '#f06a4e',
       height: 90, minPxPerSec: INITIAL_ZOOM, autoCenter: true,
-      plugins: [
-        wsRegions, wsTimeline,
-        Spectrogram.create({ container: spectrogramContainer, labels: true, height: 180,
-          splitChannels: false, frequencyMin: FREQ_MIN, frequencyMax: maxFrequency }),
-      ],
+      plugins: [wsRegions, wsTimeline, wsSpectrogram],
     });
     wavesurfer.current = ws;
     ws.on('play', () => setIsPlaying(true));
@@ -488,7 +494,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
           onMouseDown={handleSpecMouseDown}
           onWheel={handleWheel}
         >
-          {!instanceReady && (
+          {(!instanceReady || !spectrogramReady) && (
             <div style={{
               position: 'absolute',
               top: 0,
@@ -510,10 +516,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
               {!loadError && <div className="loading-spinner" style={{ width: 28, height: 28 }} />}
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--amber)', letterSpacing: '0.08em', fontWeight: 600 }}>
-                  {loadError ? 'AUDIO LOAD FAILED' : 'GENERATING FFT SPECTROGRAM…'}
+                  {loadError ? 'AUDIO LOAD FAILED' : instanceReady ? 'GENERATING FFT SPECTROGRAM…' : 'DECODING AUDIO…'}
                 </span>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', color: 'var(--text-faint)' }}>
-                  {loadError || 'Decoding Audio Waveform Track'}
+                  {loadError || (instanceReady ? 'Computing the frequency image for this recording' : 'Reading the waveform from disk')}
                 </span>
               </div>
             </div>

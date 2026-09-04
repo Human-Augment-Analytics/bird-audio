@@ -97,6 +97,8 @@ interface EcologyViewProps {
   sessionId: number | null;
   dbPath: string | null;
   sessionStatus: string | null;
+  /** Number of files finished so far; bumps the request key so analytics refresh while a session is active. */
+  completedFiles: number;
 }
 
 type Scope = 'all' | 'retained';
@@ -296,11 +298,10 @@ export const EcologyView: React.FC<EcologyViewProps> = ({
   sessionId,
   dbPath,
   sessionStatus,
+  completedFiles,
 }) => {
-  const terminalSession = sessionStatus !== null
-    && ['done', 'failed', 'cancelled'].includes(sessionStatus);
-  const requestKey = sessionId && dbPath && terminalSession
-    ? `${sessionId}:${dbPath}:${sessionStatus}`
+  const requestKey = sessionId && dbPath
+    ? `${sessionId}:${dbPath}:${sessionStatus ?? 'active'}:${completedFiles}`
     : null;
   const [result, setResult] = useState<{
     key: string;
@@ -336,14 +337,6 @@ export const EcologyView: React.FC<EcologyViewProps> = ({
   if (!sessionId || !dbPath) {
     return <div className="card">Run a batch session to populate analytics.</div>;
   }
-  if (!terminalSession) {
-    return (
-      <div className="card">
-        Analytics are available after a session completes. Current status:{' '}
-        {sessionStatus ?? 'starting'}.
-      </div>
-    );
-  }
   if (result?.key !== requestKey) {
     return (
       <div className="card analytics-loading" role="status">
@@ -354,7 +347,9 @@ export const EcologyView: React.FC<EcologyViewProps> = ({
   if (result.error) {
     return (
       <div className="card error" role="alert">
-        Error loading analytics: {result.error}
+        {result.error.includes("0 completed files")
+          ? "No audio files have finished processing yet. Run analysis will appear once at least one file completes."
+          : `Error loading analytics: ${result.error}`}
       </div>
     );
   }

@@ -9,6 +9,7 @@ use std::time::Duration;
 use batch_core::concurrency::resolve_concurrency;
 use batch_core::engine::{run_session, EngineConfig, Progress};
 use batch_core::enumerate::enumerate_audio;
+use batch_core::identity::{code_identities, model_identity};
 use batch_core::export::{export_csv, export_json, export_telemetry_csv};
 use batch_core::store::{NewSession, Store};
 
@@ -39,65 +40,7 @@ struct Args {
     metadata: Option<PathBuf>,
 }
 
-fn model_identity(cwd: &std::path::Path, configured: Option<&str>, default_path: Option<&str>) -> serde_json::Value {
-    let selected = configured
-        .filter(|value| !value.trim().is_empty())
-        .or(default_path);
-    let Some(selected) = selected else {
-        return serde_json::Value::Null;
-    };
-    let raw = PathBuf::from(selected);
-    let path = if raw.is_absolute() { raw } else { cwd.join(raw) };
-    let metadata = path.metadata().ok();
-    let size_bytes = metadata.as_ref().map(std::fs::Metadata::len);
-    let modified_ns = metadata
-        .and_then(|value| value.modified().ok())
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos().to_string());
-    serde_json::json!({
-        "path": path.to_string_lossy(),
-        "size_bytes": size_bytes,
-        "modified_ns": modified_ns,
-    })
-}
 
-fn code_identities(cwd: &std::path::Path, worker_cmd: &str) -> serde_json::Value {
-    let mut identities = serde_json::Map::new();
-    for relative in [
-        "scripts/ml_engine.py",
-        "birdpipe/audio.py",
-        "birdpipe/consolidate.py",
-        "birdpipe/constants.py",
-        "birdpipe/coords.py",
-        "birdpipe/records.py",
-        "birdpipe/stageb.py",
-        "birdpipe/worker.py",
-        "pyproject.toml",
-        "uv.lock",
-    ] {
-        identities.insert(relative.into(), model_identity(cwd, Some(relative), None));
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        identities.insert(
-            "application_binary".into(),
-            model_identity(cwd, executable.to_str(), None),
-        );
-    }
-    for (index, token) in worker_cmd.split_whitespace().enumerate() {
-        if token.starts_with('-') {
-            continue;
-        }
-        let raw = PathBuf::from(token);
-        let resolved = if raw.is_absolute() { raw } else { cwd.join(raw) };
-        if resolved.is_file() {
-            identities.insert(
-                format!("worker_arg_{index}"),
-                model_identity(cwd, resolved.to_str(), None),
-            );
-        }
-    }
-    serde_json::Value::Object(identities)
-}
 
 fn usage_and_exit() -> ! {
     eprintln!(

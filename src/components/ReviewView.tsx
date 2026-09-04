@@ -520,12 +520,12 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
       </section>
       {manualDialog && (
         <div role="presentation" style={{
-          position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center",
-          background: "rgba(4, 7, 10, 0.78)", backdropFilter: "blur(4px)", padding: 20,
+          position: "fixed", inset: 0, zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start",
+          background: "rgba(4, 7, 10, 0.78)", backdropFilter: "blur(4px)", padding: "28px 20px", overflowY: "auto",
         }}>
           <section role="dialog" aria-modal="true" aria-labelledby="manual-completeness-title"
-            style={{ width: "min(560px, 100%)", border: "1px solid var(--line-2)", borderRadius: "var(--radius)",
-              background: "var(--surface)", boxShadow: "0 24px 80px rgba(0,0,0,.55)", padding: 22 }}>
+            style={{ width: "min(600px, 100%)", border: "1px solid var(--line-2)", borderRadius: "var(--radius)",
+              background: "var(--surface)", boxShadow: "0 24px 80px rgba(0,0,0,.55)", padding: 22, maxHeight: "calc(100vh - 56px)", overflowY: "auto" }}>
             <div className="eyebrow">Manual annotation</div>
             <h2 id="manual-completeness-title" style={{ margin: "6px 0 8px", fontFamily: "var(--serif)" }}>
               {manualDialog.phase === "suggestion" ? "Stage B completeness suggestion" : "Is this a complete buzz?"}

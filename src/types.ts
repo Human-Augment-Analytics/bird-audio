@@ -53,6 +53,7 @@ export interface FileRow {
   status: string;
   n_events: number;
   n_complete: number;
+  n_retained: number;
   error: string | null;
 }
 
