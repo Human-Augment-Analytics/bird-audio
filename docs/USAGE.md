@@ -2,7 +2,7 @@
 
 A step-by-step guide to a full session: **install → run a batch → review detections → export a clean dataset.**
 
-The app is a [Tauri](https://tauri.app/) desktop application (React frontend, Rust + Python backend) for detecting and curating bird vocalizations from field recordings, optimized for the **Hume's Leaf Warbler** (*Phylloscopus humei*). It has two modes — **Batch** (run the ML pipeline over a folder) and **Review** (curate the detections on a spectrogram).
+The app is a [Tauri](https://tauri.app/) desktop application (React frontend, Rust + Python backend) for detecting and curating bird vocalizations from field recordings, optimized for the **Hume's Leaf Warbler** (*Phylloscopus humei*). It has three workspaces: **Batch**, **Review**, and **Analytics**. See the [feature guide](feature-guide.md) for screenshots and interpretation.
 
 > _Walkthrough video — to be added._
 
@@ -46,10 +46,10 @@ On first launch the app runs a **health check** of the Python environment and th
 
 ### Setup
 
-<!-- screenshot: Setup view -->
+![Setup view: health check, recording folder, thresholds](screenshots/tutorials/setup-fresh.png)
 
-- **Input folder** — the folder of recordings (subfolders included).
-- **Output directory** — where results are written. All state lives in `<output_dir>/batch.db`.
+- **Recording folder** — the folder of recordings (subfolders included). All state is written to `batch.db` inside this folder. Folders you have used before appear in a **Recent folders** list under the Browse button.
+- **View Existing Results** / **Re-run / Resume Batch** — shown when the folder already holds a `batch.db`. The first opens the most complete previous session straight into Review and Analytics without processing anything; the second resumes it, or starts a new session if the settings or code changed (see [Resuming and re-running](tutorial-resume-rerun.md)).
 - **θ_A — detection sensitivity** *(optional)*. Lower = more candidate detections (and more false positives); higher = stricter.
 - **θ_B — quality filter** *(optional)*. Filters events by Stage-B *completeness* score — how clean/fully-formed the buzz is. Raise it to keep only the cleanest events.
 
@@ -57,11 +57,11 @@ On first launch the app runs a **health check** of the Python environment and th
 
 ### Run
 
-<!-- screenshot: Run view with per-file progress -->
+![Run view after completion with counts and export options](screenshots/tutorials/run-complete-export.png)
 
-The pipeline processes every audio file in the folder, showing **per-file progress**, a **clock-time ETA**, and running **buzz counts**. Results are aggregated into `batch.db` as it goes.
+The pipeline processes every audio file in the folder, showing **per-file progress**, processing **speed** and a **clock-time ETA**, and running counts of detections and retained records. Results are aggregated into `batch.db` as it goes. **Cancel run** stops after the files currently in flight and kills the worker processes.
 
-The database is the durable checkpoint: runs are **resumable and idempotent**. Stop and re-run on the same folder and already-processed files are skipped — you pick up where you left off.
+The database is the durable checkpoint. On resume, unchanged completed files are skipped, changed files are reprocessed with stale detections replaced, and removed inputs are pruned.
 
 ---
 
@@ -69,7 +69,7 @@ The database is the durable checkpoint: runs are **resumable and idempotent**. S
 
 After a batch run, switch to **Review** to turn raw ML output into a verified dataset.
 
-<!-- screenshot: Review view — file list + spectrogram with event boxes -->
+![Review view: file list, spectrogram with an event box, and the shortcut sheet](screenshots/tutorials/review-shortcuts.png)
 
 1. **Pick a file.** The file list shows every processed recording; click one to load its events.
 2. **Inspect on the spectrogram.** Each detected event is drawn as a bounding box over the audio. Use the playback controls to listen — **zoom**, **seek**, change **playback rate** (down to 0.25×), and **mute**.
@@ -78,19 +78,45 @@ After a batch run, switch to **Review** to turn raw ML output into a verified da
    - **Reject** — a false positive (kept in the DB, marked rejected).
    - **Reset** — back to *unreviewed*.
 4. **Fix the bounds.** Drag the edges of an event box to correct its time/frequency extent.
-5. **Add a manual event.** Draw a new box on the spectrogram for a call the model missed.
-6. **Delete** an event entirely to remove a false positive from the data.
+5. **Add a manual event.** Click **Draw Bounding Box** (or drag directly on the spectrogram) to box a call the model missed. Manual boxes are stored as confirmed with completeness left unresolved; they are kept separate from pipeline detections.
+6. **Delete** an event entirely to remove a false positive from the data. Select a box and press `Delete`, `Backspace` or `D`. **Undo** (`Cmd/Ctrl+Z`) restores it; **Redo** (`Cmd/Ctrl+Shift+Z` or `Cmd/Ctrl+Y`) reapplies it.
+7. **Verification plan.** Expand the panel above the spectrogram to compute a ranked queue of detections to check next, sized to a target precision half-width. Click a queued item to jump to it.
 
-Decisions are saved to `batch.db` and accumulate across Review sessions — stop and resume curation any time.
+Decisions are saved to `batch.db` and accumulate across Review sessions — stop and resume curation any time. The [review tutorial](tutorial-review-curation.md) walks through a full keyboard-driven session.
+
+### Keyboard shortcuts
+
+Reviewing thousands of detections with the mouse is the slowest part of the workflow. Press **?**
+in Review mode to see the shortcuts, or use them directly:
+
+| Key | Action |
+|---|---|
+| `J` / `↓` | Next event |
+| `K` / `↑` | Previous event |
+| `C` | Confirm and advance |
+| `X` | Reject and advance |
+| `U` | Mark unreviewed |
+| `N` | Jump to the next unreviewed event (wraps, so skipped events are still reached) |
+| `?` | Toggle the shortcut help |
+
+Shortcuts are suppressed while you are typing in a text field. A `REVIEWED n/total` counter tracks
+progress through the current file.
+
+### Review effort is recorded
+
+Every decision, and navigation actions like opening a file or playing audio, are logged to a
+`review_events` table with timing. Gaps longer than two minutes are treated as breaks and excluded,
+so the resulting per-decision cost reflects actual review time. This is what lets
+`scripts/verification_planner.py` estimate remaining effort from *measured* seconds per decision
+rather than a guess. Export it with `batch --export-telemetry <path>` or the app's telemetry export.
 
 ---
 
-## 4. In-App Sanity Check Views
+## 4. Analytics
 
-Once a batch run is complete, the app automatically pulls the session results to render three interactive diagnostic visualizations on the complete card:
-*   **Elevation vs. Duration Plot:** Displays the distribution of event durations across Low (PSL), Medium (PSM), and High (PSH/H) altitude bands. The app categorizes events by parsing the recorder ID prefix (e.g. `PSL2`, `PSM5`) from the audio filenames.
-*   **Bout Activity Timeline:** A density histogram displaying event frequencies in 5-minute bins across the session duration, highlighting burst behaviors.
-*   **Sortable Site Summaries:** A detailed table summarizing event count, mean duration, and median frequency for each unique site/recorder. You can sort columns to quickly identify outliers.
+![Analytics overview with the All detections scope](screenshots/tutorials/analytics-overview.png)
+
+Once at least one file has finished, the **Analytics** tab summarises the session: coverage and effort, retention, review coverage, detections by recording offset, score and shape distributions, rates by elevation band (inferred from `PSL`/`PSM`/`PSH` recorder prefixes in the file paths), and a per-recorder table. It refreshes as files complete.
 
 ---
 
@@ -101,7 +127,7 @@ The application supports exporting analysis-ready datasets directly from the com
 *   **Confirmed only:** Toggle this on to limit exports to events that were reviewed and marked as `confirmed` (including manually added ones).
 *   **Deployment Metadata Join:** Optionally browse and select a metadata CSV file containing recorder deployment parameters (`device_id`, `site_id`, `elevation_m`, `lat`, `lon`, `deploy_date`). When chosen:
     1.  The exported file will automatically join the `site_id`, `elevation_m`, `lat`, and `lon` fields to each event row by identifying the `device_id` from the filename.
-    2.  A secondary site-level summary CSV (`<export_filename>_summary.csv`) will be generated, containing session-level aggregations (`site_id`, `session_datetime`, `elevation_m`, `n_events`, `duration_mean`, `duration_median`, `center_freq_mean`, `effort_hours` assuming 15 mins/file).
+    2.  A secondary site-level summary CSV (`<export_filename>_summary.csv`) will be generated, containing session-level aggregations (`site_id`, `session_datetime`, `elevation_m`, `n_events`, `duration_mean`, `duration_median`, `center_freq_mean`, `effort_hours`). Effort uses measured WAV/FLAC/MP3 duration when readable and a disclosed 0.25-hour fallback otherwise.
 
 ### Headless CLI (batch only)
 
@@ -121,7 +147,7 @@ cargo run -p batch-core --bin batch -- \
 
 | Artifact | What it is |
 | --- | --- |
-| `<output_dir>/batch.db` | SQLite database — the durable source of truth (events + curation state). Resumable and idempotent. |
+| `<recording folder>/batch.db` | SQLite database — the durable source of truth (sessions, files, events, curation state, review telemetry). Resumable and idempotent. |
 | `events.csv` / `events.json` | Exported events joined to file paths, ordered by path then time. Optionally confirmed-only. |
 
 ---
@@ -135,13 +161,18 @@ cargo run -p batch-core --bin batch -- \
 | First `tauri dev` takes minutes | Normal — the first Rust build is slow; later runs are incremental. |
 | Too many false positives | Raise **θ_A** and/or **θ_B** in Setup, or reject them in Review. |
 | Missing real calls | Lower **θ_A**, or add them manually in Review. |
-| Re-ran a folder, nothing happened | Expected — runs are idempotent; processed files are skipped. Use a fresh output DB or clear the results cache to reprocess. |
-| Spectrogram controls unresponsive | They activate once the waveform finishes loading; wait a moment after selecting a file. |
+| Re-ran a folder, nothing happened | Expected — runs are idempotent; processed files are skipped. Use the cache panel in Setup to drop specific files, or clear the cache to reprocess everything. |
+| Re-ran a folder, everything reprocessed | The settings, a model file, or the pipeline code changed since the previous session, so a new session was started. Old results stay in `batch.db` and can be opened with **View Existing Results**. |
+| Spectrogram stays blank with "Generating FFT spectrogram…" | Normal for a 15-minute file: decoding and the FFT take a few seconds. Controls activate when the overlay disappears. |
+| Duplicate, overlapping buzz rows in an export | Produced by pipeline versions before the contained-singleton consolidation fix. Re-run the folder; the code change starts a fresh session. |
 
 Still stuck? Open an issue: <https://github.com/Human-Augment-Analytics/bird-audio/issues>.
 
 For more hands-on workflows and downstream usage:
 - **[Your First Analysis Session](tutorial-first-analysis.md)** — Step-by-step guided analysis walk-through.
+- **[Reviewing Detections](tutorial-review-curation.md)** — Keyboard-first curation and the verification queue.
+- **[Reading the Analytics Tab](tutorial-analytics.md)** — What each panel means and how to spot a bad run.
+- **[Resuming, Re-running and the Results Cache](tutorial-resume-rerun.md)** — Session identity and safe reprocessing.
 - **[Active Learning Loop Tutorial](tutorial-active-learning.md)** — Learn how to fine-tune the model to improve performance.
 - **[Export Cookbook](tutorial-export-cookbook.md)** — Detailed snippets to load and visualize data in R, Python, and Raven Pro.
 

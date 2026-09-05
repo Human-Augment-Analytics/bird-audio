@@ -15,11 +15,16 @@ fn is_audio(path: &Path) -> bool {
 }
 
 /// Walk each root recursively, keep audio files, dedupe by canonical path, sorted.
-pub fn enumerate_audio(roots: &[PathBuf]) -> Vec<PathBuf> {
+/// Any traversal error aborts the scan so a partial result can never be mistaken
+/// for a complete inventory and used to prune durable cache rows.
+pub fn enumerate_audio(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut out: Vec<PathBuf> = Vec::new();
     for root in roots {
-        for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(root) {
+            let entry = entry.map_err(|error| {
+                format!("failed to scan audio root {}: {error}", root.display())
+            })?;
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -34,7 +39,7 @@ pub fn enumerate_audio(roots: &[PathBuf]) -> Vec<PathBuf> {
         }
     }
     out.sort();
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -55,7 +60,7 @@ mod tests {
         touch(&tmp, "b.wav");
         touch(&tmp, "notes.txt"); // ignored
         touch(&sub, "c.flac"); // nested
-        let found = enumerate_audio(&[tmp.clone()]);
+        let found = enumerate_audio(&[tmp.clone()]).unwrap();
         let names: Vec<String> = found
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
@@ -73,8 +78,18 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("bc_enum_dup_{}", std::process::id()));
         fs::create_dir_all(&tmp).unwrap();
         touch(&tmp, "a.wav");
-        let found = enumerate_audio(&[tmp.clone(), tmp.clone()]);
+        let found = enumerate_audio(&[tmp.clone(), tmp.clone()]).unwrap();
         assert_eq!(found.len(), 1);
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn missing_root_is_an_error_not_an_empty_complete_scan() {
+        let missing = std::env::temp_dir().join(format!(
+            "bc_enum_missing_{}_{}",
+            std::process::id(),
+            crate::store::DEFAULT_IDLE_CUTOFF_MS,
+        ));
+        assert!(enumerate_audio(&[missing]).is_err());
     }
 }

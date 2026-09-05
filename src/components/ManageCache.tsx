@@ -4,16 +4,30 @@ import type { CachedFile } from "../types";
 
 interface Props {
   outputDir: string;
-  onCleared: () => void;
+  onCleared: (outputDir: string) => void;
 }
 
 export default function ManageCache({ outputDir, onCleared }: Props) {
   const [files, setFiles] = useState<CachedFile[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getCachedFiles(outputDir).then(setFiles);
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setFiles([]);
+      setSelected(new Set());
+      setError(null);
+      setLoading(true);
+    });
+    getCachedFiles(outputDir)
+      .then((result) => { if (active) setFiles(result); })
+      .catch((reason) => { if (active) setError(`Failed to load cached results: ${String(reason)}`); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [outputDir]);
 
   const toggle = (path: string) => {
@@ -30,13 +44,16 @@ export default function ManageCache({ outputDir, onCleared }: Props) {
   const handleClear = async () => {
     if (selected.size === 0) return;
     setBusy(true);
+    setError(null);
     try {
       if (selected.size === files.length) {
         await clearCache(outputDir); // Nuke the whole DB if all selected
       } else {
         await deleteCachedFiles(outputDir, Array.from(selected));
       }
-      onCleared();
+      onCleared(outputDir);
+    } catch (reason) {
+      setError(`Failed to clear cached results: ${String(reason)}`);
     } finally {
       setBusy(false);
     }
@@ -69,10 +86,13 @@ export default function ManageCache({ outputDir, onCleared }: Props) {
             </span>
           </label>
         ))}
-        {files.length === 0 && (
+        {loading && <div className="empty">Loading cached files…</div>}
+        {!loading && files.length === 0 && (
           <div className="empty">No files found in cache.</div>
         )}
       </div>
+
+      {error && <div className="error-text">{error}</div>}
 
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <button className="primary" style={{ fontSize: 12, padding: "7px 14px" }} onClick={handleClear} disabled={busy || selected.size === 0}>

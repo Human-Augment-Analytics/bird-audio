@@ -16,6 +16,7 @@ FREQ_BIN_LOW = 88
 FREQ_BIN_HIGH = 248           # band = bins [88:248] -> 160 rows
 F_MIN_HZ = 4125.0
 F_MAX_HZ = 11625.0
+STAGE_A_MODEL_CONF = 0.25
 
 # Window stride Δt and duration T_w in seconds (matches paper's 0.6827 s / 2.7467 s).
 DELTA_T = BLOCK_FRAMES * HOP_LENGTH / SAMPLE_RATE                 # ≈ 0.6827 s
@@ -79,6 +80,12 @@ class ConsolidationParams:
     absorb_score: float = 0.72
     absorb_margin: float = 0.08
     absorption: AbsorptionWeights = AbsorptionWeights()
+    # contained-singleton suppression (post duplicate merge): a lone window-level box whose
+    # time span sits inside an established multi-window track of the same call is a partial
+    # view of that track, not a second buzz. Time IoU is too low to merge it (short vs long),
+    # and phase-3 absorption skips windows the track already covers, so it needs its own gate.
+    contained_time: float = 0.90     # fraction of the singleton's duration inside the track
+    contained_freq: float = 0.50     # fraction of the singleton's bandwidth inside the track
 
 
 @dataclass(frozen=True)
@@ -106,4 +113,3 @@ def is_yolo_model(model) -> bool:
         "ultralytics" in module_name or 
         class_name in ("YOLO", "MagicMock")
     )
-

@@ -1,6 +1,6 @@
 //! Export consolidated events to CSV / JSON analysis-ready files.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
@@ -9,9 +9,11 @@ use std::path::Path;
 use rusqlite::params;
 
 use crate::store::Store;
+use crate::audio::audio_duration_hours;
 
 const SELECT: &str = "SELECT f.path, e.t_start, e.t_end, e.duration, e.f_low, e.f_high, \
-     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label, e.retained, e.n_members, e.review_status, \
+     e.center_freq, e.stage_a_conf, e.completeness_score, e.completeness_label, \
+     e.human_completeness, e.completeness_source, e.retained, e.n_members, e.review_status, \
      e.stage_c_label, e.stage_c_score \
      FROM events e JOIN files f ON f.id=e.file_id \
      WHERE e.session_id=?1 \
@@ -41,6 +43,8 @@ struct Row {
     stage_a_conf: f64,
     completeness_score: Option<f64>,
     completeness_label: Option<String>,
+    human_completeness: Option<String>,
+    completeness_source: Option<String>,
     retained: Option<bool>,
     n_members: i64,
     review_status: String,
@@ -70,11 +74,13 @@ fn collect(store: &Store, session_id: i64, complete_only: bool, confirmed_only: 
             stage_a_conf: r.get(7)?,
             completeness_score: r.get(8)?,
             completeness_label: r.get(9)?,
-            retained: r.get::<_, Option<i64>>(10)?.map(|v| v != 0),
-            n_members: r.get(11)?,
-            review_status: r.get(12)?,
-            stage_c_label: r.get(13)?,
-            stage_c_score: r.get(14)?,
+            human_completeness: r.get(10)?,
+            completeness_source: r.get(11)?,
+            retained: r.get::<_, Option<i64>>(12)?.map(|v| v != 0),
+            n_members: r.get(13)?,
+            review_status: r.get(14)?,
+            stage_c_label: r.get(15)?,
+            stage_c_score: r.get(16)?,
             site_id: None,
             elevation_m: None,
             lat: None,
@@ -230,6 +236,58 @@ fn find_session_datetime(path: &str) -> Option<String> {
     None
 }
 
+#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PathMetadata {
+    pub recorder_id: Option<String>,
+    pub elevation_band: Option<String>,
+    pub recording_datetime: Option<String>,
+}
+
+pub fn parse_path_metadata(path: &str) -> PathMetadata {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static RECORDER_RE: OnceLock<Regex> = OnceLock::new();
+    static DATETIME_RE: OnceLock<Regex> = OnceLock::new();
+    let rec_re = RECORDER_RE
+        .get_or_init(|| Regex::new(r"(?i)(PSL\d+|PSM\d+|PSH\d+|H\d+)").unwrap());
+    let dt_re = DATETIME_RE
+        .get_or_init(|| Regex::new(r"(20\d{6})[_-]?([0-2]\d[0-5]\d[0-5]\d)").unwrap());
+
+    let recorder_id = rec_re.find(path).map(|m| m.as_str().to_uppercase());
+    let elevation_band = recorder_id.as_ref().and_then(|rid| {
+        if rid.starts_with("PSL") {
+            Some("Low".to_string())
+        } else if rid.starts_with("PSM") {
+            Some("Medium".to_string())
+        } else if rid.starts_with("PSH") || rid.starts_with('H') {
+            Some("High".to_string())
+        } else {
+            None
+        }
+    });
+
+    let recording_datetime = dt_re.captures(path).and_then(|cap| {
+        let date_str = &cap[1];
+        let time_str = &cap[2];
+        if date_str.len() == 8 && time_str.len() == 6 {
+            Some(format!(
+                "{}-{}-{}T{}:{}:{}",
+                &date_str[0..4], &date_str[4..6], &date_str[6..8],
+                &time_str[0..2], &time_str[2..4], &time_str[4..6]
+            ))
+        } else {
+            None
+        }
+    });
+
+    PathMetadata {
+        recorder_id,
+        elevation_band,
+        recording_datetime,
+    }
+}
+
 fn median(mut values: Vec<f64>) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -251,12 +309,14 @@ fn export_secondary_summary(
     confirmed_only: bool,
     metadata: &[MetadataRow],
 ) -> Result<(), Box<dyn Error>> {
-    let mut stmt = store.conn.prepare("SELECT path FROM files WHERE session_id = ?1")?;
+    let mut stmt = store.conn.prepare(
+        "SELECT path FROM files WHERE session_id = ?1 AND status = 'done'",
+    )?;
     let file_paths: Vec<String> = stmt
         .query_map(params![session_id], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
 
-    let mut group_files: HashMap<(String, String), (f64, HashSet<String>)> = HashMap::new();
+    let mut group_files: HashMap<(String, String), (f64, HashMap<String, (f64, bool)>)> = HashMap::new();
 
     for path in &file_paths {
         let dev_id = find_device_id(path);
@@ -269,8 +329,9 @@ fn export_secondary_summary(
         
         let entry = group_files
             .entry((site_id, session_datetime))
-            .or_insert_with(|| (elevation_m, HashSet::new()));
-        entry.1.insert(path.clone());
+            .or_insert_with(|| (elevation_m, HashMap::new()));
+        let measured = audio_duration_hours(Path::new(path));
+        entry.1.insert(path.clone(), (measured.unwrap_or(0.25), measured.is_some()));
     }
 
     let rows = collect(store, session_id, complete_only, confirmed_only)?;
@@ -301,7 +362,7 @@ fn export_secondary_summary(
     let mut f = File::create(&summary_path)?;
     writeln!(
         f,
-        "site_id,session_datetime,elevation_m,n_events,duration_mean,duration_median,center_freq_mean,effort_hours"
+        "site_id,session_datetime,elevation_m,n_events,duration_mean,duration_median,center_freq_mean,effort_hours,effort_measured_files,effort_defaulted_files"
     )?;
 
     let mut keys: Vec<&(String, String)> = group_files.keys().collect();
@@ -312,7 +373,9 @@ fn export_secondary_summary(
         let events = group_events.get(&(site_id.clone(), session_datetime.clone()));
         
         let n_events = events.map(|v| v.len()).unwrap_or(0);
-        let effort_hours = (files.len() as f64) * 0.25;
+        let effort_hours: f64 = files.values().map(|(hours, _)| hours).sum();
+        let effort_measured_files = files.values().filter(|(_, measured)| *measured).count();
+        let effort_defaulted_files = files.len() - effort_measured_files;
 
         let (dur_mean, dur_median, freq_mean) = if n_events > 0 {
             let evs = events.unwrap();
@@ -330,7 +393,7 @@ fn export_secondary_summary(
 
         writeln!(
             f,
-            "{},{},{},{},{:.4},{:.4},{:.4},{}",
+            "{},{},{},{},{:.4},{:.4},{:.4},{},{},{}",
             csv_escape(site_id),
             csv_escape(session_datetime),
             elevation_m,
@@ -338,7 +401,9 @@ fn export_secondary_summary(
             dur_mean,
             dur_median,
             freq_mean,
-            effort_hours
+            effort_hours,
+            effort_measured_files,
+            effort_defaulted_files,
         )?;
     }
 
@@ -373,12 +438,12 @@ pub fn export_csv(
     if metadata_path.is_some() {
         writeln!(
             f,
-            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members,review_status,stage_c_label,stage_c_score,site_id,elevation_m,lat,lon"
+            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,human_completeness,completeness_source,retained,n_members,review_status,stage_c_label,stage_c_score,site_id,elevation_m,lat,lon"
         )?;
     } else {
         writeln!(
             f,
-            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,retained,n_members,review_status,stage_c_label,stage_c_score"
+            "path,t_start,t_end,duration,f_low,f_high,center_freq,stage_a_conf,completeness_score,completeness_label,human_completeness,completeness_source,retained,n_members,review_status,stage_c_label,stage_c_score"
         )?;
     }
 
@@ -388,7 +453,7 @@ pub fn export_csv(
         if metadata_path.is_some() {
             writeln!(
                 f,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 csv_escape(&r.path),
                 r.t_start,
                 r.t_end,
@@ -399,6 +464,8 @@ pub fn export_csv(
                 r.stage_a_conf,
                 r.completeness_score.map(|v| v.to_string()).unwrap_or_default(),
                 r.completeness_label.clone().unwrap_or_default(),
+                r.human_completeness.clone().unwrap_or_default(),
+                r.completeness_source.clone().unwrap_or_default(),
                 r.retained.map(|v| v.to_string()).unwrap_or_default(),
                 r.n_members,
                 csv_escape(&r.review_status),
@@ -412,7 +479,7 @@ pub fn export_csv(
         } else {
             writeln!(
                 f,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 csv_escape(&r.path),
                 r.t_start,
                 r.t_end,
@@ -423,6 +490,8 @@ pub fn export_csv(
                 r.stage_a_conf,
                 r.completeness_score.map(|v| v.to_string()).unwrap_or_default(),
                 r.completeness_label.clone().unwrap_or_default(),
+                r.human_completeness.clone().unwrap_or_default(),
+                r.completeness_source.clone().unwrap_or_default(),
                 r.retained.map(|v| v.to_string()).unwrap_or_default(),
                 r.n_members,
                 csv_escape(&r.review_status),
@@ -551,6 +620,87 @@ pub fn export_raven(
     Ok(rows.len())
 }
 
+const SELECT_TELEMETRY: &str = "SELECT r.id, r.session_id, r.at_ms, r.action, r.dwell_ms, \
+     r.event_id, r.file_id, f.path, e.t_start, e.t_end, e.review_status, e.source, r.meta \
+     FROM review_events r \
+     LEFT JOIN events e ON e.id=r.event_id \
+     LEFT JOIN files f ON f.id=COALESCE(r.file_id, e.file_id) \
+     WHERE r.session_id=?1 \
+     ORDER BY r.at_ms, r.id";
+
+struct TelemetryRow {
+    id: i64,
+    session_id: i64,
+    at_ms: i64,
+    action: String,
+    dwell_ms: Option<i64>,
+    event_id: Option<i64>,
+    file_id: Option<i64>,
+    path: Option<String>,
+    t_start: Option<f64>,
+    t_end: Option<f64>,
+    review_status: Option<String>,
+    source: Option<String>,
+    meta: Option<String>,
+}
+
+fn collect_telemetry(store: &Store, session_id: i64) -> rusqlite::Result<Vec<TelemetryRow>> {
+    let mut stmt = store.conn.prepare(SELECT_TELEMETRY)?;
+    let rows = stmt.query_map(params![session_id], |r| {
+        Ok(TelemetryRow {
+            id: r.get(0)?,
+            session_id: r.get(1)?,
+            at_ms: r.get(2)?,
+            action: r.get(3)?,
+            dwell_ms: r.get(4)?,
+            event_id: r.get(5)?,
+            file_id: r.get(6)?,
+            path: r.get(7)?,
+            t_start: r.get(8)?,
+            t_end: r.get(9)?,
+            review_status: r.get(10)?,
+            source: r.get(11)?,
+            meta: r.get(12)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Write the session's `review_events` joined to event and file context as CSV.
+pub fn export_telemetry_csv(
+    store: &Store,
+    session_id: i64,
+    path: &Path,
+) -> Result<usize, Box<dyn Error>> {
+    let rows = collect_telemetry(store, session_id)?;
+    let mut f = File::create(path)?;
+    writeln!(
+        f,
+        "id,session_id,at_ms,action,dwell_ms,event_id,file_id,path,t_start,t_end,review_status,source,meta"
+    )?;
+    let num = |v: Option<f64>| v.map(|x| x.to_string()).unwrap_or_default();
+    for r in &rows {
+        writeln!(
+            f,
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            r.id,
+            r.session_id,
+            r.at_ms,
+            csv_escape(&r.action),
+            r.dwell_ms.map(|v| v.to_string()).unwrap_or_default(),
+            r.event_id.map(|v| v.to_string()).unwrap_or_default(),
+            r.file_id.map(|v| v.to_string()).unwrap_or_default(),
+            csv_escape(r.path.as_deref().unwrap_or("")),
+            num(r.t_start),
+            num(r.t_end),
+            csv_escape(r.review_status.as_deref().unwrap_or("")),
+            csv_escape(r.source.as_deref().unwrap_or("")),
+            csv_escape(r.meta.as_deref().unwrap_or("")),
+        )?;
+    }
+    Ok(rows.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,6 +719,9 @@ mod tests {
                 theta_a: 0.0,
                 theta_b: 0.53,
                 species_name: None,
+                config_key: "test", worker_cmd: None, cwd: None,
+                localizer_path: None, classifier_path: None, classifier_c_path: None,
+                f_min_hz: None, f_max_hz: None,
             })
             .unwrap();
         s.add_files(sid, &[
@@ -615,6 +768,8 @@ mod tests {
         assert_eq!(n, 2);
         let body = std::fs::read_to_string(&p).unwrap();
         assert!(body.starts_with("path,t_start"));
+        let header = body.lines().next().unwrap();
+        assert!(header.contains("human_completeness,completeness_source"));
         assert_eq!(body.trim().lines().count(), 3); // header + 2 rows
         std::fs::remove_file(&p).ok();
     }
@@ -650,6 +805,35 @@ mod tests {
         let p = std::env::temp_dir().join(format!("bc_conf_{}.json", std::process::id()));
         let n = export_json(&s, sid, &p, false, true, None).unwrap();
         assert_eq!(n, 1);
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn telemetry_export_writes_joined_rows() {
+        use crate::store::NewReviewEvent;
+        let (s, sid) = store_with_events();
+        let eid: i64 = s.conn.query_row(
+            "SELECT id FROM events WHERE session_id=?1 ORDER BY t_start LIMIT 1",
+            rusqlite::params![sid], |r| r.get(0)).unwrap();
+        s.set_event_review(eid, "confirmed", None, None).unwrap();
+        s.log_review_event_at(&NewReviewEvent {
+            session_id: sid, event_id: None, file_id: None, action: "open_file", meta: None }, 1_000).unwrap();
+        s.log_review_event_at(&NewReviewEvent {
+            session_id: sid, event_id: Some(eid), file_id: None, action: "confirm",
+            meta: Some("{\"status\":\"confirmed\"}") }, 4_000).unwrap();
+
+        let p = std::env::temp_dir().join(format!("bc_telem_{}.csv", std::process::id()));
+        let n = export_telemetry_csv(&s, sid, &p).unwrap();
+        assert_eq!(n, 2);
+        let body = std::fs::read_to_string(&p).unwrap();
+        let lines: Vec<&str> = body.trim().lines().collect();
+        assert_eq!(lines.len(), 3); // header + 2 rows
+        assert!(lines[0].starts_with("id,session_id,at_ms,action,dwell_ms"));
+        assert!(lines[1].contains("open_file"));
+        assert!(lines[2].contains("confirm"));
+        assert!(lines[2].contains("PSL2_20250611_080000.wav")); // joined file path
+        assert!(lines[2].contains("confirmed")); // joined review_status
+        assert!(lines[2].contains("3000")); // dwell_ms
         std::fs::remove_file(&p).ok();
     }
 
@@ -691,9 +875,19 @@ mod tests {
         assert!(summary_body.contains("SITE_A"));
         assert!(summary_body.contains("SITE_B"));
         assert!(summary_body.contains("0.25")); // effort hours
+        assert!(summary_body.contains("effort_defaulted_files"));
         
         std::fs::remove_file(&meta_p).ok();
         std::fs::remove_file(&out_p).ok();
         std::fs::remove_file(&summary_p).ok();
+    }
+
+    #[test]
+    fn test_audiomoth_path_metadata_parsing() {
+        let path = "/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/2025/Low/PSL1/PSL1_20250619_080000.WAV";
+        let meta = parse_path_metadata(path);
+        assert_eq!(meta.recorder_id, Some("PSL1".to_string()));
+        assert_eq!(meta.elevation_band, Some("Low".to_string()));
+        assert_eq!(meta.recording_datetime, Some("2025-06-19T08:00:00".to_string()));
     }
 }

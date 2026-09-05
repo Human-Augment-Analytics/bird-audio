@@ -94,6 +94,20 @@ def classify_crop(model, crop_rgb: np.ndarray, complete_class: str = "full") -> 
         # Extract prediction probability
         out_features = outputs.shape[-1]
         if out_features == 1:
+            positive_class = getattr(model, "positive_class", complete_class)
+            if positive_class != complete_class:
+                raise ValueError(
+                    f"Single-output Stage B model declares positive_class={positive_class!r}, "
+                    f"not the required completeness class {complete_class!r}"
+                )
+            output_kind = getattr(model, "output_kind", "logit")
+            if output_kind == "probability":
+                probability = float(outputs.item())
+                if not 0.0 <= probability <= 1.0:
+                    raise ValueError("Stage B probability output is outside [0, 1]")
+                return probability
+            if output_kind != "logit":
+                raise ValueError(f"Unsupported Stage B output_kind={output_kind!r}")
             return float(torch.sigmoid(outputs).item())
         else:
             # Resolve class index dynamically using model's names or classes if present
@@ -116,7 +130,10 @@ def classify_crop(model, crop_rgb: np.ndarray, complete_class: str = "full") -> 
                         break
 
             if idx is None:
-                idx = 0
+                raise ValueError(
+                    f"Cannot locate completeness class {complete_class!r} in the model's "
+                    "names/classes metadata; refusing to guess a class index"
+                )
 
             return float(torch.softmax(outputs, dim=-1)[..., idx].item())
     else:

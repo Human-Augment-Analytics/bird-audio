@@ -13,6 +13,8 @@ pub struct Worker {
     stdin: ChildStdin,
     rx: Receiver<String>,
     pub device: String,
+    /// Provenance the worker captured while loading its models; None for older workers.
+    pub manifest: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -39,6 +41,13 @@ impl Worker {
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
+        // Put the worker in its own process group so that killing it also kills any
+        // grandchildren (e.g. the python interpreter spawned by a `uv run` wrapper).
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         let mut child = cmd.spawn().map_err(WorkerError::Spawn)?;
         let stdin = child.stdin.take().ok_or(WorkerError::Closed)?;
         let stdout = child.stdout.take().ok_or(WorkerError::Closed)?;
@@ -61,6 +70,7 @@ impl Worker {
             stdin,
             rx,
             device: String::new(),
+            manifest: None,
         };
 
         let start = Instant::now();
@@ -74,8 +84,9 @@ impl Worker {
                         continue; // Skip library logs
                     }
                     match parse_msg(&line) {
-                        Ok(WorkerMsg::Ready { device }) => {
+                        Ok(WorkerMsg::Ready { device, manifest }) => {
                             w.device = device;
+                            w.manifest = manifest;
                             break;
                         }
                         Ok(other) => {
@@ -112,16 +123,28 @@ impl Worker {
     }
 
     pub fn kill(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        kill_process_tree(&mut self.child);
     }
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        kill_process_tree(&mut self.child);
     }
+}
+
+/// Kill the worker and every process in its group, then reap it.
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // The child was spawned as its own process-group leader, so its pid is the pgid.
+        // SAFETY: killpg is a plain syscall wrapper; a stale pid only yields ESRCH.
+        unsafe {
+            libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg(test)]
@@ -161,6 +184,43 @@ mod tests {
             }
             other => panic!("unexpected: {:?}", other),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_takes_down_grandchildren() {
+        // Mimic a `uv run python …` wrapper: a shell that forks a long-lived sibling
+        // process and then runs the real worker.
+        let pid_file = std::env::temp_dir().join(format!("worker-kill-test-{}.pid", std::process::id()));
+        let script = format!(
+            "sleep 300 & echo $! > '{}'; exec python3 '{}'",
+            pid_file.display(),
+            fake_args()[0]
+        );
+        let mut w = Worker::spawn("sh", &["-c".to_string(), script], None).unwrap();
+        let start = Instant::now();
+        let orphan: i32 = loop {
+            if let Ok(text) = std::fs::read_to_string(&pid_file) {
+                if let Ok(pid) = text.trim().parse() {
+                    break pid;
+                }
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "pid file never written");
+            thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(unsafe { libc::kill(orphan, 0) }, 0, "sleep should be alive before kill");
+        w.kill();
+        let start = Instant::now();
+        loop {
+            // ESRCH once the process is gone; a zombie still answers kill(pid, 0) with 0,
+            // but the sleep is reparented to init/launchd which reaps it promptly.
+            if unsafe { libc::kill(orphan, 0) } != 0 {
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(5), "grandchild survived kill()");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let _ = std::fs::remove_file(&pid_file);
     }
 
     #[test]

@@ -2,16 +2,36 @@
 
 A desktop app for automated detection and curation of bird vocalizations from field recordings, optimized for the Hume's Leaf Warbler (*Phylloscopus humei*).
 
-Built with Tauri + React (frontend) and Rust + Python (backend). One app, two modes:
+Built with Tauri + React (frontend) and Rust + Python (backend). One app, three workspaces:
 
 - **Batch mode** — pick a folder, set thresholds, run the ML pipeline across all recordings.
 - **Review mode** — step through files, inspect detections on a spectrogram, confirm/reject/edit ML events and add manual annotations.
+- **Analytics** — inspect completeness, event distributions, effort-normalized recorder summaries, and review coverage.
 
-> 📖 **Guides & Tutorials:**
-> - **[Usage Tutorial](docs/USAGE.md)** — Installation, basic controls, and troubleshooting.
-> - **[Your First Analysis Session](docs/tutorial-first-analysis.md)** — Guided end-to-end lab walkthrough of running and curating a batch.
-> - **[Active Learning Loop Tutorial](docs/tutorial-active-learning.md)** — Guided workflow to improve the model on your own data.
-> - **[Export Cookbook](docs/tutorial-export-cookbook.md)** — Copy-paste code recipes for Python, R (warbleR), and Cornell Raven Pro.
+## Documentation
+
+Start with the usage guide, then follow the tutorials in order. All of them use screenshots from the current build.
+
+### Tutorials
+
+| Tutorial | What you learn |
+|---|---|
+| [Usage Guide](docs/USAGE.md) | Install, launch, the three workspaces, export formats, troubleshooting. |
+| [Your First Analysis Session](docs/tutorial-first-analysis.md) | End-to-end: run a batch, read the counts, review a file, export a clean dataset. |
+| [Reviewing Detections](docs/tutorial-review-curation.md) | Keyboard-first curation, fixing bounds, drawing missed calls, undo/redo, the verification queue. |
+| [Reading the Analytics Tab](docs/tutorial-analytics.md) | What every panel measures, what it cannot tell you, a five-minute run check. |
+| [Resuming, Re-running and the Results Cache](docs/tutorial-resume-rerun.md) | How a re-run picks a session, what changes start a new one, re-processing files, cancelling. |
+| [Export Cookbook](docs/tutorial-export-cookbook.md) | Load exports in Python, R (warbleR) and Raven Pro. |
+| [Active Learning Loop](docs/tutorial-active-learning.md) | Turn curated events into training data and fine-tune the detector. |
+
+### Reference
+
+| Document | Contents |
+|---|---|
+| [Feature Guide](docs/feature-guide.md) | Feature-by-feature "what it does / why useful / limit" tables on a bounded Sural AudioMoth sample. |
+| [App Reference](docs/batch-app.md) | Source layout, Tauri command surface, session identity and resume rules, SQLite schema. |
+| [Architecture](docs/architecture.md) | Quarter-step YOLO streaming, six-phase consolidation, Stage A / Stage B, thresholds, persistence, reproducibility. |
+| [Advanced Search and Active Learning](docs/advanced-search-active-learning.md) | The PCEN, active-learning and query-by-example command-line tools. |
 
 ## Technical Architecture
 
@@ -69,9 +89,11 @@ cargo run -p batch-core --bin batch -- \
 
 ### Batch Mode (Setup → Run)
 
-1. **Setup** — pick an input folder, output directory, and optionally adjust `θ_A` (detection sensitivity) and `θ_B` (quality filter).
-2. **Run** — the pipeline processes all audio files in the folder. Progress is shown per-file; results are aggregated into `batch.db`.
-3. **Export** — save detected events as CSV or JSON. The *confirmed only* option exports only events you have confirmed in Review mode.
+1. **Setup** — pick a recording folder and optionally adjust `θ_A` (detection sensitivity) and `θ_B` (quality filter). Results always live in `batch.db` inside that folder.
+2. **Run** — the pipeline processes all audio files in the folder. Progress, speed and ETA are shown live; results are aggregated into `batch.db` as files finish.
+3. **Export** — save detected events as CSV, JSON, warbleR CSV or a Raven selection table. The *confirmed only* option exports only events you have confirmed in Review mode.
+
+Re-running the same folder with the same settings resumes the existing session and skips finished files. Changing thresholds, the target band, a model file, or the pipeline code starts a fresh session so results are never mixed across configurations. See [Resuming and re-running](docs/tutorial-resume-rerun.md).
 
 ### Review Mode
 
@@ -79,15 +101,52 @@ After a batch run, switch to Review mode to curate the ML detections:
 
 - A file list shows all processed recordings. Click a file to load its events.
 - Events are displayed on an interactive spectrogram with bounding boxes.
-- For each event you can: **confirm**, **reject**, or reset to *unreviewed*.
+- For each event you can: **confirm**, **reject**, or reset to *unreviewed*, from the mouse or the keyboard (`C` / `X` / `U`, `J` / `K` to move, `N` for the next unreviewed).
 - Edit an event's time/frequency bounds by dragging on the spectrogram.
 - Add manual events by drawing a box on the spectrogram.
-- Delete false positives entirely.
+- Delete false positives entirely, with undo and redo.
+- Open the **Verification plan** panel to get a ranked queue of the detections whose review most tightens the precision estimate.
 - Use the confirmed-only export to output only your verified detections.
+
+## Analysis & reproducibility tools
+
+Command-line tools that turn a completed batch into analysis-ready results. All read the
+`batch.db` produced by a run.
+
+```bash
+# Effort-normalized recorder/band summaries, and formal tests of the elevation predictions
+uv run python scripts/ecological_analysis.py --db output/batch.db --metadata deployments.csv \
+  --out output/ecology --measure-effort
+
+# Does the ecological conclusion survive the detector's threshold choices?
+uv run python scripts/threshold_sensitivity.py --db output/batch.db --out output/sensitivity
+
+# How many more detections must a human verify to pin precision to +/-0.05, and which ones?
+uv run python scripts/verification_planner.py --db output/batch.db --threshold 0.5 \
+  --target-half-width 0.05 --strategy uncertainty --budget 50
+
+# Pin model digests, pipeline constants, environment and git state; --compare diffs two runs
+uv run python scripts/run_manifest.py --db output/batch.db --out output/manifest.json
+
+# Emit a runnable reproduce.sh for a recorded session
+uv run python scripts/export_protocol.py --db output/batch.db --out output/protocol
+```
+
+`ecological_analysis.py` refuses to fit a model below three recorders and reserves
+"NOT SUPPORTED" for a significant effect in the *opposite* direction — non-significance is
+reported as INCONCLUSIVE, never as evidence of no effect. `verification_planner.py` reports
+precision with a Wilson interval and returns `None`, not `0.0`, when nothing has been verified yet.
+
+### Analysing a different species
+
+The pipeline is not hard-wired to the Hume's Leaf Warbler. Under **Analysis target** in the
+Setup screen you can set the species/call name, the analysis frequency band, and the Stage A/B/C
+model paths; the headless worker takes the same values as `--f-min-hz`, `--f-max-hz`,
+`--localizer`, `--classifier`, `--classifier-c`. Leave a field blank to keep the bundled default.
 
 ## Output Structure
 
-All state is stored in `<output_dir>/batch.db` (SQLite). The database is the durable checkpoint: runs are resumable and idempotent — done files are skipped on re-run, and events accumulate curation annotations across Review sessions.
+All state is stored in `<recording folder>/batch.db` (SQLite). The database is the durable checkpoint: runs are resumable and idempotent — done files are skipped on re-run, and events accumulate curation annotations across Review sessions.
 
 Export artifacts:
 - `events.csv` / `events.json`: detected (and optionally curated) events joined to file paths, ordered by path then time.

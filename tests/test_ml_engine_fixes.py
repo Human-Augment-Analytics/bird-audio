@@ -62,6 +62,15 @@ class DummyPyTorchModelFailing(torch.nn.Module):
     def forward(self, x):
         raise RuntimeError("Forward pass failed")
 
+
+class DummyBinaryStageCModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.dummy_param = torch.nn.Parameter(torch.zeros(1))
+
+    def forward(self, x):
+        return torch.tensor([[3.0]])
+
 def test_non_yolo_stage_c_classifier(tmp_path):
     wav_path = tmp_path / "test.wav"
     sr = 48000
@@ -110,6 +119,16 @@ def test_non_yolo_stage_c_classifier(tmp_path):
                 assert event["stage_c_label"] == "hlw_species"
                 assert event["stage_c_score"] > 0.99
 
+        pipeline.classifier_c = DummyBinaryStageCModel()
+        binary_result = pipeline.process_file(
+            str(wav_path), theta_a=0.1, theta_b=0.5, species_name="hlw_species"
+        )
+        assert binary_result["status"] == "success"
+        retained = [event for event in binary_result["events"] if event["retained"]]
+        assert retained
+        assert all(event["stage_c_label"] == "hlw_species" for event in retained)
+        assert all(event["stage_c_score"] > 0.9 for event in retained)
+
 def test_non_yolo_stage_c_classifier_failing(tmp_path):
     wav_path = tmp_path / "test.wav"
     sr = 48000
@@ -150,13 +169,8 @@ def test_non_yolo_stage_c_classifier_failing(tmp_path):
             classifier_c="dummy_classifier_c.pt"
         )
         
-        assert result["status"] == "success"
-        assert result["n_events"] > 0
-        assert result["n_retained"] > 0
-        for event in result["events"]:
-            if event["retained"]:
-                assert event["stage_c_label"] == "unknown"
-                assert event["stage_c_score"] == 0.0
+        assert result["status"] == "error"
+        assert "Failed to execute Stage C classifier" in result["message"]
 
 
 def test_narrow_and_nyquist_frequency_bounds(tmp_path):
@@ -165,20 +179,19 @@ def test_narrow_and_nyquist_frequency_bounds(tmp_path):
     from scripts.ml_engine import BirdAudioPipeline
     
     wav_path = tmp_path / "test_bounds.wav"
-    sr = 16000
+    sr = 48000
     y = np.zeros(int(1.0 * sr), dtype=np.float32)
     sf.write(str(wav_path), y, sr)
 
     pipeline = BirdAudioPipeline(localizer_path=None, classifier_path=None)
     
-    # 1. Minimum frequency exceeding Nyquist (sr/2.0 = 8000 Hz)
-    res_nyquist = pipeline.process_file(str(wav_path), f_min_hz=9000.0, f_max_hz=10000.0)
+    # 1. Minimum frequency exceeding Nyquist (sr/2.0 = 24000 Hz)
+    res_nyquist = pipeline.process_file(str(wav_path), f_min_hz=25000.0, f_max_hz=26000.0)
     assert res_nyquist["status"] == "error"
     assert "must be below the Nyquist frequency" in res_nyquist["message"]
 
     # 2. Too narrow frequency range resulting in less than 1 bin
-    # For n_fft = 1024, sr = 16000, 1 bin maps to 16000 / 1024 = 15.625 Hz.
-    # If f_min = 2000 and f_max = 2005: both round to index round(2000 * 1024 / 16000) = 128.
+    # For n_fft = 1024, sr = 48000, one bin spans 46.875 Hz.
     res_narrow = pipeline.process_file(str(wav_path), f_min_hz=2000.0, f_max_hz=2005.0)
     assert res_narrow["status"] == "error"
     assert "maps to less than 1 bin" in res_narrow["message"]
@@ -210,12 +223,15 @@ def test_stageb_classify_crop():
     prob1 = stageb.classify_crop(model_dim1, crop)
     assert isinstance(prob1, float)
     assert prob1 > 0.99
+    model_dim1.positive_class = "not_full"
+    with pytest.raises(ValueError, match="positive_class"):
+        stageb.classify_crop(model_dim1, crop)
     
-    # Test standard PyTorch model (dim=2) defaulting to index 0
+    # A multi-class model without semantic class metadata is ambiguous. Guessing
+    # index 0 previously made model-export changes silently invert completeness.
     model_dim2 = DummyStageBPyTorchModel(out_features=2, return_high_at_idx=0)
-    prob2 = stageb.classify_crop(model_dim2, crop)
-    assert isinstance(prob2, float)
-    assert prob2 > 0.99
+    with pytest.raises(ValueError, match="refusing to guess"):
+        stageb.classify_crop(model_dim2, crop)
     
     # Test standard PyTorch model (dim=2) resolving index dynamically via names
     model_dim2_dynamic = DummyStageBPyTorchModel(out_features=2, return_high_at_idx=1)
@@ -247,10 +263,10 @@ def test_stageb_classify_crop():
 def test_f_max_nyquist_capping_and_map_box(tmp_path):
     import numpy as np
     import soundfile as sf
-    from birdpipe import coords
+    from birdpipe import constants as C, coords, stageb
     
     wav_path = tmp_path / "test_nyquist.wav"
-    sr = 16000
+    sr = 48000
     y = np.zeros(int(10.0 * sr), dtype=np.float32)
     sf.write(str(wav_path), y, sr)
 
@@ -260,24 +276,49 @@ def test_f_max_nyquist_capping_and_map_box(tmp_path):
 
     with patch("scripts.ml_engine.YOLO", return_value=mock_localizer), \
          patch("scripts.ml_engine.os.path.exists", return_value=True), \
-         patch("scripts.ml_engine.coords.map_box", wraps=coords.map_box) as mock_map_box:
+         patch("scripts.ml_engine.coords.map_box", wraps=coords.map_box) as mock_map_box, \
+         patch("scripts.ml_engine.stageb.build_crop", wraps=stageb.build_crop) as mock_build_crop, \
+         patch("scripts.ml_engine.stageb.classify_crop", return_value=1.0):
         
         pipeline = BirdAudioPipeline(localizer_path="dummy_localizer.pt", classifier_path=None, device="cpu")
+        pipeline.classifier = object()
 
-        # requested f_max_hz is 12000, which is higher than Nyquist (8000.0)
+        # requested f_max_hz is higher than the pinned 48 kHz input's Nyquist.
         result = pipeline.process_file(
             str(wav_path),
             f_min_hz=2000.0,
-            f_max_hz=12000.0,
+            f_max_hz=30000.0,
             localizer="dummy_localizer.pt"
         )
         
         assert result["status"] == "success"
         assert mock_map_box.call_count > 0
         _, called_kwargs = mock_map_box.call_args
-        assert called_kwargs.get("f_max") == 8000.0
+        assert called_kwargs.get("f_max") == 24000.0
         assert called_kwargs.get("f_min") == 2000.0
+        assert called_kwargs.get("dt") == pytest.approx(C.BLOCK_FRAMES * C.HOP_LENGTH / sr)
+        assert called_kwargs.get("tw") == pytest.approx(
+            ((C.WINDOW_FRAMES - 1) * C.HOP_LENGTH + 1024) / sr
+        )
+        assert mock_build_crop.call_count > 0
+        assert mock_build_crop.call_args.kwargs["sec_per_frame"] == pytest.approx(C.HOP_LENGTH / sr)
+
+        zero_based = pipeline.process_file(
+            str(wav_path),
+            f_min_hz=0.0,
+            f_max_hz=4000.0,
+            localizer="dummy_localizer.pt",
+        )
+        assert zero_based["status"] == "success"
 
 
+def test_non_pinned_sample_rate_is_rejected_before_inference(tmp_path):
+    import numpy as np
+    import soundfile as sf
 
-
+    wav_path = tmp_path / "unsupported-rate.wav"
+    sf.write(str(wav_path), np.zeros(16000, dtype=np.float32), 16000)
+    pipeline = BirdAudioPipeline(localizer_path=None, classifier_path=None, device="cpu")
+    result = pipeline.process_file(str(wav_path))
+    assert result["status"] == "error"
+    assert "requires 48000 Hz" in result["message"]

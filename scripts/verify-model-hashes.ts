@@ -16,7 +16,7 @@ console.log('Verifying model hashes...\n');
 
 let allPassed = true;
 
-for (const [id, model] of Object.entries(MODELS)) {
+for (const model of Object.values(MODELS)) {
   const fullPath = `./public${model.path}`;
   const actualHash = calculateHash(fullPath);
 

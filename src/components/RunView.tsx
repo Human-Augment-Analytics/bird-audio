@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import type { FileRow, Progress, StartResult, Summary, ExportedEvent } from "../types";
+import { useMemo, useState } from "react";
+import type { FileRow, Progress, StartResult, Summary } from "../types";
 import FileTable from "./FileTable";
-import { pickFile, getSessionEvents } from "../api";
-import SanityCheckViews from "./SanityCheckViews";
+import { pickFile } from "../api";
 
 interface Props {
   start: StartResult;
@@ -12,26 +11,7 @@ interface Props {
   throughput: number; // files/sec
   onExport: (fmt: string, completeOnly: boolean, confirmedOnly: boolean, metadataPath: string | null) => void;
   onCancel: () => void;
-  outputDir: string;
-}
-
-/* Eased count-up for the completion stats — adds a beat of delight on finish. */
-function useCountUp(target: number, run: boolean, duration = 1000) {
-  const [val, setVal] = useState(0);
-  useEffect(() => {
-    if (!run) { setVal(0); return; }
-    let raf = 0;
-    const start = performance.now();
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / duration);
-      const eased = 1 - Math.pow(1 - t, 3);
-      setVal(Math.round(target * eased));
-      if (t < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target, run, duration]);
-  return val;
+  cancelled: boolean;
 }
 
 function Stat({ label, value, color }: { label: string; value: number | string; color?: string }) {
@@ -49,48 +29,34 @@ const FILTERS: { key: "all" | "done" | "failed"; label: string }[] = [
   { key: "failed", label: "Failed" },
 ];
 
-export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel, outputDir }: Props) {
+export default function RunView({ start, progress, summary, rows, throughput, onExport, onCancel, cancelled }: Props) {
   const [filter, setFilter] = useState<"all" | "done" | "failed">("all");
   const [metadataPath, setMetadataPath] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<string>("csv");
   const [exportCompleteOnly, setExportCompleteOnly] = useState<boolean>(false);
   const [exportConfirmedOnly, setExportConfirmedOnly] = useState<boolean>(false);
-  const [events, setEvents] = useState<ExportedEvent[]>([]);
-  const [loadingEvents, setLoadingEvents] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
   const done = summary !== null;
-
-  useEffect(() => {
-    if (done && start.session_id) {
-      setLoadingEvents(true);
-      getSessionEvents(outputDir, start.session_id)
-        .then((evs) => {
-          setEvents(evs);
-          setLoadingEvents(false);
-        })
-        .catch((err) => {
-          console.error("Failed to load session events:", err);
-          setLoadError(String(err));
-          setLoadingEvents(false);
-        });
-    } else {
-      setEvents([]);
-    }
-  }, [done, start.session_id, outputDir]);
-  const total = progress?.total ?? summary?.total ?? start.total_files;
-  const doneN = progress?.done ?? summary?.done ?? 0;
-  const failedN = progress?.failed ?? summary?.failed ?? 0;
-  const pendingN = progress?.pending ?? summary?.pending ?? 0;
-  const inProg = progress?.in_progress ?? summary?.in_progress ?? 0;
+  const completed = summary?.status === "done";
+  const failed = summary?.status === "failed";
+  const doneN = summary?.done ?? progress?.done ?? rows.filter((r) => r.status === "done").length;
+  const hasCompletedFiles = done || doneN > 0;
+  const total = summary?.total ?? progress?.total ?? start.total_files;
+  const failedN = summary?.failed ?? progress?.failed ?? 0;
+  // Progress events only fire when a file finishes, so between files the snapshot says
+  // "0 active / N pending" while a worker is already busy. Rows are polled every second
+  // and reflect the claimed file, so prefer them while the run is live.
+  const rowsLoaded = rows.length > 0;
+  const pendingN = summary?.pending ?? (rowsLoaded ? rows.filter((r) => r.status === "pending").length : progress?.pending ?? 0);
+  const inProg = summary?.in_progress ?? (rowsLoaded ? rows.filter((r) => r.status === "in_progress").length : progress?.in_progress ?? 0);
   const pct = total > 0 ? Math.round(((doneN + failedN) / total) * 100) : 0;
-  const eta = throughput > 0 ? Math.round(pendingN / throughput) : null;
+  const remainingN = pendingN + inProg;
+  const eta = throughput > 0 && remainingN > 0 ? Math.round(remainingN / throughput) : null;
   const lastMs = progress?.last_elapsed_ms ?? null;
   const elapsedTotalMs = progress?.elapsed_ms_total ?? null;
 
-  const nEvents = useCountUp(summary?.n_events ?? 0, done);
-  const nComplete = useCountUp(summary?.n_complete ?? 0, done);
-  const nRetained = useCountUp(summary?.n_retained ?? 0, done);
+  const nEvents = summary?.n_events ?? rows.reduce((acc, r) => acc + (r.n_events || 0), 0);
+  const nComplete = summary?.n_complete ?? rows.reduce((acc, r) => acc + (r.n_complete || 0), 0);
+  const nRetained = summary?.n_retained ?? rows.reduce((acc, r) => acc + (r.n_retained || 0), 0);
 
   const etaTime = useMemo(() => {
     if (!eta || eta <= 0) return null;
@@ -123,13 +89,14 @@ export default function RunView({ start, progress, summary, rows, throughput, on
     <div className="card reveal" style={{ display: "grid", gap: 18 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
         <h2 style={{ fontSize: 24, display: "flex", alignItems: "center", gap: 12 }}>
-          {!done && <span className="dot dot--ok" />}
-          {done ? "Analysis complete" : "Listening to recordings…"}
+          {!done && <span className={`dot ${cancelled ? "dot--bad" : "dot--ok"}`} />}
+          {completed ? "Analysis complete" : failed ? "Analysis completed with file failures" :
+            done || cancelled ? (done ? "Analysis cancelled" : "Cancelling analysis…") : "Listening to recordings…"}
         </h2>
         <span className="eyebrow">session {start.session_id} · {pct}%</span>
       </div>
 
-      <div className={`progress ${done ? "progress--done" : ""}`}>
+      <div className={`progress ${completed ? "progress--done" : ""}`}>
         <div className="progress__fill" style={{ width: `${pct}%` }} />
       </div>
 
@@ -139,7 +106,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         <Stat label="Active" value={inProg} color="var(--amber)" />
         <Stat label="Remaining" value={pendingN} color="var(--text-dim)" />
         <Stat label="Total" value={total} />
-        <Stat label="Speed" value={`${throughput.toFixed(1)}/s`} />
+        <Stat label="Speed" value={throughput > 0 ? `${(throughput * 60).toFixed(1)}/min` : "—"} />
         <Stat label="Last (ms)" value={lastMs !== null ? String(lastMs) : "—"} />
         <Stat label="Elapsed" value={elapsedTotalMs != null ? `${Math.round(elapsedTotalMs / 1000)}s` : "—"} />
         <Stat label="ETA" value={etaTime || "—"} />
@@ -151,7 +118,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         </div>
       )}
 
-      {done && summary && (
+      {hasCompletedFiles && (
         <div className="summary">
           <div className="summary__cell">
             <div className="eyebrow">Detections found</div>
@@ -168,7 +135,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         </div>
       )}
 
-      {done && (
+      {hasCompletedFiles && (
         <div className="card" style={{ border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 10, padding: "16px 20px", background: "rgba(255, 255, 255, 0.01)", display: "grid", gap: 14 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Export Options</h3>
           
@@ -250,23 +217,6 @@ export default function RunView({ start, progress, summary, rows, throughput, on
         </div>
       )}
 
-      {done && !loadingEvents && !loadError && events.length > 0 && (
-        <SanityCheckViews events={events} />
-      )}
-
-      {done && loadingEvents && (
-        <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 32, textAlign: "center", color: "var(--text-dim)", background: "var(--surface)", borderRadius: "var(--radius)", border: "1px solid var(--line)", boxShadow: "var(--shadow)" }}>
-          <div className="loading-spinner" />
-          <div style={{ fontSize: "11px", fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>LOADING DIAGNOSTIC EVENTS…</div>
-        </div>
-      )}
-
-      {done && loadError && (
-        <div className="card" style={{ padding: 20, textAlign: "center", color: "var(--coral)" }}>
-          Failed to load diagnostics: {loadError}
-        </div>
-      )}
-
       <div className="filter-bar">
         <span className="eyebrow" style={{ marginRight: 4 }}>Filter View</span>
         {FILTERS.map((f) => (
@@ -275,7 +225,7 @@ export default function RunView({ start, progress, summary, rows, throughput, on
           </button>
         ))}
         <span style={{ flex: 1 }} />
-        {!done && <button onClick={onCancel}>Cancel run</button>}
+        {!done && <button onClick={onCancel} disabled={cancelled}>{cancelled ? "Cancelling…" : "Cancel run"}</button>}
       </div>
 
       <FileTable rows={filtered} />
