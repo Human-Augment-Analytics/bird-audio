@@ -2,12 +2,20 @@ mod commands;
 mod state;
 mod script_commands;
 mod ecology_commands;
+mod runtime;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default())
+        .setup(|app| {
+            match runtime::init(app.handle()) {
+                Ok(root) => eprintln!("[bird-audio] pipeline root: {}", root.display()),
+                Err(e) => eprintln!("[bird-audio] pipeline root unavailable: {e}"),
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::start_session,
             commands::cancel_session,

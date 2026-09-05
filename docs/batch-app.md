@@ -27,6 +27,7 @@ See [`docs/architecture.md`](architecture.md) for the end-to-end pipeline archit
 │       ├── lib.rs               ← command registration, app setup
 │       ├── main.rs
 │       ├── commands.rs          ← batch, cache, review and export commands
+│       ├── runtime.rs           ← project root: repo checkout, or bundled payload unpacked to app data
 │       ├── ecology_commands.rs  ← get_ecological_summary (Analytics)
 │       ├── script_commands.rs   ← run_verification_plan (shells out to scripts/)
 │       └── state.rs
@@ -49,7 +50,7 @@ See [`docs/architecture.md`](architecture.md) for the end-to-end pipeline archit
 │   ├── ml_engine.py       ← Python ML worker (--worker mode) and single-file CLI
 │   └── *.py               ← analysis CLIs (ecology, sensitivity, verification, manifest…)
 ├── birdpipe/              ← Python package: stageb, consolidate, records, worker, constants, …
-├── models/                ← buzz_localizer.pt, classifier.pt
+├── models/                ← buzz_localizer.pt, classifier.pt (Git LFS)
 ├── tests/                 ← pytest suite for birdpipe and scripts
 └── Cargo.toml             ← workspace: members = ["batch-core", "src-tauri"]
 ```

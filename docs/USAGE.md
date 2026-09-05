@@ -10,35 +10,15 @@ The app is a [Tauri](https://tauri.app/) desktop application (React frontend, Ru
 
 ## 1. Install & launch
 
-### Prerequisites
+Download the installer for your computer from the [releases page](https://github.com/Human-Augment-Analytics/bird-audio/releases/latest), open it, and click **Prepare System** on the first launch. [Installing Bird Audio Analyzer](install.md) walks through each platform, including the one-time "unverified developer" prompt on macOS and the SmartScreen prompt on Windows.
 
-| Tool | Why | Install |
-| --- | --- | --- |
-| **uv** | Python environment + dependencies | <https://github.com/astral-sh/uv> |
-| **Rust + Cargo** | builds the Tauri backend | <https://rustup.rs/> |
-| **Tauri prerequisites** | platform webview + build tooling | <https://tauri.app/start/prerequisites/> |
-| **Node.js** | builds the React frontend | <https://nodejs.org/> |
+No programming tools are needed. The engine (about 2 GB) downloads once into the app's private folder and stays there across updates.
 
-### Install dependencies
-
-From the repository root:
-
-```bash
-npm install   # frontend dependencies
-uv sync       # Python environment for the ML pipeline
-```
-
-### Launch
-
-```bash
-npm run tauri dev
-```
-
-The first launch compiles the Rust backend (a few minutes is normal) and opens the desktop window.
+Developers who want to run from source: see the [developer guide](developer-guide.md).
 
 ### First run — Prepare System
 
-On first launch the app runs a **health check** of the Python environment and the model files (`models/buzz_localizer.pt`, `models/classifier.pt`). If anything is missing, click **Prepare System** and wait for the check to turn green. The app then auto-selects the best available device: **CUDA** (NVIDIA) → **MPS** (Apple Silicon) → **CPU**.
+On launch the app runs a **health check** of the analysis engine and the model files. On a fresh computer click **Prepare System** and wait for the panel to turn green. The app then auto-selects the best available device: **CUDA** (NVIDIA) → **MPS** (Apple Silicon) → **CPU**.
 
 ---
 
@@ -129,17 +109,9 @@ The application supports exporting analysis-ready datasets directly from the com
     1.  The exported file will automatically join the `site_id`, `elevation_m`, `lat`, and `lon` fields to each event row by identifying the `device_id` from the filename.
     2.  A secondary site-level summary CSV (`<export_filename>_summary.csv`) will be generated, containing session-level aggregations (`site_id`, `session_datetime`, `elevation_m`, `n_events`, `duration_mean`, `duration_median`, `center_freq_mean`, `effort_hours`). Effort uses measured WAV/FLAC/MP3 duration when readable and a disclosed 0.25-hour fallback otherwise.
 
-### Headless CLI (batch only)
+### Headless CLI (developers)
 
-Run the pipeline without the GUI:
-
-```bash
-cargo run -p batch-core --bin batch -- \
-  --input data/ \
-  --device cpu \
-  --db output/batch.db \
-  --export-csv events.csv
-```
+The pipeline also runs without the GUI from a source checkout; see the [developer guide](developer-guide.md#8-headless-cli).
 
 ---
 
@@ -159,7 +131,7 @@ cargo run -p batch-core --bin batch -- \
 | App says the system isn't ready | Click **Prepare System**; wait for the health check to go green. |
 | Processing is slow | A 15-minute 48 kHz recording takes about 12–14 s on an M3 Pro (MPS, two workers) and a few minutes per file on CPU, where the pool uses all cores but one. Close other GPU-heavy apps; files on cloud-synced folders (Dropbox online-only) must download first. |
 | Inference is slow / "no device" | The app falls back to CPU when no GPU is found. Check CUDA drivers (NVIDIA) or that you're on Apple Silicon (MPS). |
-| First `tauri dev` takes minutes | Normal — the first Rust build is slow; later runs are incremental. |
+| Prepare System fails or never finishes | Needs internet once; see [install.md](install.md#10-troubleshooting). |
 | Too many false positives | Raise **θ_A** and/or **θ_B** in Setup, or reject them in Review. |
 | Missing real calls | Lower **θ_A**, or add them manually in Review. |
 | Re-ran a folder, nothing happened | Expected — runs are idempotent; processed files are skipped. Use the cache panel in Setup to drop specific files, or clear the cache to reprocess everything. |
@@ -170,6 +142,7 @@ cargo run -p batch-core --bin batch -- \
 Still stuck? Open an issue: <https://github.com/Human-Augment-Analytics/bird-audio/issues>.
 
 For more hands-on workflows and downstream usage:
+- **[Installing Bird Audio Analyzer](install.md)** — Download, install, first launch on macOS, Windows and Linux.
 - **[Your First Analysis Session](tutorial-first-analysis.md)** — Step-by-step guided analysis walk-through.
 - **[Reviewing Detections](tutorial-review-curation.md)** — Keyboard-first curation and the verification queue.
 - **[Reading the Analytics Tab](tutorial-analytics.md)** — What each panel means and how to spot a bad run.

@@ -84,42 +84,11 @@ pub(crate) fn resolve_cwd(cwd: Option<String>) -> PathBuf {
     if let Some(c) = cwd.filter(|s| !s.trim().is_empty()).map(PathBuf::from) {
         return c;
     }
-
-    // 1. Try the compile-time project root (parent of CARGO_MANIFEST_DIR)
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if let Some(project_root) = manifest_dir.parent() {
-        if project_root.join("models").exists() && project_root.join("pyproject.toml").exists() {
-            return project_root.to_path_buf();
-        }
+    if let Some(root) = crate::runtime::project_root() {
+        return root.to_path_buf();
     }
-
-    // 2. Try walking up from current executable path (useful for macOS bundle launched from Finder/Dock)
-    if let Ok(exe) = std::env::current_exe() {
-        let mut current = exe.clone();
-        while let Some(parent) = current.parent() {
-            if parent.join("models").exists() && parent.join("pyproject.toml").exists() {
-                return parent.to_path_buf();
-            }
-            current = parent.to_path_buf();
-        }
-    }
-
-    // 3. Try walking up from standard current_dir (useful in dev mode)
-    if let Ok(dir) = std::env::current_dir() {
-        let mut current = dir.clone();
-        while let Some(parent) = current.parent() {
-            if parent.join("models").exists() && parent.join("pyproject.toml").exists() {
-                return parent.to_path_buf();
-            }
-            current = parent.to_path_buf();
-        }
-        if dir.join("models").exists() && dir.join("pyproject.toml").exists() {
-            return dir;
-        }
-    }
-
-    // 4. Fallback to current directory
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    crate::runtime::find_repo_root()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 
@@ -379,23 +348,7 @@ pub fn get_feature_flags(cwd: Option<String>) -> Result<serde_json::Value, Strin
     Ok(read_feature_flags(&dir))
 }
 
-pub(crate) fn find_uv() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        let path = std::path::Path::new(&home).join(".local/bin/uv");
-        if path.exists() {
-            return path;
-        }
-    }
-    let hb = std::path::Path::new("/opt/homebrew/bin/uv");
-    if hb.exists() {
-        return hb.to_path_buf();
-    }
-    let ul = std::path::Path::new("/usr/local/bin/uv");
-    if ul.exists() {
-        return ul.to_path_buf();
-    }
-    std::path::PathBuf::from("uv")
-}
+pub(crate) use crate::runtime::find_uv;
 
 #[tauri::command]
 pub async fn check_health(
@@ -442,9 +395,12 @@ pub async fn check_health(
     };
 
     // Check Python env
+    // `--no-sync` keeps a probe from silently starting the multi-gigabyte
+    // dependency download; that is Prepare System's job.
     let output = Command::new(find_uv())
         .args([
             "run",
+            "--no-sync",
             "python",
             "-c",
             "import torch, ultralytics, librosa; print('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')",
@@ -468,7 +424,7 @@ pub async fn check_health(
     let details = if !m1 || !m2 || !m3 {
         "Missing model files in models/ folder.".into()
     } else if !env_ok {
-        "Python environment or dependencies missing. Click 'Prepare System'.".into()
+        "Analysis engine not installed yet. Click 'Prepare System' (downloads about 2 GB once).".into()
     } else {
         "".into()
     };
