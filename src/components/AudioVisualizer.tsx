@@ -547,6 +547,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
               pointerEvents: 'none',
               transform: `translateX(-${scrollLeft}px)`,
               willChange: 'transform',
+              // The transform makes this a stacking context; without an explicit
+              // z-index the spectrogram canvases (z-index 4) paint over the boxes.
+              zIndex: 12,
             }}
           >
             {events.map((ev) => {
