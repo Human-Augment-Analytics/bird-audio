@@ -42,6 +42,8 @@ The Run tab shows the resumed session's counts immediately, including the files 
 
 ## 3. Opening results without processing
 
+![A folder with cached results: View Existing Results and Re-run / Resume Batch](screenshots/tutorials/setup-cached-folder.png)
+
 Click **View Existing Results** instead. The most complete session in the folder opens straight into Review and Analytics; no worker starts and the audio is not read again. Use this to hand a finished run to a colleague or to continue curation on a different day.
 
 ---
@@ -91,6 +93,8 @@ Review decisions on unchanged files are unaffected.
 ---
 
 ## 8. Re-processing specific files
+
+![The Previous results cached panel with All / None / Failed selection](screenshots/tutorials/setup-cached-folder.png)
 
 When the selected folder already holds results, a **Previous results cached** panel appears under the folder picker listing the latest session's files with their status.
 

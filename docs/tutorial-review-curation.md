@@ -48,6 +48,8 @@ The `REVIEWED n/total` counter at the top of the panel tracks progress through t
 
 ## 3. Reading the spectrogram
 
+![A buzz at about 8 kHz boxed on the spectrogram, with the shortcut sheet open](screenshots/tutorials/review-shortcuts.png)
+
 The spectrogram runs from 0 Hz to the analysis band ceiling (11.625 kHz by default) on a linear scale, so the buzz band sits in the upper half. Each event is a bounding box coloured by status: amber unreviewed, green confirmed, red rejected.
 
 Controls above it:
@@ -88,6 +90,8 @@ Shortcuts are ignored while the cursor is in a text field, so the search box and
 
 ## 5. Fixing boxes
 
+![The event table under the spectrogram: time, centre frequency, completeness, confidence, status and actions](screenshots/tutorials/review-event-table.png)
+
 Duration and centre frequency in every export come straight from the box, so bounds matter for confirmed events.
 
 - **Drag an edge** of the selected box on the spectrogram. Left and right edges move the start and end time; top and bottom move the frequency limits.
@@ -127,6 +131,8 @@ The Undo and Redo buttons above the spectrogram show how many steps are availabl
 ---
 
 ## 8. Working a verification queue
+
+![Verification plan: settings, precision so far, decisions still needed, and the next ten to review](screenshots/tutorials/review-verification-plan.png)
 
 With hundreds of unreviewed events you cannot check them all, and checking the first fifty in file order does not tell you the detector's precision. Expand **Verification plan** above the spectrogram.
 

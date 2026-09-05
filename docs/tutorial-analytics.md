@@ -23,6 +23,8 @@ Analytics becomes available once at least one file has finished and updates as t
 
 ## 1. Run context
 
+![Run context, scope toggle, KPI cards and detections by recording offset](screenshots/tutorials/analytics-overview.png)
+
 The header lists the species/call target, compute device, θ_A and θ_B, and the frequency band the session ran with. The full configuration is stored with the session in `batch.db`.
 
 Read this first every time. A chart separated from its thresholds is meaningless, and two runs with different θ_B are not comparable on retained counts.
@@ -86,6 +88,8 @@ Counts here are not normalised by exposure. Use it to find problems, not to desc
 
 ## 6. Score distributions
 
+![Stage A confidence, completeness score, event duration and centre frequency histograms](screenshots/tutorials/analytics-distributions.png)
+
 Two histograms show the scores behind the thresholds:
 
 - **Stage A confidence** — the detector's confidence for each event. A pile-up just above θ_A, or a mass just below it in *All detections*, means the threshold sits inside a cluster and small changes will move many events.
@@ -123,6 +127,8 @@ This is a descriptive screen. A large difference between bands is worth investig
 ---
 
 ## 10. Recorder table
+
+![Review status, rate by elevation band and the recorder table](screenshots/tutorials/analytics-recorders.png)
 
 One row per recorder with band, files, effort, all and retained events, rate per hour, review coverage, and median duration and frequency. Sort by any numeric column and pick which count drives the sort.
 

@@ -46,7 +46,7 @@ On first launch the app runs a **health check** of the Python environment and th
 
 ### Setup
 
-<!-- screenshot: Setup view -->
+![Setup view: health check, recording folder, thresholds](screenshots/tutorials/setup-fresh.png)
 
 - **Recording folder** — the folder of recordings (subfolders included). All state is written to `batch.db` inside this folder. Folders you have used before appear in a **Recent folders** list under the Browse button.
 - **View Existing Results** / **Re-run / Resume Batch** — shown when the folder already holds a `batch.db`. The first opens the most complete previous session straight into Review and Analytics without processing anything; the second resumes it, or starts a new session if the settings or code changed (see [Resuming and re-running](tutorial-resume-rerun.md)).
@@ -57,7 +57,7 @@ On first launch the app runs a **health check** of the Python environment and th
 
 ### Run
 
-<!-- screenshot: Run view with per-file progress -->
+![Run view after completion with counts and export options](screenshots/tutorials/run-complete-export.png)
 
 The pipeline processes every audio file in the folder, showing **per-file progress**, processing **speed** and a **clock-time ETA**, and running counts of detections and retained records. Results are aggregated into `batch.db` as it goes. **Cancel run** stops after the files currently in flight and kills the worker processes.
 
@@ -69,7 +69,7 @@ The database is the durable checkpoint. On resume, unchanged completed files are
 
 After a batch run, switch to **Review** to turn raw ML output into a verified dataset.
 
-<!-- screenshot: Review view — file list + spectrogram with event boxes -->
+![Review view: file list, spectrogram with an event box, and the shortcut sheet](screenshots/tutorials/review-shortcuts.png)
 
 1. **Pick a file.** The file list shows every processed recording; click one to load its events.
 2. **Inspect on the spectrogram.** Each detected event is drawn as a bounding box over the audio. Use the playback controls to listen — **zoom**, **seek**, change **playback rate** (down to 0.25×), and **mute**.
@@ -113,6 +113,8 @@ rather than a guess. Export it with `batch --export-telemetry <path>` or the app
 ---
 
 ## 4. Analytics
+
+![Analytics overview with the All detections scope](screenshots/tutorials/analytics-overview.png)
 
 Once at least one file has finished, the **Analytics** tab summarises the session: coverage and effort, retention, review coverage, detections by recording offset, score and shape distributions, rates by elevation band (inferred from `PSL`/`PSM`/`PSH` recorder prefixes in the file paths), and a per-recorder table. It refreshes as files complete.
 

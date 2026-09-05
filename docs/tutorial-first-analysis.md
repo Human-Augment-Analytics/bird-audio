@@ -75,7 +75,7 @@ npm run tauri dev
 
 The first launch compiles the Rust backend — this can take a few minutes; subsequent launches are much faster thanks to incremental compilation. Once the build finishes, the desktop window opens.
 
-<!-- screenshot: The Bird Audio Analyzer window just after launch, showing the Setup view with the health check panel in the upper section. The health check shows status indicators for Python environment, model files, and device detection. -->
+![The app just after launch with a green health check](screenshots/tutorials/setup-fresh.png)
 
 ### The health check
 
@@ -111,7 +111,7 @@ The health check auto-detects the best available compute device, in this priorit
 
 With the health check green, you're looking at the **Setup view**. This is where you configure what to analyze and how sensitive the detector should be.
 
-<!-- screenshot: The Setup view showing the recording folder selector, θ_A set to 0.0, θ_B set to 0.530306, and the "Begin Listening" button at the bottom. -->
+![Setup view with the folder picker and both thresholds](screenshots/tutorials/setup-fresh.png)
 
 ### Choose your input folder
 
@@ -201,7 +201,7 @@ When the batch completes, you'll see three key numbers:
 | **n_complete** | Events passing the quality gate (completeness score `q ≥ θ_B`) | How many of those were clean, well-formed calls according to Stage B |
 | **n_retained** | Events passing **both** gates (`conf ≥ θ_A` **and** `q ≥ θ_B`) | Your **analysis-ready set** — these are the events that will appear in your export by default |
 
-<!-- screenshot: The completion summary card showing n_events = 142, n_complete = 68, n_retained = 68 (since θ_A = 0.0, n_complete equals n_retained), with a green checkmark indicating successful completion. -->
+![Completion card: detections found, high-quality buzzes, retained records, and export options](screenshots/tutorials/run-complete-export.png)
 
 **Reading these numbers:**
 
@@ -215,6 +215,8 @@ When the batch completes, you'll see three key numbers:
 ---
 
 ## 5. Interpreting the Analytics Tab
+
+![Analytics overview](screenshots/tutorials/analytics-overview.png)
 
 Once at least one file has finished, the **Analytics** tab becomes available and refreshes as the batch progresses. Use it as your first line of defence against a mis-configured run.
 
@@ -234,7 +236,7 @@ The batch gave you raw ML output. **Review mode** is where you turn that into a 
 
 Switch to the **Review** tab.
 
-<!-- screenshot: The Review view showing the file list on the left with several recordings listed (some with event counts), and the main spectrogram panel on the right displaying a loaded file with colored bounding boxes drawn over detected events in the 5–9 kHz range. The Event Table is visible below the spectrogram. -->
+![Review view with a detected buzz boxed on the spectrogram](screenshots/tutorials/review-shortcuts.png)
 
 ### Picking a file
 
@@ -311,7 +313,7 @@ For a faster, keyboard-driven workflow and the verification queue, continue with
 
 Once you've reviewed a satisfying number of events (or all of them, if you're thorough), it's time to export your curated dataset. Head to the **Export** controls on the completion card.
 
-<!-- screenshot: The Export control card showing a format dropdown (CSV selected), a "Confirmed only" toggle switch (turned on), a "Deployment metadata" file picker (empty), and an "Export" button. -->
+![Export options on the completion card](screenshots/tutorials/run-complete-export.png)
 
 ### Choosing a format
 
@@ -419,7 +421,7 @@ Maybe you realize one recording was corrupted, or a few files failed. When the s
 - **All** / **None** / **Failed** select files; clearing the selection drops those files from the session so the next run re-processes them and only them.
 - Selecting everything and clearing starts the folder over.
 
-<!-- screenshot: The cache panel showing a list of cached files with checkboxes, file paths, and status indicators (done/failed), with All / None / Failed chips and a clear button. -->
+![Setup with a cached folder: recent folders, the cache panel, View Existing Results and Re-run](screenshots/tutorials/setup-cached-folder.png)
 
 [Resuming, Re-running and the Results Cache](tutorial-resume-rerun.md) covers what happens when you change settings or update the app between runs.
 
