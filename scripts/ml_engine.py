@@ -6,6 +6,7 @@ Optimized for Hume's Leaf Warbler detection using YOLO and quarter-step streamin
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -31,6 +32,37 @@ from birdpipe import records as rec
 from birdpipe import stageb
 from birdpipe import constants as C
 from birdpipe.constants import ConsolidationParams, StageBParams, is_yolo_model
+
+
+def iter_quarter_blocks(path):
+    """Yield the quarter-step audio blocks of ``path``.
+
+    Produces exactly the blocks that ``librosa.stream(path, block_length=BLOCK_FRAMES,
+    frame_length=N_FFT, hop_length=HOP_LENGTH, fill_value=0)`` would, but reads
+    ``STREAM_READ_BLOCKS`` of them per disk pass and slices them out of the larger
+    read. Sample-for-sample identical to the single-block stream (and therefore to
+    its STFT), about 3x faster on a 15-minute file, and still constant-memory.
+    """
+    frame_length, hop = C.N_FFT, C.HOP_LENGTH
+    block_samples = C.BLOCK_FRAMES * hop
+    block_span = block_samples + (frame_length - hop)
+    read_blocks = max(1, int(C.STREAM_READ_BLOCKS))
+    # The single-block stream (soundfile.blocks with overlap=frame_length - hop) yields
+    # this many blocks; the multi-block read below zero-fills further past the end of
+    # the file, so the count is capped explicitly.
+    n_samples = sf.info(path).frames
+    n_blocks = max(1, math.ceil(max(0, n_samples - (frame_length - hop)) / block_samples))
+    emitted = 0
+    for big in librosa.stream(
+        path, block_length=C.BLOCK_FRAMES * read_blocks, frame_length=frame_length,
+        hop_length=hop, fill_value=0,
+    ):
+        for k in range(read_blocks):
+            if emitted >= n_blocks:
+                return
+            start = k * block_samples
+            yield big[start:start + block_span]
+            emitted += 1
 
 class BirdAudioPipeline:
     def __init__(self, localizer_path, classifier_path=None, device=None, conf=C.STAGE_A_MODEL_CONF,
@@ -61,6 +93,19 @@ class BirdAudioPipeline:
         
         self.conf = conf
         self.letterbox = LetterBox((160, 512), auto=False, stride=32)
+        # Stage A windows are independent, so on GPUs they are pushed through the
+        # localizer in batches: one forward pass per batch instead of one per window
+        # removes most of the per-call dispatch and device-sync overhead (the dominant
+        # cost on MPS). On CPU the opposite holds -- a batch of 32 runs ~6x slower per
+        # window than single windows -- so the batch size follows the device.
+        self.stage_a_batch = None  # None = pick from the device at Stage A time
+
+    def _stage_a_batch_size(self):
+        if self.stage_a_batch is not None:
+            return max(1, int(self.stage_a_batch))
+        if self.device.type == "cpu":
+            return max(1, int(C.STAGE_A_BATCH_SIZE_CPU))
+        return max(1, int(C.STAGE_A_BATCH_SIZE))
 
     def _get_model(self, path):
         if not path:
@@ -103,8 +148,12 @@ class BirdAudioPipeline:
         return self._model_cache[path_str]
 
     def preprocess(self, im: np.ndarray) -> torch.Tensor:
-        """Prepare spectrogram image for model inference."""
-        im = np.stack([self.letterbox(image=im)])
+        """Prepare one spectrogram image for model inference."""
+        return self.preprocess_batch([im])
+
+    def preprocess_batch(self, ims) -> torch.Tensor:
+        """Prepare a list of spectrogram images as one BCHW float tensor."""
+        im = np.stack([self.letterbox(image=x) for x in ims])
         if im.shape[-1] == 3:
             im = im[..., ::-1] # BGR to RGB
         im = im.transpose((0, 3, 1, 2)) # BHWC to BCHW
@@ -164,10 +213,7 @@ class BirdAudioPipeline:
                         f"{C.SAMPLE_RATE} Hz audio so its time/frequency preprocessing stays fixed"
                     ),
                 }
-            stream = librosa.stream(
-                str(input_wav), block_length=128, frame_length=1024,
-                hop_length=256, fill_value=0,
-            )
+            stream = iter_quarter_blocks(str(input_wav))
         except Exception as e:
             return {"status": "error", "input": str(input_wav),
                     "message": f"Failed to open audio: {e}"}
@@ -200,37 +246,44 @@ class BirdAudioPipeline:
         dirs = self._make_dirs(output_root) if write_artifacts else None
         raw = []
 
-        # Stage A: per-window object detection -> absolute detections
-        for count in range(total_windows):
+        # Stage A: per-window object detection -> absolute detections.
+        # Each window image is normalised on its own (amplitude_to_db ref=max over that
+        # window), exactly as before; only the localizer call is batched.
+        def window_image(count):
             feats = np.concatenate(feats_quarters[count:count + 4], axis=1)[freq_bin_low:freq_bin_high]
             feats = feats[::-1].copy()
             img = librosa.amplitude_to_db(feats, ref=np.max)
             rng = np.amax(img) - np.amin(img)
             img_png = np.clip((img - np.amin(img)) * 255 / (rng + 1e-6), 0, 255).astype(np.uint8)
-            img_png = np.tile(np.expand_dims(img_png, -1), (1, 1, 3))
+            return np.tile(np.expand_dims(img_png, -1), (1, 1, 3))
 
-            input_ims = self.preprocess(img_png).to(self.device)
-            result = active_localizer(input_ims, imgsz=(160, 512), verbose=False, conf=self.conf)[0]
-            boxes = result.boxes
-            if len(boxes.xywhn) == 0:
-                continue
+        batch_size = self._stage_a_batch_size()
+        for start in range(0, total_windows, batch_size):
+            counts = range(start, min(start + batch_size, total_windows))
+            images = [window_image(count) for count in counts]
+            input_ims = self.preprocess_batch(images).to(self.device)
+            results = active_localizer(input_ims, imgsz=(160, 512), verbose=False, conf=self.conf)
+            for count, img_png, result in zip(counts, images, results):
+                boxes = result.boxes
+                if len(boxes.xywhn) == 0:
+                    continue
 
-            if write_artifacts:
-                stem = f"{input_wav.stem}_{count:04d}"
-                result.save(filename=str(dirs["vis"] / f"{stem}.jpeg"))
-                result.save_txt(str(dirs["labels"] / f"{stem}.txt"), save_conf=True)
-                cv2.imwrite(str(dirs["crops"] / f"{stem}.png"), img_png)
-                samps = np.concatenate(samps_quarters[count:count + 4], axis=0)
-                sf.write(str(dirs["wav"] / f"{stem}.wav"), samps, int(sr), format="wav")
+                if write_artifacts:
+                    stem = f"{input_wav.stem}_{count:04d}"
+                    result.save(filename=str(dirs["vis"] / f"{stem}.jpeg"))
+                    result.save_txt(str(dirs["labels"] / f"{stem}.txt"), save_conf=True)
+                    cv2.imwrite(str(dirs["crops"] / f"{stem}.png"), img_png)
+                    samps = np.concatenate(samps_quarters[count:count + 4], axis=0)
+                    sf.write(str(dirs["wav"] / f"{stem}.wav"), samps, int(sr), format="wav")
 
-            xywhn = boxes.xywhn.cpu().numpy()
-            confs = boxes.conf.cpu().numpy()
-            for k in range(len(xywhn)):
-                x, y, w, h = (float(v) for v in xywhn[k])
-                raw.append(coords.map_box(
-                    x, y, w, h, float(confs[k]), count,
-                    dt=delta_t, tw=window_seconds, f_min=f_min, f_max=f_max,
-                ))
+                xywhn = boxes.xywhn.cpu().numpy()
+                confs = boxes.conf.cpu().numpy()
+                for k in range(len(xywhn)):
+                    x, y, w, h = (float(v) for v in xywhn[k])
+                    raw.append(coords.map_box(
+                        x, y, w, h, float(confs[k]), count,
+                        dt=delta_t, tw=window_seconds, f_min=f_min, f_max=f_max,
+                    ))
 
         # Consolidation -> event tracks
         events = consolidate.consolidate(raw, ConsolidationParams())

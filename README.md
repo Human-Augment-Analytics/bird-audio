@@ -38,7 +38,7 @@ Start with the usage guide, then follow the tutorials in order. All of them use 
 The pipeline uses a **Quarter-Step YOLO Streaming** architecture to process large audio files (1GB+) with high temporal resolution and a constant memory footprint.
 
 ### 1. Feature Extraction
-Audio is streamed in blocks using `librosa.stream`. For each block, a Short-Time Fourier Transform (STFT) generates spectrogram features.
+Audio is streamed in quarter-step blocks (32 per disk pass, sliced from a `librosa.stream` read). For each block, a Short-Time Fourier Transform (STFT) generates spectrogram features.
 
 ### 2. Quarter-Step Sliding Window
 To ensure no calls are missed at window boundaries, the system uses a sliding window that advances by 25% (quarter-step) of the window width (approx. 30ms resolution).
