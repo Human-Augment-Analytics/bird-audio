@@ -8,16 +8,30 @@ Built with Tauri + React (frontend) and Rust + Python (backend). One app, three 
 - **Review mode** — step through files, inspect detections on a spectrogram, confirm/reject/edit ML events and add manual annotations.
 - **Analytics** — inspect completeness, event distributions, effort-normalized recorder summaries, and review coverage.
 
-> 📖 **Guides & Tutorials:**
-> - **[Usage Tutorial](docs/USAGE.md)** — Installation, basic controls, and troubleshooting.
-> - **[Your First Analysis Session](docs/tutorial-first-analysis.md)** — Guided end-to-end lab walkthrough of running and curating a batch.
-> - **[Active Learning Loop Tutorial](docs/tutorial-active-learning.md)** — Guided workflow to improve the model on your own data.
-> - **[Export Cookbook](docs/tutorial-export-cookbook.md)** — Copy-paste code recipes for Python, R (warbleR), and Cornell Raven Pro.
-> - **[Reviewing Detections](docs/tutorial-review-curation.md)** — Keyboard-first curation: confirm, reject, fix bounds, draw missed calls, and work a verification queue.
-> - **[Reading the Analytics Tab](docs/tutorial-analytics.md)** — What each panel measures, what it cannot tell you, and how to spot a bad run.
-> - **[Resuming, Re-running and the Results Cache](docs/tutorial-resume-rerun.md)** — How sessions are matched to settings and code, and how to reprocess safely.
-> - **[Feature Guide](docs/feature-guide.md)** — Packaged-app screenshots, feature uses, and scientific limits using a bounded Sural AudioMoth sample.
-> - **[App Reference](docs/batch-app.md)** — Source layout, Tauri command surface, session identity, and the SQLite schema.
+## Documentation
+
+Start with the usage guide, then follow the tutorials in order. All of them use screenshots from the current build.
+
+### Tutorials
+
+| Tutorial | What you learn |
+|---|---|
+| [Usage Guide](docs/USAGE.md) | Install, launch, the three workspaces, export formats, troubleshooting. |
+| [Your First Analysis Session](docs/tutorial-first-analysis.md) | End-to-end: run a batch, read the counts, review a file, export a clean dataset. |
+| [Reviewing Detections](docs/tutorial-review-curation.md) | Keyboard-first curation, fixing bounds, drawing missed calls, undo/redo, the verification queue. |
+| [Reading the Analytics Tab](docs/tutorial-analytics.md) | What every panel measures, what it cannot tell you, a five-minute run check. |
+| [Resuming, Re-running and the Results Cache](docs/tutorial-resume-rerun.md) | How a re-run picks a session, what changes start a new one, re-processing files, cancelling. |
+| [Export Cookbook](docs/tutorial-export-cookbook.md) | Load exports in Python, R (warbleR) and Raven Pro. |
+| [Active Learning Loop](docs/tutorial-active-learning.md) | Turn curated events into training data and fine-tune the detector. |
+
+### Reference
+
+| Document | Contents |
+|---|---|
+| [Feature Guide](docs/feature-guide.md) | Feature-by-feature "what it does / why useful / limit" tables on a bounded Sural AudioMoth sample. |
+| [App Reference](docs/batch-app.md) | Source layout, Tauri command surface, session identity and resume rules, SQLite schema. |
+| [Architecture](docs/architecture.md) | Quarter-step YOLO streaming, six-phase consolidation, Stage A / Stage B, thresholds, persistence, reproducibility. |
+| [Advanced Search and Active Learning](docs/advanced-search-active-learning.md) | The PCEN, active-learning and query-by-example command-line tools. |
 
 ## Technical Architecture
 
