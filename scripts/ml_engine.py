@@ -6,6 +6,7 @@ Optimized for Hume's Leaf Warbler detection using YOLO and quarter-step streamin
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -46,10 +47,11 @@ def iter_quarter_blocks(path):
     block_samples = C.BLOCK_FRAMES * hop
     block_span = block_samples + (frame_length - hop)
     read_blocks = max(1, int(C.STREAM_READ_BLOCKS))
-    # soundfile.blocks(blocksize=block_span, overlap=frame_length - hop) yields this many
-    # blocks; the multi-block read below pads its tail further, so cap explicitly.
+    # The single-block stream (soundfile.blocks with overlap=frame_length - hop) yields
+    # this many blocks; the multi-block read below zero-fills further past the end of
+    # the file, so the count is capped explicitly.
     n_samples = sf.info(path).frames
-    n_blocks = max(1, -(-max(0, n_samples - (frame_length - hop)) // block_samples))
+    n_blocks = max(1, math.ceil(max(0, n_samples - (frame_length - hop)) / block_samples))
     emitted = 0
     for big in librosa.stream(
         path, block_length=C.BLOCK_FRAMES * read_blocks, frame_length=frame_length,
