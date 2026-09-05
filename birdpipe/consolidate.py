@@ -274,30 +274,39 @@ def consolidate(dets: Sequence[RawDetection], p: ConsolidationParams = Consolida
             if merged_any:
                 break
 
-    # Phase 6: contained-singleton suppression. A singleton almost entirely inside an
-    # established (multi-window) track in the same band is a partial view of that track.
-    # It escaped phase 3 (its window is already in the track) and phase 5 (its duration is
-    # too short for the IoU gate). Fold it into the track: keep the track's boundaries,
-    # take the max confidence, count it as a member.
-    established = [e for e in events if len(e.members) >= 2]
-    kept: List[Event] = []
-    for ev in events:
-        if len(ev.members) != 1 or not established:
-            kept.append(ev)
+    # Phase 6: contained-singleton suppression. A singleton almost entirely inside a
+    # longer event in the same band is a partial view of that event. It escaped phase 3
+    # (its window is already in the track, or the host is itself a singleton from an
+    # adjacent window) and phase 5 (its duration is too short for the IoU gate). Fold it
+    # into the host: keep the host's boundaries, take the max confidence, count it as a
+    # member. Hosts are established tracks first, then any strictly longer event.
+    folded: set = set()
+    order = sorted(range(len(events)), key=lambda k: events[k].t_end - events[k].t_start)
+    for k in order:
+        ev = events[k]
+        if len(ev.members) != 1:
             continue
+        dur = ev.t_end - ev.t_start
         best, best_key = None, None
-        for track in established:
-            _, c_t, c_f = g.containment(ev, track)
+        for h, host in enumerate(events):
+            if h == k or h in folded:
+                continue
+            host_dur = host.t_end - host.t_start
+            if len(host.members) < 2:
+                # Singleton host: must be strictly longer and come from another window
+                # (two boxes the localizer emitted in one window are kept as distinct).
+                if host_dur <= dur or dets[host.members[0]].window == dets[ev.members[0]].window:
+                    continue
+            _, c_t, c_f = g.containment(ev, host)
             if c_t >= p.contained_time and c_f >= p.contained_freq:
-                key = (c_t, c_f)
+                key = (len(host.members) >= 2, c_t, c_f, host_dur)
                 if best_key is None or key > best_key:
-                    best, best_key = track, key
-        if best is None:
-            kept.append(ev)
-        else:
+                    best, best_key = host, key
+        if best is not None:
             best.members = sorted(set(best.members) | set(ev.members))
             best.conf = max(best.conf, ev.conf)
-    events = kept
+            folded.add(k)
+    events = [e for k, e in enumerate(events) if k not in folded]
 
     events.sort(key=lambda e: e.t_start)
     return events

@@ -167,6 +167,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       container: waveformContainer,
       waveColor: '#6f6253', progressColor: '#f4a23a', cursorColor: '#f06a4e',
       height: 90, minPxPerSec: INITIAL_ZOOM, autoCenter: true,
+      // wavesurfer decodes at 8 kHz by default (Nyquist 4 kHz); anything above that
+      // would be painted as a flat block. Decode at 2x the displayed ceiling so the
+      // spectrogram actually covers 0..maxFrequency.
+      sampleRate: Math.ceil(maxFrequency * 2),
       plugins: [wsRegions, wsTimeline, wsSpectrogram],
     });
     wavesurfer.current = ws;

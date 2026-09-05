@@ -187,9 +187,21 @@ def test_partially_contained_singleton_is_kept():
     assert len(events) == 2
 
 
-def test_two_singletons_never_suppress_each_other():
-    # Suppression only folds into established multi-window tracks.
+def test_two_singletons_from_one_window_never_suppress_each_other():
+    # Two boxes the localizer emitted in the same window are distinct by construction.
     a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0)
     inner = make_det(0.5, 1.5, 5000, 6000, conf=0.8, window=0)
     events = cons.consolidate([a, inner], P)
     assert len(events) == 2
+
+
+def test_singleton_contained_in_longer_singleton_from_other_window_is_folded():
+    # Real case (20250530_070000.WAV): 391.94-392.82 and 391.95-392.55 in the same band
+    # from adjacent windows. Time IoU 0.68 misses phase 5; neither is a multi-window track.
+    host = make_det(0.0, 0.88, 6725, 8860, conf=0.31, window=0, norm_left=0.5, norm_right=0.9)
+    inner = make_det(0.01, 0.61, 6713, 8839, conf=0.38, window=1, norm_left=0.05, norm_right=0.4)
+    events = cons.consolidate([host, inner], P)
+    assert len(events) == 1
+    assert events[0].members == [0, 1]
+    assert events[0].conf == 0.38
+    assert (events[0].t_start, events[0].t_end) == (0.0, 0.88)
