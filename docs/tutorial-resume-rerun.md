@@ -122,7 +122,7 @@ A gentler alternative is to leave the database alone and let a changed setting s
 
 ## 11. Overnight on the command line, review in the app
 
-The headless CLI uses the same engine, database and session identity as the app:
+For teams with a developer: the headless CLI in the source checkout uses the same engine, database and session identity as the app (see the [developer guide](developer-guide.md#8-headless-cli)):
 
 ```bash
 cargo run -p batch-core --bin batch -- \

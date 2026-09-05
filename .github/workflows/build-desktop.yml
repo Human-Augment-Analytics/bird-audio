@@ -4,7 +4,11 @@ on:
   push:
     branches:
       - main
-      - feature/desktop-ci-cd
+      - release-test/**
+  workflow_dispatch:
+
+env:
+  UV_VERSION: 0.12.10
 
 jobs:
   build-tauri:
@@ -15,20 +19,56 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
+            uv-target: aarch64-apple-darwin
             artifact-name: macOS-dmg
             path: target/release/bundle/dmg/*.dmg
           - platform: windows-latest
+            uv-target: x86_64-pc-windows-msvc
             artifact-name: Windows-exe
             path: target/release/bundle/nsis/*.exe
           - platform: ubuntu-22.04
+            uv-target: x86_64-unknown-linux-gnu
             artifact-name: Linux-packages
             path: |
               target/release/bundle/deb/*.deb
               target/release/bundle/appimage/*.AppImage
     runs-on: ${{ matrix.platform }}
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (with model files from LFS)
         uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Verify model files are real (not LFS pointers)
+        shell: bash
+        run: |
+          for f in models/buzz_localizer.pt models/classifier.pt; do
+            size=$(wc -c < "$f")
+            if [ "$size" -lt 1000000 ]; then
+              echo "$f is only $size bytes; LFS checkout failed" >&2
+              exit 1
+            fi
+          done
+
+      - name: Download uv sidecar (${{ matrix.uv-target }})
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/binaries
+          base="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}"
+          case "${{ matrix.uv-target }}" in
+            *windows*)
+              curl -sSfL "$base/uv-${{ matrix.uv-target }}.zip" -o uv.zip
+              unzip -q uv.zip uv.exe
+              mv uv.exe "src-tauri/binaries/uv-${{ matrix.uv-target }}.exe"
+              ;;
+            *)
+              curl -sSfL "$base/uv-${{ matrix.uv-target }}.tar.gz" | tar xz
+              mv "uv-${{ matrix.uv-target }}/uv" "src-tauri/binaries/uv-${{ matrix.uv-target }}"
+              chmod +x "src-tauri/binaries/uv-${{ matrix.uv-target }}"
+              ;;
+          esac
+          ls -la src-tauri/binaries
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -64,11 +104,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v__VERSION__
-          releaseName: 'App v__VERSION__'
+          tagName: ${{ startsWith(github.ref, 'refs/heads/release-test/') && format('test-{0}-v__VERSION__', github.run_number) || 'v__VERSION__' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/heads/release-test/') && format('Test build {0} (v__VERSION__)', github.run_number) || 'App v__VERSION__' }}
           releaseBody: 'Automatic build from CI/CD pipeline'
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ startsWith(github.ref, 'refs/heads/release-test/') }}
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4

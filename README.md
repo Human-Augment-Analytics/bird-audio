@@ -10,27 +10,29 @@ Built with Tauri + React (frontend) and Rust + Python (backend). One app, three 
 
 ## Documentation
 
-Start with the usage guide, then follow the tutorials in order. All of them use screenshots from the current build.
+### For researchers (no programming needed)
 
-### Tutorials
+Install the app from the [releases page](https://github.com/Human-Augment-Analytics/bird-audio/releases/latest), then follow the tutorials in order. All of them use screenshots from the current build.
 
-| Tutorial | What you learn |
+| Guide | What you learn |
 |---|---|
-| [Usage Guide](docs/USAGE.md) | Install, launch, the three workspaces, export formats, troubleshooting. |
+| [Installing Bird Audio Analyzer](docs/install.md) | Download, install, the one-time Prepare System step, where files live, updating. |
 | [Your First Analysis Session](docs/tutorial-first-analysis.md) | End-to-end: run a batch, read the counts, review a file, export a clean dataset. |
 | [Reviewing Detections](docs/tutorial-review-curation.md) | Keyboard-first curation, fixing bounds, drawing missed calls, undo/redo, the verification queue. |
 | [Reading the Analytics Tab](docs/tutorial-analytics.md) | What every panel measures, what it cannot tell you, a five-minute run check. |
 | [Resuming, Re-running and the Results Cache](docs/tutorial-resume-rerun.md) | How a re-run picks a session, what changes start a new one, re-processing files, cancelling. |
+| [Usage Guide](docs/USAGE.md) | Reference for the three workspaces, export formats, troubleshooting. |
+| [Feature Guide](docs/feature-guide.md) | Feature-by-feature "what it does / why useful / limit" tables on a bounded Sural AudioMoth sample. |
 | [Export Cookbook](docs/tutorial-export-cookbook.md) | Load exports in Python, R (warbleR) and Raven Pro. |
-| [Active Learning Loop](docs/tutorial-active-learning.md) | Turn curated events into training data and fine-tune the detector. |
 
-### Reference
+### For developers
 
 | Document | Contents |
 |---|---|
-| [Feature Guide](docs/feature-guide.md) | Feature-by-feature "what it does / why useful / limit" tables on a bounded Sural AudioMoth sample. |
-| [App Reference](docs/batch-app.md) | Source layout, Tauri command surface, session identity and resume rules, SQLite schema. |
+| [Developer Guide](docs/developer-guide.md) | Run from source, tests, how the packaged app finds the pipeline, building installers, CI and releases, headless CLI. |
 | [Architecture](docs/architecture.md) | Quarter-step YOLO streaming, six-phase consolidation, Stage A / Stage B, thresholds, persistence, reproducibility. |
+| [App Reference](docs/batch-app.md) | Source layout, Tauri command surface, session identity and resume rules, SQLite schema. |
+| [Active Learning Loop](docs/tutorial-active-learning.md) | Turn curated events into training data and fine-tune the detector. |
 | [Advanced Search and Active Learning](docs/advanced-search-active-learning.md) | The PCEN, active-learning and query-by-example command-line tools. |
 
 ## Technical Architecture
@@ -52,38 +54,17 @@ The system uses `ultralytics.YOLO` to run native inference on PyTorch checkpoint
 
 ## Getting Started
 
-### Prerequisites
+**Use the app:** download the installer for your platform from the [releases page](https://github.com/Human-Augment-Analytics/bird-audio/releases/latest) and follow [Installing Bird Audio Analyzer](docs/install.md). The first launch downloads the analysis engine once (about 2 GB); nothing else needs to be installed.
 
-- [**uv**](https://github.com/astral-sh/uv) for Python environment management
-- [Rust + Cargo](https://rustup.rs/) and [Tauri CLI](https://tauri.app/v1/guides/getting-started/prerequisites/)
-- Node.js (for the frontend)
-
-### Install dependencies
+**Run from source:**
 
 ```bash
-npm install
-uv sync
-```
-
-### Run the desktop app
-
-```bash
+git lfs install && git clone https://github.com/Human-Augment-Analytics/bird-audio.git && cd bird-audio
+npm install && uv sync
 npm run tauri dev
 ```
 
-This launches the Tauri desktop window. The first run checks for Python dependencies and model files; click **Prepare System** if prompted.
-
-### Headless CLI (batch only)
-
-Run the batch pipeline without the GUI:
-
-```bash
-cargo run -p batch-core --bin batch -- \
-  --input data/ \
-  --device cpu \
-  --db output/batch.db \
-  --export-csv events.csv
-```
+Prerequisites, tests, packaging and the release process are in the [developer guide](docs/developer-guide.md).
 
 ## App Modes
 

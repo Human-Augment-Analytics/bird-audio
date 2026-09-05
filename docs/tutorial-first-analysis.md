@@ -22,29 +22,16 @@ A guided walkthrough from opening Bird Audio Analyzer to holding a clean, export
 
 ### What you'll need
 
-This tutorial assumes you've already installed the prerequisites from the [Usage Guide](USAGE.md). To recap, you should have:
+- **The app installed.** Follow [Installing Bird Audio Analyzer](install.md): download the installer for your computer, open it, and click **Prepare System** once. No programming tools are involved.
+- **A folder of field recordings.** Any mix of `.wav`, `.flac` and `.mp3` files recorded at 48 kHz (the AudioMoth default). For this walkthrough, a small folder of 5–15 recordings, each 1–15 minutes long, is ideal: enough to see real results without a long wait.
 
-| Tool | Purpose |
-|---|---|
-| **uv** | Python environment & ML dependencies |
-| **Rust + Cargo** | Builds the Tauri backend |
-| **Tauri prerequisites** | Platform webview & build tooling |
-| **Node.js** | Builds the React frontend |
-
-And you should have already run the one-time setup:
-
-```bash
-npm install   # frontend dependencies
-uv sync       # Python environment for the ML pipeline
-```
-
-You'll also need **a folder of field recordings** to analyze. Any mix of `.wav`, `.flac`, and `.mp3` files will work. For this walkthrough, a small folder of 5–15 recordings (each 1–15 minutes long) is ideal — enough to see real results without a long wait.
+You do not need to know anything about machine learning, Python, or the command line. If you can pick a folder and click a button, you can run this analysis.
 
 ### What you'll accomplish
 
 By the end of this tutorial, you will have:
 
-- ✅ Run the two-stage ML pipeline over a folder of recordings
+- ✅ Run the two-stage detector over a folder of recordings
 - ✅ Understood the Analytics tab that sanity-checks your results
 - ✅ Manually reviewed and curated a set of detections on the spectrogram
 - ✅ Exported a clean, analysis-ready CSV (or JSON, warbleR, or Raven format) of verified buzz calls
@@ -53,13 +40,13 @@ By the end of this tutorial, you will have:
 
 | Step | Time |
 |---|---|
-| Launch & health check | ~2 minutes (first build may take longer) |
-| Batch processing (10 files, GPU) | ~5 minutes |
-| Batch processing (10 files, CPU) | ~15–20 minutes |
-| Review & curation | ~10 minutes for a first pass |
+| Launch and health check | under a minute (plus the one-time Prepare System download on a new computer) |
+| Batch processing (10 fifteen-minute files, Apple Silicon or NVIDIA GPU) | ~2–3 minutes |
+| Batch processing (10 fifteen-minute files, CPU only) | ~15–25 minutes |
+| Review and curation | ~10 minutes for a first pass |
 | Export | ~1 minute |
 
-**Total: ~20 minutes** for a small folder on a GPU-equipped machine, or ~35 minutes on CPU.
+**Total: about 20 minutes** for a small folder on a laptop with a GPU, or about 40 minutes on CPU.
 
 ---
 
@@ -67,43 +54,37 @@ By the end of this tutorial, you will have:
 
 ### Start the app
 
-From the repository root, run:
-
-```bash
-npm run tauri dev
-```
-
-The first launch compiles the Rust backend — this can take a few minutes; subsequent launches are much faster thanks to incremental compilation. Once the build finishes, the desktop window opens.
+Open **Bird Audio Analyzer** from your Applications folder (macOS), Start menu (Windows) or application menu (Linux). The window opens on the **Batch** tab.
 
 ![The app just after launch with a green health check](screenshots/tutorials/setup-fresh.png)
 
 ### The health check
 
-The app automatically runs a **health check** when it opens. This verifies three things:
+The app automatically runs a **health check** when it opens. It verifies three things:
 
-1. **Python environment** — Can it find `torch`, `ultralytics`, and `librosa`?
-2. **Model files** — Are `models/buzz_localizer.pt` (Stage A detector) and `models/classifier.pt` (Stage B classifier) present?
-3. **Compute device** — What hardware is available for inference?
+1. **Analysis engine** — is the machine-learning engine installed?
+2. **Model files** — are the two detector models present? (They ship inside the app.)
+3. **Compute device** — what hardware is available for inference?
 
-If everything is green, you're ready to go. If anything is red, click **Prepare System**.
+If the panel is green, **Instrument ready to listen**, you're ready to go. If it is red, **Setup required before listening**, click **Prepare System**.
 
 ### What "Prepare System" does
 
-Clicking **Prepare System** runs `uv sync` behind the scenes — this installs or updates all Python dependencies into the project's virtual environment. It's the same command you'd run manually in the terminal. Wait for the health check indicators to turn green.
+On a new computer the engine is not installed yet. **Prepare System** downloads it (about 2 GB) into the app's own private folder. This takes one to fifteen minutes depending on your connection; the button shows *Preparing…* while it works. When it finishes the panel turns green.
 
-> 💡 **Tip:** You typically only need to click Prepare System once — on your very first launch, or after pulling new code that updates Python dependencies.
+> 💡 **Tip:** You only do this once. The engine stays installed when you update the app. Nothing is installed anywhere else on your computer.
 
 ### The device indicator
 
 The health check auto-detects the best available compute device, in this priority order:
 
-| Device | What it means |
+| Shown as | What it means |
 |---|---|
-| **CUDA** | NVIDIA GPU detected — fastest inference (~30s per 1-minute file) |
-| **MPS** | Apple Silicon GPU detected (M1/M2/M3) — fast inference |
-| **CPU** | No GPU available — slower but perfectly functional (~2 min per 1-minute file) |
+| **Graphics Card (Accelerated)** on a Mac | Apple Silicon GPU (M1/M2/M3/M4). A 15-minute recording takes about 13 seconds on an M3 Pro. |
+| **Graphics Card (Accelerated)** on a PC | NVIDIA GPU with CUDA. Similar or faster. |
+| **Processor (CPU)** | No supported GPU. Slower, about two minutes per 15-minute recording, but the results are identical. |
 
-> ⚠️ **If you expected a GPU but see "CPU":** Check that your CUDA drivers are up to date (NVIDIA) or that you're running on an Apple Silicon Mac (MPS). The app will still work on CPU — it's just slower.
+> ⚠️ **If you expected a GPU but see "Processor (CPU)":** on a Mac, make sure you installed the Apple Silicon (`aarch64`) build. On a PC, check that the NVIDIA driver is current. The app still works on CPU; it's just slower.
 
 ---
 
@@ -179,17 +160,17 @@ As the pipeline works through your files, you'll see:
 
 ### How long to expect
 
-Processing time depends on your hardware and recording length:
+Processing time depends on your hardware. Measured on a 15-minute, 48 kHz AudioMoth recording:
 
-| Hardware | Approximate speed |
+| Hardware | Per 15-minute recording |
 |---|---|
-| NVIDIA GPU (CUDA) | ~30 seconds per 1-minute recording |
-| Apple Silicon (MPS) | ~45 seconds per 1-minute recording |
-| CPU only | ~2 minutes per 1-minute recording |
+| Apple Silicon (M3 Pro) | ~13 seconds |
+| NVIDIA GPU (CUDA) | ~10–20 seconds |
+| CPU only | ~2 minutes |
 
-A folder of 10 fifteen-minute field recordings: roughly 5 minutes on GPU, ~30 minutes on CPU.
+A folder of 10 fifteen-minute field recordings: roughly 2–3 minutes on a GPU, 20 minutes on CPU. Two files are processed at once on Apple Silicon, and all cores but one are used on CPU.
 
-> 💡 **Tip:** You can leave the app running and do other work. If you need to stop, click **Cancel** — your progress is saved. When you re-run the same input/output pair, already-processed files are automatically skipped.
+> 💡 **Tip:** You can leave the app running and do other work. If you need to stop, click **Cancel run**; your progress is saved. When you select the same folder again, already-processed files are skipped.
 
 ### The three result counts
 
@@ -425,42 +406,12 @@ Maybe you realize one recording was corrupted, or a few files failed. When the s
 
 [Resuming, Re-running and the Results Cache](tutorial-resume-rerun.md) covers what happens when you change settings or update the app between runs.
 
-### After reviewing, consider Active Learning
+### Going further with a developer
 
-Your curation decisions are more than just labels — they're training data. The [Active Learning pipeline](advanced-search-active-learning.md) can use your confirmed and rejected events to fine-tune the YOLO detector, making it better at finding buzzes (and ignoring noise) in your specific recording conditions.
+Two things need a source checkout of the project and a command line, so they live in the developer documentation rather than in the app:
 
-```bash
-uv run python scripts/active_learning.py \
-  --db output/batch.db \
-  --dataset-dir output/dataset_active_learning \
-  --min-stage-a-conf 0.5
-```
-
-This builds a YOLO-format training dataset from your curated results — positives from retained events, hard negatives from rejected high-confidence false positives.
-
-### Query-by-Example for finding missed calls
-
-Found a particularly interesting buzz and want to find more like it? The [Query-by-Example search](advanced-search-active-learning.md#3-query-by-example-search) uses spectrogram similarity to surface events that look like your reference:
-
-```bash
-uv run python scripts/query_by_example.py --query-id 42 --k 10
-```
-
-### Headless CLI for large batch jobs
-
-If you're processing hundreds of recordings or running on a remote server without a display, skip the GUI entirely:
-
-```bash
-cargo run -p batch-core --bin batch -- \
-  --input data/ \
-  --device cpu \
-  --db output/batch.db \
-  --export-csv events.csv
-```
-
-The CLI uses the same engine as the GUI — same ML pipeline, same database, same resumability. You won't get the Review/curation workflow (use the app for that), but the batch processing and export work identically.
-
-> 💡 **Tip:** Process with the CLI overnight, then open the app the next morning pointing at the same `batch.db` to review and curate visually.
+- **Active learning.** Your confirmed and rejected events can be turned into training data to fine-tune the detector for your recording conditions. See the [active learning tutorial](tutorial-active-learning.md).
+- **Overnight batches on a server.** The same engine runs without the app; results land in the same `batch.db`, which you then open in the app to review. See the [developer guide](developer-guide.md#8-headless-cli).
 
 ### Adjusting thresholds between runs
 
@@ -475,8 +426,7 @@ Now that you've seen what your data looks like, you may want to adjust threshold
 
 ## What's Next?
 
-- **[Architecture deep-dive](architecture.md)** — understand the Quarter-Step YOLO streaming pipeline, the consolidation algorithm, and the Stage A / Stage B ML models in detail
-- **[Active Learning & Query-by-Example](advanced-search-active-learning.md)** — fine-tune the detector with your curated labels, and use similarity search to find calls the model missed
-- **[App reference](batch-app.md)** — complete Tauri command surface, source layout, and SQLite schema
-
-Happy birding! 🐦
+- **[Reviewing Detections](tutorial-review-curation.md)** — a keyboard-driven curation pass and the verification queue
+- **[Reading the Analytics Tab](tutorial-analytics.md)** — what each panel means and how to spot a bad run
+- **[Resuming, Re-running and the Results Cache](tutorial-resume-rerun.md)** — what happens when you change thresholds, add files or update the app
+- **[Export Cookbook](tutorial-export-cookbook.md)** — load your export in Python, R or Raven Pro
