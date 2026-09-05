@@ -797,42 +797,6 @@ pub fn add_manual_event(output_dir: String, session_id: i64, path: String, t_sta
 }
 
 #[tauri::command]
-pub fn set_manual_completeness(
-    output_dir: String,
-    event_id: i64,
-    human_completeness: String,
-    completeness_label: Option<String>,
-    completeness_source: String,
-    completeness_score: Option<f64>,
-) -> Result<(), String> {
-    let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
-    let scope = event_scope(&store, event_id);
-    store.set_manual_completeness(
-        event_id,
-        &human_completeness,
-        completeness_label.as_deref(),
-        &completeness_source,
-        completeness_score,
-    ).map_err(|e| e.to_string())?;
-    if let Some((session_id, file_id)) = scope {
-        let meta = serde_json::json!({
-            "human_completeness": human_completeness,
-            "completeness_label": completeness_label,
-            "completeness_source": completeness_source,
-            "completeness_score": completeness_score,
-        }).to_string();
-        log_telemetry(&store, &NewReviewEvent {
-            session_id,
-            event_id: Some(event_id),
-            file_id: Some(file_id),
-            action: "set_manual_completeness",
-            meta: Some(&meta),
-        });
-    }
-    Ok(())
-}
-
-#[tauri::command]
 pub fn delete_event(output_dir: String, event_id: i64) -> Result<(), String> {
     let store = Store::open(&db_path(&output_dir)).map_err(|e| e.to_string())?;
     let scope = event_scope(&store, event_id);

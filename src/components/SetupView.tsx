@@ -3,14 +3,28 @@ import { checkHealth, pickFile, pickFolder, prepareSystem, startSession, openExi
 import type { StartOpts, StartResult, HealthStatus, Summary } from "../types";
 import ManageCache from "./ManageCache";
 
-const SURAL_PRESETS = [
-  { label: 'Sural 2025 Low Elevation (PSL1–PSL9)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/2025/Low' },
-  { label: 'Sural 2025 Mid Elevation (PSM2–PSM10)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/2025/Mid' },
-  { label: 'Sural 2025 High Elevation (PSH1–PSH10)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/2025/High' },
-  { label: 'Sural 2024 High Elevation (PSH Root)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/High_elevation' },
-  { label: 'Sural 2024 Low Elevation (PSL Root)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/Low_elevation' },
-  { label: 'Sural 2024 Mid Elevation (PSM Root)', path: '/Users/leyangloh/Library/CloudStorage/Dropbox-GaTech/Le Yang Loh/Sural_AudioMoths/Mid_elevation' },
-];
+const RECENT_FOLDERS_KEY = "bird-audio.recent-folders";
+const RECENT_FOLDERS_MAX = 6;
+
+function loadRecentFolders(): string[] {
+  try {
+    const raw = window.localStorage.getItem(RECENT_FOLDERS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string" && v.length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberFolder(path: string): string[] {
+  const next = [path, ...loadRecentFolders().filter((p) => p !== path)].slice(0, RECENT_FOLDERS_MAX);
+  try {
+    window.localStorage.setItem(RECENT_FOLDERS_KEY, JSON.stringify(next));
+  } catch {
+    // Storage can be unavailable (private mode, quota); recents are a convenience only.
+  }
+  return next;
+}
 
 interface Props {
   onStarted: (result: StartResult, opts: StartOpts, initialSummary?: Summary | null) => void;
@@ -63,9 +77,11 @@ export default function SetupView({ onStarted }: Props) {
   const healthRequestId = useRef(0);
   const inputRef = useRef(input);
   useEffect(() => { inputRef.current = input; }, [input]);
+  const [recentFolders, setRecentFolders] = useState<string[]>(() => loadRecentFolders());
   const updateInput = useCallback((value: string) => {
     inputRef.current = value;
     setInput(value);
+    if (value) setRecentFolders(rememberFolder(value));
   }, []);
 
   useEffect(() => {
@@ -266,24 +282,26 @@ export default function SetupView({ onStarted }: Props) {
           <input style={{ flex: 1 }} value={input} readOnly placeholder="Browse to a folder of field recordings…" />
           <button onClick={async () => { const f = await pickFolder(); if(f) updateInput(f); }}>Browse…</button>
         </div>
-        <div style={{ marginTop: '8px' }}>
-          <label style={{ fontSize: '0.85rem', color: 'var(--text-faint)' }}>Quick Sural Dataset Preset:</label>
-          <select
-            className="select-input"
-            style={{ marginTop: '4px', width: '100%' }}
-            value={SURAL_PRESETS.some((preset) => preset.path === input) ? input : ""}
-            onChange={(e) => {
-              if (e.target.value) {
-                updateInput(e.target.value);
-              }
-            }}
-          >
-            <option value="">Select a Sural AudioMoth deployment folder...</option>
-            {SURAL_PRESETS.map((p) => (
-              <option key={p.path} value={p.path}>{p.label}</option>
-            ))}
-          </select>
-        </div>
+        {recentFolders.length > 0 && (
+          <div style={{ marginTop: '8px' }}>
+            <label style={{ fontSize: '0.85rem', color: 'var(--text-faint)' }}>Recent folders:</label>
+            <select
+              className="select-input"
+              style={{ marginTop: '4px', width: '100%' }}
+              value={recentFolders.includes(input) ? input : ""}
+              onChange={(e) => {
+                if (e.target.value) {
+                  updateInput(e.target.value);
+                }
+              }}
+            >
+              <option value="">Select a recently used folder…</option>
+              {recentFolders.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </div>
+        )}
         {hasCache && (
           <ManageCache
             outputDir={input}

@@ -1,6 +1,6 @@
 mod commands;
 mod state;
-mod active_learning_commands;
+mod script_commands;
 mod ecology_commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -28,17 +28,12 @@ pub fn run() {
             commands::set_event_review,
             commands::update_event_bounds,
             commands::add_manual_event,
-            commands::set_manual_completeness,
             commands::delete_event,
             commands::restore_event,
             commands::log_review_action,
             commands::get_review_telemetry,
             commands::prepare_review,
-            active_learning_commands::run_pcen,
-            active_learning_commands::run_active_learning,
-            active_learning_commands::run_qbe_search,
-            active_learning_commands::run_verification_plan,
-            active_learning_commands::score_manual_completeness,
+            script_commands::run_verification_plan,
             ecology_commands::get_ecological_summary,
         ])
         .run(tauri::generate_context!())
