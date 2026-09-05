@@ -140,16 +140,21 @@ flowchart LR
     G --> H["result JSON"]
 ```
 
-- **Feature extraction** — `librosa.stream` reads the file in blocks; STFT
+- **Feature extraction** — the file is read in quarter-step blocks of 128 STFT
+  frames (`iter_quarter_blocks` in `ml_engine.py`, which pulls
+  `STREAM_READ_BLOCKS` = 32 of them per disk pass and slices them out, sample-for-sample
+  identical to a `librosa.stream` with `block_length=128` but about 3× faster); STFT
   (`n_fft=1024`, `hop=256`) keeps bins **[88:248] ≈ 4125–11625 Hz**, the
   warbler's buzz band (`constants.py:14-18`).
 - **Stage A (quarter-step detection)** — a 4-block window (**≈ 2.75 s**) slides
   forward one block (**≈ 0.68 s**) so no call falls between windows; each window
   → dB-spectrogram image → `buzz_localizer.pt` YOLO (internal floor `conf=0.25`)
   → candidate boxes mapped to absolute time/frequency. Each window image is
-  normalised on its own, but windows are pushed through the localizer in batches
-  of `STAGE_A_BATCH_SIZE` (32): one forward pass per batch instead of one per
-  window, which halves the per-file time on Apple GPUs without changing any box.
+  normalised on its own, but on GPUs windows are pushed through the localizer in
+  batches of `STAGE_A_BATCH_SIZE` (32): one forward pass per batch instead of one
+  per window, which halves the per-file time on Apple GPUs without changing any
+  box. On CPU a large batch is several times *slower* per window, so
+  `STAGE_A_BATCH_SIZE_CPU` (1) applies there.
 - **Consolidation** — the same buzz appears in several overlapping windows;
   `consolidate.consolidate` merges them into event-level tracks in six phases:
   strong links seed tracks, support links extend them, edge singletons are

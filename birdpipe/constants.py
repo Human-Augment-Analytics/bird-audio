@@ -11,13 +11,15 @@ SAMPLE_RATE = 48000
 N_FFT = 1024
 HOP_LENGTH = 256
 BLOCK_FRAMES = 128            # frames per librosa.stream block (one quarter step)
+STREAM_READ_BLOCKS = 32       # quarter blocks read per disk pass (throughput only; no effect on results)
 WINDOW_FRAMES = 512           # analysis window = 4 blocks
 FREQ_BIN_LOW = 88
 FREQ_BIN_HIGH = 248           # band = bins [88:248] -> 160 rows
 F_MIN_HZ = 4125.0
 F_MAX_HZ = 11625.0
 STAGE_A_MODEL_CONF = 0.25
-STAGE_A_BATCH_SIZE = 32       # windows per localizer forward pass (throughput only; no effect on results)
+STAGE_A_BATCH_SIZE = 32       # windows per localizer forward pass on GPUs (throughput only; no effect on results)
+STAGE_A_BATCH_SIZE_CPU = 1    # on CPU a large batch is ~6x slower per window (activations blow the cache)
 
 # Window stride Δt and duration T_w in seconds (matches paper's 0.6827 s / 2.7467 s).
 DELTA_T = BLOCK_FRAMES * HOP_LENGTH / SAMPLE_RATE                 # ≈ 0.6827 s
