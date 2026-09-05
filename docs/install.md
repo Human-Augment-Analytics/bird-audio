@@ -94,7 +94,7 @@ chmod +x Bird.Audio.Analyzer_<version>_amd64.AppImage
 
 ## 6. First launch: Prepare System
 
-![Setup view on first launch, with the health panel asking for Prepare System](screenshots/tutorials/setup-fresh.png)
+![Setup view on first launch, with the health panel asking for Prepare System](screenshots/tutorials/setup-first-launch.png)
 
 When the app opens, the panel at the top of the **Batch** tab runs a health check. On a fresh computer it reads **Setup required before listening** with a **Prepare System** button.
 
