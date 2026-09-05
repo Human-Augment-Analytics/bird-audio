@@ -48,8 +48,8 @@ On first launch the app runs a **health check** of the Python environment and th
 
 <!-- screenshot: Setup view -->
 
-- **Input folder** — the folder of recordings (subfolders included).
-- **Output directory** — where results are written. All state lives in `<output_dir>/batch.db`.
+- **Recording folder** — the folder of recordings (subfolders included). All state is written to `batch.db` inside this folder. Folders you have used before appear in a **Recent folders** list under the Browse button.
+- **View Existing Results** / **Re-run / Resume Batch** — shown when the folder already holds a `batch.db`. The first opens the most complete previous session straight into Review and Analytics without processing anything; the second resumes it, or starts a new session if the settings or code changed (see [Resuming and re-running](tutorial-resume-rerun.md)).
 - **θ_A — detection sensitivity** *(optional)*. Lower = more candidate detections (and more false positives); higher = stricter.
 - **θ_B — quality filter** *(optional)*. Filters events by Stage-B *completeness* score — how clean/fully-formed the buzz is. Raise it to keep only the cleanest events.
 
@@ -59,7 +59,7 @@ On first launch the app runs a **health check** of the Python environment and th
 
 <!-- screenshot: Run view with per-file progress -->
 
-The pipeline processes every audio file in the folder, showing **per-file progress**, a **clock-time ETA**, and running **buzz counts**. Results are aggregated into `batch.db` as it goes.
+The pipeline processes every audio file in the folder, showing **per-file progress**, processing **speed** and a **clock-time ETA**, and running counts of detections and retained records. Results are aggregated into `batch.db` as it goes. **Cancel run** stops after the files currently in flight and kills the worker processes.
 
 The database is the durable checkpoint. On resume, unchanged completed files are skipped, changed files are reprocessed with stale detections replaced, and removed inputs are pruned.
 
@@ -78,10 +78,11 @@ After a batch run, switch to **Review** to turn raw ML output into a verified da
    - **Reject** — a false positive (kept in the DB, marked rejected).
    - **Reset** — back to *unreviewed*.
 4. **Fix the bounds.** Drag the edges of an event box to correct its time/frequency extent.
-5. **Add a manual event.** Draw a new box on the spectrogram for a call the model missed. Manual boxes are stored with completeness left unresolved; they are kept separate from pipeline detections.
-6. **Delete** an event entirely to remove a false positive from the data.
+5. **Add a manual event.** Click **Draw Bounding Box** (or drag directly on the spectrogram) to box a call the model missed. Manual boxes are stored as confirmed with completeness left unresolved; they are kept separate from pipeline detections.
+6. **Delete** an event entirely to remove a false positive from the data. Select a box and press `Delete`, `Backspace` or `D`. **Undo** (`Cmd/Ctrl+Z`) restores it; **Redo** (`Cmd/Ctrl+Shift+Z` or `Cmd/Ctrl+Y`) reapplies it.
+7. **Verification plan.** Expand the panel above the spectrogram to compute a ranked queue of detections to check next, sized to a target precision half-width. Click a queued item to jump to it.
 
-Decisions are saved to `batch.db` and accumulate across Review sessions — stop and resume curation any time.
+Decisions are saved to `batch.db` and accumulate across Review sessions — stop and resume curation any time. The [review tutorial](tutorial-review-curation.md) walks through a full keyboard-driven session.
 
 ### Keyboard shortcuts
 
@@ -144,7 +145,7 @@ cargo run -p batch-core --bin batch -- \
 
 | Artifact | What it is |
 | --- | --- |
-| `<output_dir>/batch.db` | SQLite database — the durable source of truth (events + curation state). Resumable and idempotent. |
+| `<recording folder>/batch.db` | SQLite database — the durable source of truth (sessions, files, events, curation state, review telemetry). Resumable and idempotent. |
 | `events.csv` / `events.json` | Exported events joined to file paths, ordered by path then time. Optionally confirmed-only. |
 
 ---
@@ -158,13 +159,18 @@ cargo run -p batch-core --bin batch -- \
 | First `tauri dev` takes minutes | Normal — the first Rust build is slow; later runs are incremental. |
 | Too many false positives | Raise **θ_A** and/or **θ_B** in Setup, or reject them in Review. |
 | Missing real calls | Lower **θ_A**, or add them manually in Review. |
-| Re-ran a folder, nothing happened | Expected — runs are idempotent; processed files are skipped. Use a fresh output DB or clear the results cache to reprocess. |
-| Spectrogram controls unresponsive | They activate once the waveform finishes loading; wait a moment after selecting a file. |
+| Re-ran a folder, nothing happened | Expected — runs are idempotent; processed files are skipped. Use the cache panel in Setup to drop specific files, or clear the cache to reprocess everything. |
+| Re-ran a folder, everything reprocessed | The settings, a model file, or the pipeline code changed since the previous session, so a new session was started. Old results stay in `batch.db` and can be opened with **View Existing Results**. |
+| Spectrogram stays blank with "Generating FFT spectrogram…" | Normal for a 15-minute file: decoding and the FFT take a few seconds. Controls activate when the overlay disappears. |
+| Duplicate, overlapping buzz rows in an export | Produced by pipeline versions before the contained-singleton consolidation fix. Re-run the folder; the code change starts a fresh session. |
 
 Still stuck? Open an issue: <https://github.com/Human-Augment-Analytics/bird-audio/issues>.
 
 For more hands-on workflows and downstream usage:
 - **[Your First Analysis Session](tutorial-first-analysis.md)** — Step-by-step guided analysis walk-through.
+- **[Reviewing Detections](tutorial-review-curation.md)** — Keyboard-first curation and the verification queue.
+- **[Reading the Analytics Tab](tutorial-analytics.md)** — What each panel means and how to spot a bad run.
+- **[Resuming, Re-running and the Results Cache](tutorial-resume-rerun.md)** — Session identity and safe reprocessing.
 - **[Active Learning Loop Tutorial](tutorial-active-learning.md)** — Learn how to fine-tune the model to improve performance.
 - **[Export Cookbook](tutorial-export-cookbook.md)** — Detailed snippets to load and visualize data in R, Python, and Raven Pro.
 

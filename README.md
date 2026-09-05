@@ -13,7 +13,11 @@ Built with Tauri + React (frontend) and Rust + Python (backend). One app, three 
 > - **[Your First Analysis Session](docs/tutorial-first-analysis.md)** — Guided end-to-end lab walkthrough of running and curating a batch.
 > - **[Active Learning Loop Tutorial](docs/tutorial-active-learning.md)** — Guided workflow to improve the model on your own data.
 > - **[Export Cookbook](docs/tutorial-export-cookbook.md)** — Copy-paste code recipes for Python, R (warbleR), and Cornell Raven Pro.
+> - **[Reviewing Detections](docs/tutorial-review-curation.md)** — Keyboard-first curation: confirm, reject, fix bounds, draw missed calls, and work a verification queue.
+> - **[Reading the Analytics Tab](docs/tutorial-analytics.md)** — What each panel measures, what it cannot tell you, and how to spot a bad run.
+> - **[Resuming, Re-running and the Results Cache](docs/tutorial-resume-rerun.md)** — How sessions are matched to settings and code, and how to reprocess safely.
 > - **[Feature Guide](docs/feature-guide.md)** — Packaged-app screenshots, feature uses, and scientific limits using a bounded Sural AudioMoth sample.
+> - **[App Reference](docs/batch-app.md)** — Source layout, Tauri command surface, session identity, and the SQLite schema.
 
 ## Technical Architecture
 
@@ -71,9 +75,11 @@ cargo run -p batch-core --bin batch -- \
 
 ### Batch Mode (Setup → Run)
 
-1. **Setup** — pick an input folder, output directory, and optionally adjust `θ_A` (detection sensitivity) and `θ_B` (quality filter).
-2. **Run** — the pipeline processes all audio files in the folder. Progress is shown per-file; results are aggregated into `batch.db`.
-3. **Export** — save detected events as CSV or JSON. The *confirmed only* option exports only events you have confirmed in Review mode.
+1. **Setup** — pick a recording folder and optionally adjust `θ_A` (detection sensitivity) and `θ_B` (quality filter). Results always live in `batch.db` inside that folder.
+2. **Run** — the pipeline processes all audio files in the folder. Progress, speed and ETA are shown live; results are aggregated into `batch.db` as files finish.
+3. **Export** — save detected events as CSV, JSON, warbleR CSV or a Raven selection table. The *confirmed only* option exports only events you have confirmed in Review mode.
+
+Re-running the same folder with the same settings resumes the existing session and skips finished files. Changing thresholds, the target band, a model file, or the pipeline code starts a fresh session so results are never mixed across configurations. See [Resuming and re-running](docs/tutorial-resume-rerun.md).
 
 ### Review Mode
 
@@ -81,10 +87,11 @@ After a batch run, switch to Review mode to curate the ML detections:
 
 - A file list shows all processed recordings. Click a file to load its events.
 - Events are displayed on an interactive spectrogram with bounding boxes.
-- For each event you can: **confirm**, **reject**, or reset to *unreviewed*.
+- For each event you can: **confirm**, **reject**, or reset to *unreviewed*, from the mouse or the keyboard (`C` / `X` / `U`, `J` / `K` to move, `N` for the next unreviewed).
 - Edit an event's time/frequency bounds by dragging on the spectrogram.
 - Add manual events by drawing a box on the spectrogram.
-- Delete false positives entirely.
+- Delete false positives entirely, with undo and redo.
+- Open the **Verification plan** panel to get a ranked queue of the detections whose review most tightens the precision estimate.
 - Use the confirmed-only export to output only your verified detections.
 
 ## Analysis & reproducibility tools
@@ -125,7 +132,7 @@ model paths; the headless worker takes the same values as `--f-min-hz`, `--f-max
 
 ## Output Structure
 
-All state is stored in `<output_dir>/batch.db` (SQLite). The database is the durable checkpoint: runs are resumable and idempotent — done files are skipped on re-run, and events accumulate curation annotations across Review sessions.
+All state is stored in `<recording folder>/batch.db` (SQLite). The database is the durable checkpoint: runs are resumable and idempotent — done files are skipped on re-run, and events accumulate curation annotations across Review sessions.
 
 Export artifacts:
 - `events.csv` / `events.json`: detected (and optionally curated) events joined to file paths, ordered by path then time.

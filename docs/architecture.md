@@ -96,6 +96,18 @@ done files are skipped on re-run, and any `in_progress` files orphaned by a cras
 are reset to `pending` (`engine.rs` `reset_in_progress`, `store.rs`
 `find_resumable`). That database *is* the "cache" the ManageCache panel manages.
 
+Which session a re-run resumes is decided by `batch-core/src/identity.rs`. Every
+session stores a `config_key`; `results_key` reduces it to an **analysis** part
+(`theta_a`, `theta_b`, `species_name`, `f_min_hz`, `f_max_hz`, model file size
+and mtime) and a **code** part (SHA-256 of `scripts/ml_engine.py` and the
+`birdpipe/` modules). A candidate session is compatible when both parts match;
+sessions recorded before content hashes existed match on the analysis part alone.
+Among compatible sessions on the same input roots and device, the one with the
+most completed files wins. Anything else — a different threshold, band, model or
+pipeline code — starts a new session, so a database never mixes results from two
+configurations. The device, working directory and app version are deliberately
+not part of the key.
+
 ## 4. Worker protocol
 
 Newline-delimited JSON over the worker's stdin/stdout
@@ -136,9 +148,14 @@ flowchart LR
   → dB-spectrogram image → `buzz_localizer.pt` YOLO (internal floor `conf=0.25`)
   → candidate boxes mapped to absolute time/frequency (`ml_engine.py:119-145`).
 - **Consolidation** — the same buzz appears in several overlapping windows;
-  `consolidate.consolidate` merges them into event-level tracks via affinity
-  scoring (IoU in time/freq, strong/support link gates, edge absorption —
-  `constants.py:54-81`). Each `Event` carries `conf = c̃ = max member confidence`.
+  `consolidate.consolidate` merges them into event-level tracks in six phases:
+  strong links seed tracks, support links extend them, edge singletons are
+  absorbed, events are built, near-duplicate events (time IoU ≥ 0.75) are
+  merged, and finally a singleton almost entirely inside a longer event from
+  another window in the same band (time containment ≥ 0.90, frequency ≥ 0.50)
+  is folded into it (`constants.py` `ConsolidationParams`). Each `Event`
+  carries `conf = c̃ = max member confidence` and `n_members`, the number of
+  per-window boxes it summarises.
 - **Stage B (completeness curation)** — per event, a standardized 288×288 crop is
   built and `classifier.pt` returns **`p("full")`** = `completeness_score` — how
   *complete/clean* the buzz is, **not which species it is** (`stageb.py:64-69`).
@@ -147,7 +164,9 @@ flowchart LR
 
 Both are **post-processing thresholds** applied at the very end
 (`birdpipe/records.py:9-17`). They do **not** change what is detected — only which
-events are *labeled* and *kept*:
+events are *labeled* and *kept*. They are nevertheless part of the session identity
+(section 3), so changing either in Setup starts a new session rather than
+re-labelling the old one:
 
 ```python
 q = e.completeness_score                          # p(full) from Stage B, 0..1

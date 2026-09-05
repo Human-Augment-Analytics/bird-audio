@@ -18,7 +18,8 @@ effect or biological abundance.
 
 | Feature | What it does | Why it is useful | Important limit |
 |---|---|---|---|
-| Recording folder and Sural presets | Selects a folder recursively; presets jump to common Sural deployments. | Makes a recorder, deployment, or bounded validation set easy to run. | Selecting an elevation root can mean hundreds of files; verify the scope before starting. |
+| Recording folder and recent folders | Selects a folder recursively; folders used before are offered in a recent list. | Makes a recorder, deployment, or bounded validation set easy to run again. | Selecting an elevation root can mean hundreds of files; verify the scope before starting. |
+| View Existing Results / Re-run | Opens the most complete earlier session without processing, or resumes it. | Lets a colleague inspect a finished run without touching the audio. | A re-run after a settings or code change starts a new session; earlier sessions remain in the database. |
 | Detection sensitivity (Stage A) | Sets the candidate-detection threshold. | Lower values retain more possible calls for later review. | A model score is not a calibrated probability of species presence. |
 | Quality filter (Stage B) | Filters candidate events by predicted call completeness. | Lets clean calls be prioritized for measurement or review. | Completeness is not species identity. |
 | Analysis target | Records species/call label, frequency band, and model paths. | Keeps the run configuration visible and reproducible. | A label does not validate that the model generalizes to a new site or season. |
