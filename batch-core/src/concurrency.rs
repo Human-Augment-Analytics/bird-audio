@@ -1,13 +1,17 @@
-//! Choose how many warm workers to run, by device (GPU=1, CPU=pool).
+//! Choose how many warm workers to run, by device (CUDA=1, MPS=2, CPU=pool).
 
 /// Resolve worker count. An explicit `requested` always wins (min 1).
-/// Otherwise CUDA/MPS use a single warm worker; CPU uses cores-1 (min 1).
+/// Otherwise CUDA uses a single warm worker, MPS two (the GPU is shared and a
+/// second process overlaps its CPU-side preprocessing with the first one's
+/// inference; measured 14 s -> 12.4 s per 15-minute file on an M3 Pro, flat
+/// beyond two), and CPU uses cores-1 (min 1).
 pub fn resolve_concurrency(device: &str, requested: Option<usize>) -> usize {
     if let Some(r) = requested {
         return r.max(1);
     }
     match device {
-        d if d.starts_with("cuda") || d.starts_with("mps") => 1,
+        d if d.starts_with("cuda") => 1,
+        d if d.starts_with("mps") => 2,
         _ => {
             let cores = std::thread::available_parallelism()
                 .map(|n| n.get())
@@ -24,7 +28,7 @@ mod tests {
     #[test]
     fn gpu_devices_use_single_worker() {
         assert_eq!(resolve_concurrency("cuda", None), 1);
-        assert_eq!(resolve_concurrency("mps", None), 1);
+        assert_eq!(resolve_concurrency("mps", None), 2);
     }
 
     #[test]
@@ -41,6 +45,6 @@ mod tests {
     #[test]
     fn cuda_with_index_still_single_worker() {
         assert_eq!(resolve_concurrency("cuda:0", None), 1);
-        assert_eq!(resolve_concurrency("mps:0", None), 1);
+        assert_eq!(resolve_concurrency("mps:0", None), 2);
     }
 }

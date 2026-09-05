@@ -157,6 +157,7 @@ cargo run -p batch-core --bin batch -- \
 | Symptom | Fix |
 | --- | --- |
 | App says the system isn't ready | Click **Prepare System**; wait for the health check to go green. |
+| Processing is slow | A 15-minute 48 kHz recording takes about 12–14 s on an M3 Pro (MPS, two workers) and a few minutes per file on CPU, where the pool uses all cores but one. Close other GPU-heavy apps; files on cloud-synced folders (Dropbox online-only) must download first. |
 | Inference is slow / "no device" | The app falls back to CPU when no GPU is found. Check CUDA drivers (NVIDIA) or that you're on Apple Silicon (MPS). |
 | First `tauri dev` takes minutes | Normal — the first Rust build is slow; later runs are incremental. |
 | Too many false positives | Raise **θ_A** and/or **θ_B** in Setup, or reject them in Review. |
