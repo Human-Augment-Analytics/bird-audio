@@ -119,4 +119,3 @@ export const runVerificationPlan = async (
 export const getReviewTelemetry = (outputDir: string, sessionId: number) =>
   invoke<Record<string, unknown>>("get_review_telemetry", { outputDir, sessionId });
 export const audioSrc = (path: string): string => convertFileSrc(path);
-

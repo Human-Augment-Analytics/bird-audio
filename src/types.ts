@@ -172,5 +172,3 @@ export interface EventRow {
 
 export type ManualCompletenessDecision = "complete" | "incomplete" | "unsure";
 export type ManualCompletenessSource = "human" | "stage_b_accepted" | "unresolved";
-
-
