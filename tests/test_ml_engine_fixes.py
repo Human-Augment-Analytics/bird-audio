@@ -74,7 +74,8 @@ class DummyBinaryStageCModel(torch.nn.Module):
 def test_non_yolo_stage_c_classifier(tmp_path):
     wav_path = tmp_path / "test.wav"
     sr = 48000
-    y = np.zeros(int(3.0 * sr), dtype=np.float32)
+    # low-level noise: Stage B rebuilds crops from the waveform and skips silence
+    y = (np.random.default_rng(0).standard_normal(int(3.0 * sr)) * 1e-3).astype(np.float32)
     sf.write(str(wav_path), y, sr)
 
     from tests.test_stage_c import FakeResult, FakeClassifierResult
@@ -132,7 +133,8 @@ def test_non_yolo_stage_c_classifier(tmp_path):
 def test_non_yolo_stage_c_classifier_failing(tmp_path):
     wav_path = tmp_path / "test.wav"
     sr = 48000
-    y = np.zeros(int(3.0 * sr), dtype=np.float32)
+    # low-level noise: Stage B rebuilds crops from the waveform and skips silence
+    y = (np.random.default_rng(0).standard_normal(int(3.0 * sr)) * 1e-3).astype(np.float32)
     sf.write(str(wav_path), y, sr)
 
     from tests.test_stage_c import FakeResult, FakeClassifierResult
@@ -277,7 +279,7 @@ def test_f_max_nyquist_capping_and_map_box(tmp_path):
     with patch("scripts.ml_engine.YOLO", return_value=mock_localizer), \
          patch("scripts.ml_engine.os.path.exists", return_value=True), \
          patch("scripts.ml_engine.coords.map_box", wraps=coords.map_box) as mock_map_box, \
-         patch("scripts.ml_engine.stageb.build_crop", wraps=stageb.build_crop) as mock_build_crop, \
+         patch("scripts.ml_engine.stageb.reconstruct_crop", wraps=stageb.reconstruct_crop) as mock_crop, \
          patch("scripts.ml_engine.stageb.classify_crop", return_value=1.0):
         
         pipeline = BirdAudioPipeline(localizer_path="dummy_localizer.pt", classifier_path=None, device="cpu")
@@ -300,8 +302,8 @@ def test_f_max_nyquist_capping_and_map_box(tmp_path):
         assert called_kwargs.get("tw") == pytest.approx(
             ((C.WINDOW_FRAMES - 1) * C.HOP_LENGTH + 1024) / sr
         )
-        assert mock_build_crop.call_count > 0
-        assert mock_build_crop.call_args.kwargs["sec_per_frame"] == pytest.approx(C.HOP_LENGTH / sr)
+        assert mock_crop.call_count > 0
+        assert mock_crop.call_args.args[1] == sr
 
         zero_based = pipeline.process_file(
             str(wav_path),

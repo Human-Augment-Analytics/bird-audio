@@ -1,6 +1,8 @@
 """Stage B crop construction (Table A.8) + classifier wrapper."""
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 
 from . import constants as C
@@ -60,6 +62,80 @@ def build_crop(band_img: np.ndarray, event: Event, params: StageBParams = StageB
     x0 = (params.out_size - nw) // 2
     canvas[y0:y0 + nh, x0:x0 + nw] = resized
     return np.stack([canvas, canvas, canvas], axis=-1)
+
+
+def reconstruct_crop(wav: np.ndarray, sr: int, ts: float, te: float,
+                     f_low: float, f_high: float) -> Optional[np.ndarray]:
+    """Rebuild one event's Stage-B crop from the waveform.
+
+    Port of SpectroBird ``stage_b.reconstruct_crop``: a fresh centred STFT over the
+    event (extended left to a 288-frame span when shorter), cut to the event band,
+    flipped, per-crop dB normalised. Returns None when no valid crop exists.
+    """
+    import librosa
+
+    frame_time = 2.74666 * 288 / 512.0
+    ts_frame = max(0.0, te - frame_time) if te - ts < frame_time else max(0.0, ts)
+
+    start = max(0, min(int(ts_frame * sr), len(wav)))
+    end = max(0, min(int(te * sr), len(wav)))
+    if end <= start:
+        return None
+    y = np.array(wav[start:end])
+    if y.size == 0:
+        return None
+
+    feats = np.abs(librosa.stft(y, n_fft=C.N_FFT, hop_length=C.HOP_LENGTH, center=True))
+    n_rows = feats.shape[0]
+    if n_rows <= 1:
+        return None
+
+    max_freq = librosa.fft_frequencies(sr=sr, n_fft=C.N_FFT).max()
+    f_low = max(0.0, min(float(f_low), float(max_freq)))
+    f_high = max(0.0, min(float(f_high), float(max_freq)))
+    if f_high <= f_low:
+        return None
+
+    top = max(0, min(int(n_rows * (f_low / max_freq)), n_rows - 1))
+    bot = max(top + 1, min(int(n_rows * (f_high / max_freq)), n_rows))
+    feats = feats[top:bot][::-1].copy()
+    if feats.shape[1] <= 2:
+        return None
+    feats = feats[:, 1:-1].copy()
+
+    ref = float(np.max(feats))
+    if ref <= 0.0 or not np.isfinite(ref):
+        return None
+    img = librosa.amplitude_to_db(feats, ref=np.max)
+    rng = np.amax(img) - np.amin(img)
+    if rng <= 0:
+        return None
+    img_png = np.clip((img - np.amin(img)) * 255.0 / rng, 0, 255).astype(np.uint8)
+    return np.tile(np.expand_dims(img_png, -1), (1, 1, 3))
+
+
+def make_square_288(im: np.ndarray, size: int = 288) -> np.ndarray:
+    """Scale the longest side to ``size`` and centre-pad with the crop mean.
+
+    Same result as SpectroBird's albumentations ``LongestMaxSize`` + ``PadIfNeeded``
+    (rounded resize target, bilinear resize, constant fill of the uint8 mean).
+    """
+    import cv2
+
+    if im.shape[0] <= 0 or im.shape[1] <= 0:
+        raise ValueError("Invalid crop dimensions.")
+    fill = [int(v) for v in np.mean(im, axis=(0, 1)).astype(np.uint8)]
+    h, w = im.shape[:2]
+    scale = size / max(h, w)
+    nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
+    if (nh, nw) != (h, w):
+        im = cv2.resize(im, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    top = int((size - nh) / 2.0) if nh < size else 0
+    left = int((size - nw) / 2.0) if nw < size else 0
+    bottom = max(0, size - nh - top)
+    right = max(0, size - nw - left)
+    out = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=fill)
+    return out.astype(np.uint8)
 
 
 def classify_crop(model, crop_rgb: np.ndarray, complete_class: str = "full") -> float:

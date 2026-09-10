@@ -178,7 +178,7 @@ class BirdAudioPipeline:
         return np.clip((db - db.min()) * 255 / (rng + 1e-6), 0, 255).astype(np.uint8)
 
     def process_file(self, input_wav, output_root="output", write_artifacts=False,
-                     theta_a=0.0, theta_b=0.530306, emit_raw=False,
+                     theta_a=C.THETA_A, theta_b=0.530306, emit_raw=False,
                      localizer=None, classifier=None, classifier_c=None,
                      f_min_hz=None, f_max_hz=None, species_name=None):
         input_wav = Path(input_wav)
@@ -288,18 +288,21 @@ class BirdAudioPipeline:
         # Consolidation -> event tracks
         events = consolidate.consolidate(raw, ConsolidationParams())
 
-        # Stage B: completeness curation on consolidated events
+        # Stage B: completeness curation on consolidated events. As in SpectroBird,
+        # events at or below θ_A are not classified, and each crop is rebuilt from
+        # the waveform; a skipped or unbuildable crop scores 0.
         sbp = StageBParams(theta_b=theta_b)
         band = None
         if events and active_classifier is not None:
-            band = self._band_image(feats_quarters, freq_bin_low=freq_bin_low, freq_bin_high=freq_bin_high)
+            wav, _ = librosa.load(str(input_wav), sr=int(sr), mono=True)
             for ev in events:
-                crop = stageb.build_crop(
-                    band, ev, params=sbp, sec_per_frame=sec_per_frame,
-                    f_min=f_min, f_max=f_max,
-                )
-                ev.completeness_score = stageb.classify_crop(
-                    active_classifier, crop, sbp.complete_class)
+                ev.completeness_score = 0.0
+                if ev.conf <= theta_a:
+                    continue
+                crop = stageb.reconstruct_crop(wav, int(sr), ev.t_start, ev.t_end, ev.f_low, ev.f_high)
+                if crop is not None:
+                    ev.completeness_score = stageb.classify_crop(
+                        active_classifier, stageb.make_square_288(crop), sbp.complete_class)
         rec.finalize_events(events, theta_a=theta_a, theta_b=theta_b)
 
         # Stage C: classification on retained events
@@ -408,7 +411,7 @@ def main():
     parser.add_argument("--species-name", type=str, help="Species or call-type label recorded for provenance")
     parser.add_argument("--device", type=str, help="Device (cpu, cuda, mps)")
     parser.add_argument("--conf", type=float, default=C.STAGE_A_MODEL_CONF, help="Stage A confidence threshold")
-    parser.add_argument("--theta-a", type=float, default=0.0, help="Export Stage A conf threshold")
+    parser.add_argument("--theta-a", type=float, default=C.THETA_A, help="Stage A conf gate for Stage B and export")
     parser.add_argument("--theta-b", type=float, default=0.530306, help="Stage B completeness threshold")
     parser.add_argument("--write-artifacts", action="store_true", help="Write vis/crops/wav/labels")
     parser.add_argument("--worker", action="store_true", help="Run as a stdin/stdout JSON worker")

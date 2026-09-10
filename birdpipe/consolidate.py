@@ -1,28 +1,45 @@
-"""Window-geometry event consolidation (paper §5.3.3, Table A.6, Eq A.1)."""
+"""Window-geometry event consolidation (paper §5.3.3, Table A.6, Eq A.1).
+
+Port of SpectroBird's locked A3 linker (``_a3_reference``, BELC_A3_v1_20260418):
+mutual-best candidate edges per window pair, strong/support track assembly,
+edge-singleton absorption, and edge-censored boundary fusion with extent
+preservation. Given the same raw detections it yields the same events.
+"""
 from __future__ import annotations
 
-from typing import List, Sequence
+import statistics
+from typing import Dict, List, Sequence
 
 from . import geometry as g
 from .constants import ConsolidationParams
 from .types import Box, Event, RawDetection
 
+EPS = 1e-12
+_RULE_RANK = {"strong": 0, "support": 2}
+
+
+def _edge_value(d: RawDetection, p: ConsolidationParams) -> float:
+    """Time-edge proximity: 0 away from a window edge, 1 at/past one."""
+    dist = min(d.norm_left, 1.0 - d.norm_right)
+    return g.clip01((p.eta - dist) / max(p.eta, EPS))
+
 
 def affinity(a: RawDetection, b: RawDetection, p: ConsolidationParams) -> float:
     """Pairwise association score A_ij (Eq 1), clipped to [0,1]."""
     w = p.affinity
-    d_a, d_b = a.t_end - a.t_start, b.t_end - b.t_start
-    bw_a, bw_b = a.f_high - a.f_low, b.f_high - b.f_low
+    d_a, d_b = max(0.0, a.t_end - a.t_start), max(0.0, b.t_end - b.t_start)
+    bw_a, bw_b = max(0.0, a.f_high - a.f_low), max(0.0, b.f_high - b.f_low)
     max_d, max_bw = max(d_a, d_b), max(bw_a, bw_b)
     rho_t = min(d_a, d_b) / max_d if max_d > 0 else 0.0
     rho_f = min(bw_a, bw_b) / max_bw if max_bw > 0 else 0.0
-    delta_t = abs(g.center(a.t_start, a.t_end) - g.center(b.t_start, b.t_end)) / max_d if max_d > 0 else 0.0
-    delta_f = abs(g.center(a.f_low, a.f_high) - g.center(b.f_low, b.f_high)) / max_bw if max_bw > 0 else 0.0
+    dct = abs(g.center(a.t_start, a.t_end) - g.center(b.t_start, b.t_end))
+    dcf = abs(g.center(a.f_low, a.f_high) - g.center(b.f_low, b.f_high))
+    delta_t = dct / max_d if max_d > 0 else 1.0
+    delta_f = dcf / max_bw if max_bw > 0 else 1.0
     iou2d = g.box_iou_2d(a, b)
     iou_t = g.interval_iou(a.t_start, a.t_end, b.t_start, b.t_end)
     iou_f = g.interval_iou(a.f_low, a.f_high, b.f_low, b.f_high)
-    e_ij = max(g.edge_proximity(a.norm_left, a.norm_right, p.eta),
-               g.edge_proximity(b.norm_left, b.norm_right, p.eta))
+    e_ij = max(_edge_value(a, p), _edge_value(b, p))
     gap = abs(a.window - b.window)
     score = (w.iou2d * iou2d + w.iou_t * iou_t + w.iou_f * iou_f
              + w.dur_ratio * rho_t + w.bw_ratio * rho_f
@@ -35,11 +52,9 @@ def affinity(a: RawDetection, b: RawDetection, p: ConsolidationParams) -> float:
 def weighted_median(values: Sequence[float], weights: Sequence[float]) -> float:
     """Lower weighted median: smallest v where cumulative weight >= half of total."""
     pairs = sorted(zip(values, weights), key=lambda vw: vw[0])
-    total = sum(w for _, w in pairs)
-    if total <= 0:
-        vals = sorted(values)
-        return vals[len(vals) // 2]
-    half = total / 2.0
+    if all(w <= 0.0 for _, w in pairs):
+        return float(statistics.median(values))
+    half = 0.5 * sum(w for _, w in pairs)
     acc = 0.0
     for v, w in pairs:
         acc += w
@@ -48,39 +63,41 @@ def weighted_median(values: Sequence[float], weights: Sequence[float]) -> float:
     return pairs[-1][0]
 
 
-def _fuse(members: List[int], dets: Sequence[RawDetection], p: ConsolidationParams) -> Event:
-    """Convert a track (member indices) into a consolidated Event.
+def _time_bounds(members: List[int], dets: Sequence[RawDetection], p: ConsolidationParams):
+    """Edge-censored weighted median with extent preservation.
 
-    Frequency bounds: confidence-weighted median over all members. Time bounds:
-    edge-censored confidence-weighted median (starts near a window's left edge are
-    excluded from the start vote; ends near the right edge from the end vote), so
-    truncated partial views do not pull the boundary inward.
-
-    NOTE (fidelity risk #4): the paper's "expand the final boundary when necessary"
-    extent-preservation nuance is approximated here by the ordering guard; validate
-    against reference outputs.
+    Starts near a window's left edge (ends near its right edge) are censored: they do
+    not vote in the weighted median, but they can still widen the fused boundary to
+    the observed extent.
     """
+    start_edge = [m for m in members if dets[m].norm_left <= p.eta + EPS]
+    end_edge = [m for m in members if (1.0 - dets[m].norm_right) <= p.eta + EPS]
+    start_ok = [m for m in members if m not in start_edge] or list(members)
+    end_ok = [m for m in members if m not in end_edge] or list(members)
+    t_start = weighted_median([dets[m].t_start for m in start_ok], [dets[m].conf for m in start_ok])
+    t_end = weighted_median([dets[m].t_end for m in end_ok], [dets[m].conf for m in end_ok])
+    if start_edge:
+        t_start = min(t_start, min(dets[m].t_start for m in start_edge))
+    if end_edge:
+        t_end = max(t_end, max(dets[m].t_end for m in end_edge))
+    return t_start, t_end
+
+
+def _fuse(members: List[int], dets: Sequence[RawDetection], p: ConsolidationParams) -> Event:
+    """Convert a track (member indices) into a consolidated Event."""
     confs = [dets[m].conf for m in members]
-    conf = max(confs)
+    t_start, t_end = _time_bounds(members, dets, p)
     f_low = weighted_median([dets[m].f_low for m in members], confs)
     f_high = weighted_median([dets[m].f_high for m in members], confs)
-
-    left_ok = [m for m in members if dets[m].norm_left > p.eta]
-    right_ok = [m for m in members if (1.0 - dets[m].norm_right) > p.eta]
-    if not left_ok:
-        left_ok = list(members)
-    if not right_ok:
-        right_ok = list(members)
-    t_start = weighted_median([dets[m].t_start for m in left_ok], [dets[m].conf for m in left_ok])
-    t_end = weighted_median([dets[m].t_end for m in right_ok], [dets[m].conf for m in right_ok])
-    if t_end <= t_start:
-        t_start = min(dets[m].t_start for m in members)
-        t_end = max(dets[m].t_end for m in members)
+    if t_end < t_start:
+        t_start, t_end = t_end, t_start
+    if f_high < f_low:
+        f_low, f_high = f_high, f_low
     return Event(t_start=t_start, t_end=t_end, f_low=f_low, f_high=f_high,
-                 conf=conf, members=sorted(members))
+                 conf=max(confs), members=sorted(members))
 
 
-def _envelope(members: List[int], dets: Sequence[RawDetection]) -> Box:
+def _envelope(members, dets: Sequence[RawDetection]) -> Box:
     return Box(
         t_start=min(dets[m].t_start for m in members),
         t_end=max(dets[m].t_end for m in members),
@@ -92,178 +109,192 @@ def _envelope(members: List[int], dets: Sequence[RawDetection]) -> Box:
 def link_kind(affinity_value: float, iou2d: float, min_conf: float, max_conf: float,
               margin: float, gap: int, e_ij: float, p: ConsolidationParams) -> str:
     """Classify a mutual-best candidate link as 'strong', 'support', or 'none'."""
-    if (affinity_value >= p.strong_affinity and iou2d >= p.strong_iou2d
-            and min_conf >= p.strong_min_conf and margin >= p.strong_margin):
+    if (affinity_value + EPS >= p.strong_affinity and iou2d + EPS >= p.strong_iou2d
+            and min_conf + EPS >= p.strong_min_conf and margin + EPS >= p.strong_margin):
         return "strong"
-    if (affinity_value >= p.support_affinity and iou2d >= p.support_iou2d
-            and min_conf >= p.support_min_conf and margin >= p.support_margin
-            and gap <= p.support_gap_max
-            and (max_conf >= p.support_edge_conf or e_ij >= p.support_edge)):
+    if (gap <= p.support_gap_max
+            and affinity_value + EPS >= p.support_affinity and iou2d + EPS >= p.support_iou2d
+            and min_conf + EPS >= p.support_min_conf and margin + EPS >= p.support_margin
+            and (max_conf + EPS >= p.support_edge_conf or e_ij + EPS >= p.support_edge)):
         return "support"
     return "none"
 
 
-class _Track:
-    __slots__ = ("members", "windows", "has_strong")
+def _second(values: List[float]) -> float:
+    return sorted(values)[-2] if len(values) > 1 else 0.0
 
-    def __init__(self) -> None:
-        self.members: List[int] = []
-        self.windows: set = set()
-        self.has_strong: bool = False
 
-    def add(self, idx: int, window: int, strong: bool) -> None:
-        self.members.append(idx)
-        self.windows.add(window)
-        if strong:
-            self.has_strong = True
+def _candidate_edges(dets: Sequence[RawDetection], p: ConsolidationParams) -> List[tuple]:
+    """Mutual-best links between every pair of windows at most G apart."""
+    by_window: Dict[int, List[int]] = {}
+    for i, d in enumerate(dets):
+        by_window.setdefault(d.window, []).append(i)
+    windows = sorted(by_window)
+
+    edges = []
+    for pos, w0 in enumerate(windows):
+        left = by_window[w0]
+        for w1 in windows[pos + 1:]:
+            gap = w1 - w0
+            if gap > p.window_gap_max:
+                break
+            right = by_window[w1]
+            aff = [[affinity(dets[i], dets[j], p) for j in right] for i in left]
+            cols = [[aff[r][c] for r in range(len(left))] for c in range(len(right))]
+            row_best = [row.index(max(row)) for row in aff]
+            col_best = [col.index(max(col)) for col in cols]
+            for r, c in enumerate(row_best):
+                if col_best[c] != r:
+                    continue
+                i, j = left[r], right[c]
+                a = aff[r][c]
+                iou = g.box_iou_2d(dets[i], dets[j])
+                if iou <= 0.0 or a <= 0.0:
+                    continue
+                margin = min(a - _second(aff[r]), a - _second(cols[c]))
+                ci, cj = dets[i].conf, dets[j].conf
+                kind = link_kind(a, iou, min(ci, cj), max(ci, cj), margin, gap,
+                                 max(_edge_value(dets[i], p), _edge_value(dets[j], p)), p)
+                if kind != "none":
+                    edges.append((i, j, kind, a, iou, min(ci, cj), margin, gap))
+    # strongest rule first, then affinity, IoU, confidence, margin desc; smaller gap first
+    edges.sort(key=lambda e: (_RULE_RANK[e[2]], -e[3], -e[4], -e[5], -e[6], e[7]))
+    return edges
 
 
 def consolidate(dets: Sequence[RawDetection], p: ConsolidationParams = ConsolidationParams()) -> List[Event]:
     """Consolidate raw window-level detections into event-level tracks (§5.3.3)."""
-    dets = [d for d in dets if d.conf >= p.ingest_conf]
+    dets = [d for d in dets if d.conf + EPS >= p.ingest_conf]
     n = len(dets)
     if n == 0:
         return []
 
-    eprox = [g.edge_proximity(d.norm_left, d.norm_right, p.eta) for d in dets]
+    tracks: Dict[int, dict] = {}
+    track_of: Dict[int, int] = {}
 
-    # candidate affinities (1 <= |w_i - w_j| <= G)
-    nbr: List[dict] = [dict() for _ in range(n)]
-    pairs: List[tuple] = []
-    for i in range(n):
-        for j in range(i + 1, n):
-            gap = abs(dets[i].window - dets[j].window)
-            if 1 <= gap <= p.window_gap_max:
-                a = affinity(dets[i], dets[j], p)
-                nbr[i][j] = a
-                nbr[j][i] = a
-                pairs.append((i, j, a))
-
-    def best_partner(i: int):
-        return max(nbr[i].items(), key=lambda kv: kv[1]) if nbr[i] else None
-
-    def second_best(i: int, excl: int) -> float:
-        vals = [a for k, a in nbr[i].items() if k != excl]
-        return max(vals) if vals else 0.0
-
-    bp = [best_partner(i) for i in range(n)]
-
-    strong, support = [], []
-    for i, j, a in pairs:
-        if bp[i] is None or bp[j] is None or bp[i][0] != j or bp[j][0] != i:
-            continue  # mutual-best only
-        margin = min(a - second_best(i, j), a - second_best(j, i))
-        ci, cj = dets[i].conf, dets[j].conf
-        kind = link_kind(a, g.box_iou_2d(dets[i], dets[j]), min(ci, cj), max(ci, cj),
-                         margin, abs(dets[i].window - dets[j].window),
-                         max(eprox[i], eprox[j]), p)
-        if kind == "strong":
-            strong.append((a, i, j))
-        elif kind == "support":
-            support.append((a, i, j, max(ci, cj)))
-
-    track_of: dict = {}
-    tracks: dict = {}
-    counter = [0]
-
-    def new_track() -> int:
-        tid = counter[0]
-        counter[0] += 1
-        tracks[tid] = _Track()
-        return tid
-
-    # Phase 1: strong links seed/merge tracks (descending affinity)
-    for a, i, j in sorted(strong, key=lambda x: -x[0]):
-        ti, tj = track_of.get(i), track_of.get(j)
-        if ti is None and tj is None:
-            tid = new_track()
-            tracks[tid].add(i, dets[i].window, True)
-            tracks[tid].add(j, dets[j].window, True)
-            track_of[i] = track_of[j] = tid
-        elif ti is not None and tj is None:
-            if dets[j].window not in tracks[ti].windows:
-                tracks[ti].add(j, dets[j].window, True)
-                track_of[j] = ti
-        elif ti is None and tj is not None:
-            if dets[i].window not in tracks[tj].windows:
-                tracks[tj].add(i, dets[i].window, True)
-                track_of[i] = tj
-        elif ti != tj and tracks[ti].windows.isdisjoint(tracks[tj].windows):
-            for m in tracks[tj].members:
-                tracks[ti].add(m, dets[m].window, True)
-                track_of[m] = ti
-            del tracks[tj]
-
-    # Phase 2: support links extend seeded tracks; never merge two established tracks
-    for a, i, j, maxc in sorted(support, key=lambda x: -x[0]):
-        ti, tj = track_of.get(i), track_of.get(j)
-        if ti is not None and tj is not None:
-            continue
-        if ti is None and tj is None:
-            tid = new_track()
-            tracks[tid].add(i, dets[i].window, False)
-            tracks[tid].add(j, dets[j].window, False)
-            track_of[i] = track_of[j] = tid
-        elif ti is not None:
-            if dets[j].window not in tracks[ti].windows and (maxc >= p.support_edge_conf or tracks[ti].has_strong):
-                tracks[ti].add(j, dets[j].window, False)
-                track_of[j] = ti
-        else:
-            if dets[i].window not in tracks[tj].windows and (maxc >= p.support_edge_conf or tracks[tj].has_strong):
-                tracks[tj].add(i, dets[i].window, False)
-                track_of[i] = tj
-
-    # Phase 3: edge-singleton absorption into established multi-window tracks
-    established = [tid for tid, t in tracks.items() if len(t.windows) >= 2]
-    for s in [i for i in range(n) if i not in track_of]:
-        if eprox[s] < p.absorb_edge:
-            continue
-        scored = []
-        for tid in established:
-            if dets[s].window in tracks[tid].windows:
-                continue
-            env = _envelope(tracks[tid].members, dets)
-            c_area, c_t, c_f = g.containment(dets[s], env)
-            if c_area < p.absorb_area or c_t < p.absorb_time or c_f < p.absorb_freq:
-                continue
-            aw = p.absorption
-            d_s, bw_s = dets[s].t_end - dets[s].t_start, dets[s].f_high - dets[s].f_low
-            dt = abs(g.center(dets[s].t_start, dets[s].t_end) - g.center(env.t_start, env.t_end)) / d_s if d_s > 0 else 0.0
-            df = abs(g.center(dets[s].f_low, dets[s].f_high) - g.center(env.f_low, env.f_high)) / bw_s if bw_s > 0 else 0.0
-            c_tk = max(dets[m].conf for m in tracks[tid].members)
-            score = (aw.area * c_area + aw.time * c_t + aw.freq * c_f + aw.edge * eprox[s]
-                     + aw.singleton_conf * dets[s].conf + aw.track_conf * c_tk
-                     - aw.center_t * min(dt, 2.0) - aw.center_f * min(df, 2.0))
-            scored.append((score, tid))
-        if not scored:
-            continue
-        scored.sort(key=lambda x: -x[0])
-        best_score, best_tid = scored[0]
-        second = scored[1][0] if len(scored) > 1 else 0.0
-        if best_score >= p.absorb_score and (best_score - second) >= p.absorb_margin:
-            tracks[best_tid].add(s, dets[s].window, False)
-            track_of[s] = best_tid
-
-    # Phase 4: build events from tracks + remaining untracked singletons
-    events: List[Event] = [_fuse(t.members, dets, p) for t in tracks.values()]
-    for i in range(n):
+    def ensure_track(i: int) -> int:
         if i not in track_of:
-            d = dets[i]
-            events.append(Event(d.t_start, d.t_end, d.f_low, d.f_high, d.conf, [i]))
+            tid = ensure_track.next_id
+            ensure_track.next_id += 1
+            track_of[i] = tid
+            tracks[tid] = {"members": {i}, "windows": {dets[i].window},
+                           "max_conf": dets[i].conf, "has_strong": False}
+        return track_of[i]
+    ensure_track.next_id = 0
 
-    # Phase 5: duplicate merging pass (1D Time IoU >= 0.75)
+    def seeded(t: dict) -> bool:
+        return t["has_strong"] or t["max_conf"] + EPS >= p.support_edge_conf
+
+    def established(t: dict) -> bool:
+        return t["has_strong"] or len(t["members"]) > 1
+
+    # Track assembly: strong links merge any two tracks; a support link may only
+    # extend a seeded track by a track that is not itself established.
+    for i, j, kind, *_ in _candidate_edges(dets, p):
+        ta, tb = ensure_track(i), ensure_track(j)
+        if ta == tb:
+            if kind == "strong":
+                tracks[ta]["has_strong"] = True
+            continue
+        A, B = tracks[ta], tracks[tb]
+        if A["windows"] & B["windows"]:
+            continue
+        keep, drop = ta, tb
+        if kind == "support":
+            if not seeded(A) and not seeded(B):
+                continue
+            if established(A) and established(B):
+                continue
+            if seeded(B) and not seeded(A):
+                keep, drop = tb, ta
+            elif not (seeded(A) and not seeded(B)) and len(B["members"]) > len(A["members"]):
+                keep, drop = tb, ta
+        elif len(B["members"]) > len(A["members"]):
+            keep, drop = tb, ta
+        K, D = tracks[keep], tracks[drop]
+        K["members"] |= D["members"]
+        K["windows"] |= D["windows"]
+        K["max_conf"] = max(K["max_conf"], D["max_conf"])
+        K["has_strong"] = K["has_strong"] or D["has_strong"] or kind == "strong"
+        for m in D["members"]:
+            track_of[m] = keep
+        del tracks[drop]
+
+    for i in range(n):
+        ensure_track(i)
+
+    # Edge-singleton absorption into established multi-window tracks. Candidates are
+    # scored against the pre-absorption tracks, then assigned singleton by singleton.
+    active = list(tracks)
+    candidates: Dict[int, List[tuple]] = {}
+    aw = p.absorption
+    for s_tid in active:
+        if len(tracks[s_tid]["members"]) != 1:
+            continue
+        s = next(iter(tracks[s_tid]["members"]))
+        edge = _edge_value(dets[s], p)
+        if edge + EPS < p.absorb_edge:
+            continue
+        d = dets[s]
+        d_s, bw_s = max(0.0, d.t_end - d.t_start), max(0.0, d.f_high - d.f_low)
+        for t_tid in active:
+            target = tracks[t_tid]
+            if t_tid == s_tid or len(target["members"]) <= 1 or d.window in target["windows"]:
+                continue
+            if not seeded(target):
+                continue
+            env = _envelope(target["members"], dets)
+            c_area, c_t, c_f = g.containment(d, env)
+            if c_area + EPS < p.absorb_area or c_t + EPS < p.absorb_time or c_f + EPS < p.absorb_freq:
+                continue
+            dt = abs(g.center(d.t_start, d.t_end) - g.center(env.t_start, env.t_end))
+            df = abs(g.center(d.f_low, d.f_high) - g.center(env.f_low, env.f_high))
+            dt /= max(d_s, env.t_end - env.t_start, EPS)
+            df /= max(bw_s, env.f_high - env.f_low, EPS)
+            score = (aw.area * c_area + aw.time * c_t + aw.freq * c_f + aw.edge * edge
+                     + aw.singleton_conf * d.conf + aw.track_conf * min(target["max_conf"], 1.0)
+                     - aw.center_t * min(dt, 2.0) - aw.center_f * min(df, 2.0))
+            if score + EPS < p.absorb_score:
+                continue
+            candidates.setdefault(s_tid, []).append((score, t_tid, s))
+
+    for s_tid, cands in candidates.items():
+        cands.sort(key=lambda x: -x[0])
+        if len(cands) > 1 and (cands[0][0] - cands[1][0]) + EPS < p.absorb_margin:
+            continue
+        _, t_tid, s = cands[0]
+        target = tracks[t_tid]
+        if dets[s].window in target["windows"]:
+            continue
+        target["members"].add(s)
+        target["windows"].add(dets[s].window)
+        target["max_conf"] = max(target["max_conf"], dets[s].conf)
+        track_of[s] = t_tid
+        del tracks[s_tid]
+
+    fused = [(tid, _fuse(sorted(tracks[tid]["members"]), dets, p)) for tid in sorted(tracks)]
+    fused.sort(key=lambda te: (te[1].t_start, te[0]))
+    events = [e for _, e in fused]
+
+    if p.post_dedup:
+        events = _post_dedup(events, dets, p)
+    return events
+
+
+def _post_dedup(events: List[Event], dets: Sequence[RawDetection], p: ConsolidationParams) -> List[Event]:
+    """Optional extra passes (not in SpectroBird): time-IoU duplicate merge, then
+    contained-singleton folding."""
+    # Duplicate merging (1D time IoU >= 0.75) between events from disjoint windows.
     merged_any = True
     while merged_any:
         merged_any = False
         m = len(events)
         for i in range(m):
             for j in range(i + 1, m):
-                # Respect overlap preservation: do not merge if they share any source windows
                 win_i = {dets[idx].window for idx in events[i].members}
                 win_j = {dets[idx].window for idx in events[j].members}
                 if not win_i.isdisjoint(win_j):
                     continue
-
                 iou_t = g.interval_iou(events[i].t_start, events[i].t_end, events[j].t_start, events[j].t_end)
                 if iou_t >= 0.75:
                     union_members = list(set(events[i].members) | set(events[j].members))
@@ -274,12 +305,9 @@ def consolidate(dets: Sequence[RawDetection], p: ConsolidationParams = Consolida
             if merged_any:
                 break
 
-    # Phase 6: contained-singleton suppression. A singleton almost entirely inside a
-    # longer event in the same band is a partial view of that event. It escaped phase 3
-    # (its window is already in the track, or the host is itself a singleton from an
-    # adjacent window) and phase 5 (its duration is too short for the IoU gate). Fold it
-    # into the host: keep the host's boundaries, take the max confidence, count it as a
-    # member. Hosts are established tracks first, then any strictly longer event.
+    # Contained-singleton folding: a singleton almost entirely inside a longer event in
+    # the same band is a partial view of it. Keep the host's boundaries, take the max
+    # confidence. Hosts are established tracks first, then any strictly longer event.
     folded: set = set()
     order = sorted(range(len(events)), key=lambda k: events[k].t_end - events[k].t_start)
     for k in order:
@@ -293,8 +321,6 @@ def consolidate(dets: Sequence[RawDetection], p: ConsolidationParams = Consolida
                 continue
             host_dur = host.t_end - host.t_start
             if len(host.members) < 2:
-                # Singleton host: must be strictly longer and come from another window
-                # (two boxes the localizer emitted in one window are kept as distinct).
                 if host_dur <= dur or dets[host.members[0]].window == dets[ev.members[0]].window:
                     continue
             _, c_t, c_f = g.containment(ev, host)
@@ -307,8 +333,5 @@ def consolidate(dets: Sequence[RawDetection], p: ConsolidationParams = Consolida
             best.conf = max(best.conf, ev.conf)
             folded.add(k)
     events = [e for k, e in enumerate(events) if k not in folded]
-
     events.sort(key=lambda e: e.t_start)
     return events
-
-

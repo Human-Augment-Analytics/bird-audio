@@ -45,7 +45,7 @@ function Field({ label, children, hint }: { label: ReactNode; children: ReactNod
 export default function SetupView({ onStarted }: Props) {
   const [input, setInput] = useState("");
   const [cacheResult, setCacheResult] = useState<{ input: string; hasCache: boolean } | null>(null);
-  const [thetaA, setThetaA] = useState(0); // Sensitivity
+  const [thetaA, setThetaA] = useState(0.539); // Sensitivity: SpectroBird min_od_conf
   const [thetaB, setThetaB] = useState(0.530306); // Quality
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);

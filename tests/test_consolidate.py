@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from birdpipe import consolidate as cons
 from birdpipe.constants import ConsolidationParams
 from tests.conftest import make_det
 
 P = ConsolidationParams()
+PD = replace(P, post_dedup=True)  # optional non-SpectroBird dedup passes
 
 
 def test_affinity_identical_adjacent_windows():
@@ -42,12 +44,38 @@ def test_fuse_conf_and_weighted_freq():
     assert ev.members == [0, 1]
 
 
-def test_fuse_excludes_left_truncated_from_start_vote():
-    # a hugs the left window edge (norm_left=0.0 -> censored from start vote)
+def test_fuse_left_truncated_start_cannot_pull_boundary_inward():
+    # a hugs the left window edge (norm_left=0.0 -> censored from start vote); its
+    # clipped start is later than b's, so it must not move the boundary.
+    a = make_det(1.5, 2.0, 5000, 6000, conf=0.95, window=0, norm_left=0.0, norm_right=0.5)
+    b = make_det(1.3, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.3, norm_right=0.6)
+    ev = cons._fuse([0, 1], [a, b], P)
+    assert ev.t_start == 1.3
+
+
+def test_fuse_left_truncated_start_preserves_observed_extent():
+    # Censored starts do not vote, but an earlier censored start still widens the
+    # event to the observed extent (SpectroBird extent preservation).
     a = make_det(1.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.0, norm_right=0.5)
     b = make_det(1.3, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.3, norm_right=0.6)
     ev = cons._fuse([0, 1], [a, b], P)
-    assert ev.t_start == 1.3                    # a excluded -> b's start wins
+    assert ev.t_start == 1.0
+
+
+def test_fuse_right_truncated_end_preserves_observed_extent():
+    a = make_det(1.0, 2.4, 5000, 6000, conf=0.9, window=0, norm_left=0.5, norm_right=1.0)
+    b = make_det(1.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.3, norm_right=0.6)
+    ev = cons._fuse([0, 1], [a, b], P)
+    assert ev.t_end == 2.4
+
+
+def test_default_linker_keeps_contained_singleton():
+    # SpectroBird's A3 linker has no contained-singleton pass: by default the lone
+    # partial view stays a separate event (post_dedup=False).
+    a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.4, norm_right=0.6)
+    b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
+    dup = make_det(1.2, 2.0, 5100, 5900, conf=0.95, window=1, norm_left=0.7, norm_right=0.95)
+    assert len(cons.consolidate([a, b, dup], P)) == 2
 
 
 def test_link_kind_strong():
@@ -105,14 +133,14 @@ def test_duplicate_merging_1d_time_iou_threshold():
     # Time IoU is 1.8 / 2.2 = 0.818 >= 0.75 -> should merge.
     a = make_det(0.0, 2.0, 1000, 2000, conf=0.9, window=0)
     b = make_det(0.2, 2.2, 8000, 9000, conf=0.8, window=1)
-    events = cons.consolidate([a, b], P)
+    events = cons.consolidate([a, b], PD)
     assert len(events) == 1
     assert events[0].members == [0, 1]
 
     # d and e have Time IoU of 1.4 / 2.6 = 0.538 < 0.75 -> should not merge.
     d = make_det(0.0, 2.0, 1000, 2000, conf=0.9, window=0)
     e = make_det(0.6, 2.6, 8000, 9000, conf=0.8, window=1)
-    events2 = cons.consolidate([d, e], P)
+    events2 = cons.consolidate([d, e], PD)
     assert len(events2) == 2
 
 
@@ -124,7 +152,7 @@ def test_duplicate_merging_tracks_and_singletons():
     a = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=0, norm_left=0.5, norm_right=0.5)
     b = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=1, norm_left=0.5, norm_right=0.5)
     c = make_det(0.2, 2.2, 8000, 8100, conf=0.8, window=2)
-    events = cons.consolidate([a, b, c], P)
+    events = cons.consolidate([a, b, c], PD)
     assert len(events) == 1
     assert events[0].members == [0, 1, 2]
 
@@ -134,7 +162,7 @@ def test_duplicate_merging_respects_overlap_preservation():
     # They should not be merged (overlap preservation constraint).
     a = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=0)
     b = make_det(0.2, 2.2, 8000, 8100, conf=0.8, window=0)
-    events = cons.consolidate([a, b], P)
+    events = cons.consolidate([a, b], PD)
     assert len(events) == 2
 
 
@@ -147,7 +175,7 @@ def test_duplicate_merging_iterative_disjoint_window_chains():
     a = make_det(0.0, 2.0, 1000, 1100, conf=0.9, window=0)
     b = make_det(0.1, 2.1, 8000, 8100, conf=0.8, window=1)
     c = make_det(0.0, 2.0, 5000, 5100, conf=0.9, window=0)
-    events = cons.consolidate([a, b, c], P)
+    events = cons.consolidate([a, b, c], PD)
     assert len(events) == 2
     # Ensure one event has 2 members, and the other has 1 member
     lens = sorted([len(ev.members) for ev in events])
@@ -162,7 +190,7 @@ def test_contained_singleton_is_folded_into_track():
     a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.4, norm_right=0.6)
     b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
     dup = make_det(1.2, 2.0, 5100, 5900, conf=0.95, window=1, norm_left=0.7, norm_right=0.95)
-    events = cons.consolidate([a, b, dup], P)
+    events = cons.consolidate([a, b, dup], PD)
     assert len(events) == 1
     assert events[0].members == [0, 1, 2]
     assert events[0].conf == 0.95
@@ -174,7 +202,7 @@ def test_contained_singleton_in_other_band_is_kept():
     a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.4, norm_right=0.6)
     b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
     other = make_det(1.2, 2.0, 8000, 9000, conf=0.8, window=1, norm_left=0.7, norm_right=0.95)
-    events = cons.consolidate([a, b, other], P)
+    events = cons.consolidate([a, b, other], PD)
     assert len(events) == 2
 
 
@@ -183,7 +211,7 @@ def test_partially_contained_singleton_is_kept():
     a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0, norm_left=0.4, norm_right=0.6)
     b = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=1, norm_left=0.4, norm_right=0.6)
     tail = make_det(1.6, 2.4, 5000, 6000, conf=0.8, window=1, norm_left=0.8, norm_right=1.0)
-    events = cons.consolidate([a, b, tail], P)
+    events = cons.consolidate([a, b, tail], PD)
     assert len(events) == 2
 
 
@@ -191,7 +219,7 @@ def test_two_singletons_from_one_window_never_suppress_each_other():
     # Two boxes the localizer emitted in the same window are distinct by construction.
     a = make_det(0.0, 2.0, 5000, 6000, conf=0.9, window=0)
     inner = make_det(0.5, 1.5, 5000, 6000, conf=0.8, window=0)
-    events = cons.consolidate([a, inner], P)
+    events = cons.consolidate([a, inner], PD)
     assert len(events) == 2
 
 
@@ -200,7 +228,7 @@ def test_singleton_contained_in_longer_singleton_from_other_window_is_folded():
     # from adjacent windows. Time IoU 0.68 misses phase 5; neither is a multi-window track.
     host = make_det(0.0, 0.88, 6725, 8860, conf=0.31, window=0, norm_left=0.5, norm_right=0.9)
     inner = make_det(0.01, 0.61, 6713, 8839, conf=0.38, window=1, norm_left=0.05, norm_right=0.4)
-    events = cons.consolidate([host, inner], P)
+    events = cons.consolidate([host, inner], PD)
     assert len(events) == 1
     assert events[0].members == [0, 1]
     assert events[0].conf == 0.38

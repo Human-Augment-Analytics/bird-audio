@@ -6,6 +6,7 @@ import sys
 import traceback
 from pathlib import Path
 
+from birdpipe import constants as C
 from birdpipe import provenance
 
 # Pipeline attributes that override a paper constant or name a model, so the manifest
@@ -77,7 +78,7 @@ def run_worker(pipeline, in_stream=None, out_stream=None) -> None:
             kwargs = {
                 "output_root": req.get("output", "output"),
                 "write_artifacts": not req.get("manifest_only", True),
-                "theta_a": req.get("theta_a", 0.0),
+                "theta_a": req.get("theta_a", C.THETA_A),
                 "theta_b": req.get("theta_b", 0.530306),
                 "emit_raw": req.get("emit_raw", False),
             }

@@ -89,6 +89,9 @@ class ConsolidationParams:
     # and phase-3 absorption skips windows the track already covers, so it needs its own gate.
     contained_time: float = 0.90     # fraction of the singleton's duration inside the track
     contained_freq: float = 0.50     # fraction of the singleton's bandwidth inside the track
+    # The time-IoU merge and contained-singleton passes are not part of SpectroBird's
+    # locked A3 linker; off by default so output matches SpectroBird.
+    post_dedup: bool = False
 
 
 @dataclass(frozen=True)
@@ -100,10 +103,13 @@ class StageBParams:
     complete_class: str = "full"     # classifier.pt's name for the "complete" class
 
 
+THETA_A = 0.539  # SpectroBird stage_b.min_od_conf: Stage B gate and retained floor
+
+
 @dataclass(frozen=True)
 class ExportParams:
-    """§5.5. θ_A is validation-derived; the paper gives no number -> configurable."""
-    theta_a: float = 0.0
+    """§5.5. θ_A is validation-derived; default matches SpectroBird's min_od_conf."""
+    theta_a: float = THETA_A
 
 
 def is_yolo_model(model) -> bool:
