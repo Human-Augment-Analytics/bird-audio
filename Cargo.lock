@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "bird-batch-gui"
-version = "0.4.0"
+version = "1.0.0"
 dependencies = [
  "batch-core",
  "rusqlite",
