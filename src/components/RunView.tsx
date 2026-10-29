@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { FileRow, Progress, StartResult, Summary } from "../types";
 import FileTable from "./FileTable";
 import { pickFile } from "../api";
+import { getRunCounts } from "../sessionState";
 
 interface Props {
   start: StartResult;
@@ -38,25 +39,16 @@ export default function RunView({ start, progress, summary, rows, throughput, on
   const done = summary !== null;
   const completed = summary?.status === "done";
   const failed = summary?.status === "failed";
-  const doneN = summary?.done ?? progress?.done ?? rows.filter((r) => r.status === "done").length;
+  const {
+    done: doneN, total, failed: failedN, pending: pendingN, inProgress: inProg,
+    events: nEvents, complete: nComplete, retained: nRetained,
+  } = getRunCounts(start, progress, summary, rows);
   const hasCompletedFiles = done || doneN > 0;
-  const total = summary?.total ?? progress?.total ?? start.total_files;
-  const failedN = summary?.failed ?? progress?.failed ?? 0;
-  // Progress events only fire when a file finishes, so between files the snapshot says
-  // "0 active / N pending" while a worker is already busy. Rows are polled every second
-  // and reflect the claimed file, so prefer them while the run is live.
-  const rowsLoaded = rows.length > 0;
-  const pendingN = summary?.pending ?? (rowsLoaded ? rows.filter((r) => r.status === "pending").length : progress?.pending ?? 0);
-  const inProg = summary?.in_progress ?? (rowsLoaded ? rows.filter((r) => r.status === "in_progress").length : progress?.in_progress ?? 0);
   const pct = total > 0 ? Math.round(((doneN + failedN) / total) * 100) : 0;
   const remainingN = pendingN + inProg;
   const eta = throughput > 0 && remainingN > 0 ? Math.round(remainingN / throughput) : null;
   const lastMs = progress?.last_elapsed_ms ?? null;
   const elapsedTotalMs = progress?.elapsed_ms_total ?? null;
-
-  const nEvents = summary?.n_events ?? rows.reduce((acc, r) => acc + (r.n_events || 0), 0);
-  const nComplete = summary?.n_complete ?? rows.reduce((acc, r) => acc + (r.n_complete || 0), 0);
-  const nRetained = summary?.n_retained ?? rows.reduce((acc, r) => acc + (r.n_retained || 0), 0);
 
   const etaTime = useMemo(() => {
     if (!eta || eta <= 0) return null;

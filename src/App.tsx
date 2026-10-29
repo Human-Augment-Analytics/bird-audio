@@ -5,6 +5,7 @@ import ReviewView from "./components/ReviewView";
 import { EcologyView } from "./components/EcologyView";
 import appIcon from "./assets/app-icon.png";
 import { cancelSession, exportSession, getSummary, listFiles, onBatchError, onDone, onProgress, pickSavePath } from "./api";
+import { isTerminalSessionStatus } from "./sessionState";
 import type { FileRow, Progress, StartOpts, StartResult, Summary } from "./types";
 
 export default function App() {
@@ -32,7 +33,7 @@ export default function App() {
     const sessionId = start.session_id;
     const acceptSummary = (next: Summary) => {
       if (!active || next.session_id !== sessionId) return;
-      if (["done", "cancelled", "failed"].includes(next.status)) {
+      if (isTerminalSessionStatus(next.status)) {
         terminal = true;
         setSummary(next);
       }
@@ -51,7 +52,7 @@ export default function App() {
         if (!tRef.current) tRef.current = { t: Date.now(), done: nextSummary.done };
         setRows(nextRows);
         acceptSummary(nextSummary);
-        if (["done", "cancelled", "failed"].includes(nextSummary.status)) {
+        if (isTerminalSessionStatus(nextSummary.status)) {
           terminalRowsLoaded = true;
         }
         setNotice((current) => current?.startsWith("Session refresh failed:") || current?.startsWith("File refresh failed:") ? null : current);
@@ -113,7 +114,7 @@ export default function App() {
     setStart(result);
     setOpts(o);
     setProgress(null);
-    setSummary(initialSummary && ["done", "cancelled", "failed"].includes(initialSummary.status) ? initialSummary : null);
+    setSummary(initialSummary && isTerminalSessionStatus(initialSummary.status) ? initialSummary : null);
     setRows([]);
     setThroughput(0);
     setNotice(null);
@@ -164,7 +165,7 @@ export default function App() {
   };
 
   const noticeIsError = notice !== null && /failed|error/i.test(notice);
-  const terminal = summary !== null && ["done", "failed", "cancelled"].includes(summary.status);
+  const terminal = isTerminalSessionStatus(summary?.status);
   const completedFiles = Math.max(progress?.done ?? 0, rows.filter((r) => r.status === "done").length);
   const analyticsAvailable = terminal || completedFiles > 0;
 
