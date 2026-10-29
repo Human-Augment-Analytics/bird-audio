@@ -49,7 +49,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
     return () => { cancelled = true; };
   }, [dir, sid]);
 
-  const fetchEvents = useCallback(async (path: string, showLoading = false) => {
+  const fetchEvents = useCallback(async (path: string, showLoading = false, targetEventId?: number) => {
     if (currentPathRef.current !== path) return null;
     const requestId = ++eventRequestId.current;
     if (showLoading) {
@@ -59,6 +59,15 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
       const result = await listEvents(dir, sid, path);
       if (currentPathRef.current === path && eventRequestId.current === requestId) {
         setEvents(result);
+        // Resolve verification selection inside the same request guard as the rows.
+        // A separate promise continuation can run after another recording opens.
+        if (targetEventId !== undefined) {
+          if (result.some((event) => event.id === targetEventId)) {
+            setSelectedId(targetEventId);
+          } else {
+            setNotice(`Verification event #${targetEventId} was not found in ${path}.`);
+          }
+        }
         return result;
       }
     } catch (e) {
@@ -92,14 +101,7 @@ export default function ReviewView({ start, opts, rows }: ReviewViewProps) {
     setSelectedPath(path); setSelectedId(null); setEvents([]); setNotice(null);
     setHistory([]); setRedoStack([]);
     void logReviewAction(dir, sid, "open_file", null, { path });
-    void fetchEvents(path, true).then((loaded) => {
-      if (targetEventId === undefined) return;
-      if (loaded?.some((event) => event.id === targetEventId)) {
-        setSelectedId(targetEventId);
-      } else {
-        setNotice(`Verification event #${targetEventId} was not found in ${path}.`);
-      }
-    });
+    void fetchEvents(path, true, targetEventId);
   }, [selectedPath, fetchEvents, dir, sid]);
 
   const currentStatus = useCallback(
